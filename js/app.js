@@ -246,7 +246,14 @@ function formatSetsReps(s){
   return '';
 }
 
-function formatSetValue(s){
+function convertWeight(value, fromUnit, toUnit){
+  if (fromUnit === toUnit) return value;
+  if (fromUnit === 'lb' && toUnit === 'kg') return value / 2.20462;
+  if (fromUnit === 'kg' && toUnit === 'lb') return value * 2.20462;
+  return value;
+}
+
+function formatSetValue(s, withAlt){
   const u = s.weight_unit;
   const perSuffix = (s.weight_type === 'per') ? ' per' : '';
   if (u === 'pin') return `Pin ${s.weight}`;
@@ -255,7 +262,13 @@ function formatSetValue(s){
   if (u === 'steps') return `${s.weight} steps`;
   if (u === 'bodyweight') return `Bodyweight${formatSetsReps(s)}`;
   if (u === 'lb-assist' || u === 'kg-assist') return `${s.weight}${u.replace('-assist','')} assist`;
-  return `${s.weight}${u}${perSuffix}${formatSetsReps(s)}`;
+  let alt = '';
+  if (withAlt && s.weight !== null && (u === 'kg' || u === 'lb')){
+    const other = u === 'kg' ? 'lb' : 'kg';
+    const conv = Math.round(convertWeight(s.weight, u, other) * 10) / 10;
+    alt = ` (${conv}${other})`;
+  }
+  return `${s.weight}${u}${alt}${perSuffix}${formatSetsReps(s)}`;
 }
 
 function exerciseRow(ex){
@@ -831,15 +844,27 @@ function openLogForm(exerciseId, exerciseName){
       `<div class="action-row" id="sameAsLastBtn"><div class="ex-name" style="color:var(--flame); font-size:13px;">↻ Same as last time — ${formatSetValue(lastEntry)}</div></div>`;
     overlay.querySelector('#sameAsLastBtn').onclick = applySameAsLast;
 
-    const chartable = sets.filter(s => s.weight !== null && (s.weight_unit === 'kg' || s.weight_unit === 'lb')).slice().reverse();
+    // Chart in one standard unit so mixed kg/lb entries plot coherently:
+    // lb for Plate-Loaded (most common there), kg for everything else.
+    const exResult = await withTimeout(
+      supabaseClient.from('exercises').select('category').eq('id', exerciseId).maybeSingle(),
+      15000
+    );
+    const category = (exResult.__timeout || exResult.error || !exResult.data) ? '' : exResult.data.category;
+    const chartUnit = category === 'Plate-Loaded' ? 'lb' : 'kg';
+
+    const chartable = sets
+      .filter(s => s.weight !== null && (s.weight_unit === 'kg' || s.weight_unit === 'lb'))
+      .map(s => ({ ...s, chartWeight: convertWeight(s.weight, s.weight_unit, chartUnit) }))
+      .reverse();
     let chartHtml = '';
     if (chartable.length >= 2){
-      const weights = chartable.map(s => s.weight);
+      const weights = chartable.map(s => s.chartWeight);
       const min = Math.min(...weights), max = Math.max(...weights), range = (max - min) || 1;
       const W = 300, H = 70, pad = 6;
       const points = chartable.map((s, i) => {
         const x = (i / (chartable.length - 1)) * W;
-        const y = H - pad - ((s.weight - min) / range) * (H - pad*2);
+        const y = H - pad - ((s.chartWeight - min) / range) * (H - pad*2);
         return `${x.toFixed(1)},${y.toFixed(1)}`;
       });
       const dots = chartable.map((s, i) => {
@@ -847,19 +872,23 @@ function openLogForm(exerciseId, exerciseName){
         const isLast = i === chartable.length - 1;
         return `<circle cx="${x}" cy="${y}" r="${isLast ? 3.5 : 2.5}" fill="${isLast ? '#FF5630' : '#8C8E94'}"/>`;
       }).join('');
+      const fmt = (v) => Math.round(v * 10) / 10;
       chartHtml = `<div class="stat-card" style="margin:0 18px 16px 18px;">
+        <div style="display:flex; justify-content:space-between; font-family:'JetBrains Mono', monospace; font-size:10px; color:var(--slate); margin-bottom:2px;">
+          <span>all in ${chartUnit}</span><span>${fmt(min)}–${fmt(max)}${chartUnit}</span>
+        </div>
         <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}">
           <polyline points="${points.join(' ')}" fill="none" stroke="#FF5630" stroke-width="2.5" stroke-linecap="round"/>
           ${dots}
         </svg>
-        <div class="small" style="text-align:center; margin-top:4px;">${chartable[0].logged_at} → ${chartable[chartable.length-1].logged_at}</div>
+        <div class="small" style="text-align:center; margin-top:4px;">${chartable[0].logged_at} → ${chartable[chartable.length-1].logged_at} · latest ${fmt(chartable[chartable.length-1].chartWeight)}${chartUnit}</div>
       </div>`;
     }
     overlay.querySelector('#chartArea').innerHTML = chartHtml;
 
     list.innerHTML = sets.map(s =>
       `<div class="log-row" data-id="${s.id}" style="flex-direction:column; align-items:flex-start; gap:3px;">
-        <div style="display:flex; justify-content:space-between; width:100%;"><div class="log-date">${s.logged_at}</div><div class="log-weight">${formatSetValue(s)}</div></div>
+        <div style="display:flex; justify-content:space-between; width:100%;"><div class="log-date">${s.logged_at}</div><div class="log-weight">${formatSetValue(s, true)}</div></div>
         ${s.notes ? `<div style="font-size:11px; color:var(--slate); font-style:italic;">${s.notes}</div>` : ''}
       </div>`
     ).join('');
