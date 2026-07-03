@@ -489,14 +489,44 @@ function showExerciseActionsMenu(exerciseId, exerciseName){
   overlay.innerHTML = `
     <div style="background:var(--panel); border-radius:16px; padding:10px 0; width:280px;">
       <div style="padding:12px 18px; font-family:'Oswald', sans-serif; font-size:14px; color:var(--slate); border-bottom:1px solid var(--line);">${exerciseName}</div>
+      <div class="me-item" id="menuRename" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Rename Exercise</div><div class="chev">›</div></div>
       <div class="me-item" id="menuEditAlt" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Edit Alt Group</div><div class="chev">›</div></div>
       <div class="me-item" id="menuRemove" style="border-bottom:none; cursor:pointer;"><div style="color:var(--flame);">Remove from ${DAY_LABELS[state.selectedDay]}</div><div class="chev">›</div></div>
       <div style="text-align:center; padding:12px; color:var(--slate); font-size:13px; cursor:pointer;" id="menuCancel">Cancel</div>
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#menuCancel').onclick = () => overlay.remove();
+  overlay.querySelector('#menuRename').onclick = () => { overlay.remove(); openRenameExerciseForm(exerciseId, exerciseName); };
   overlay.querySelector('#menuEditAlt').onclick = () => { overlay.remove(); openEditAltGroupForm(exerciseId, exerciseName); };
   overlay.querySelector('#menuRemove').onclick = () => { overlay.remove(); confirmRemoveExercise(exerciseId, exerciseName); };
+}
+
+function openRenameExerciseForm(exerciseId, exerciseName){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeRename">✕</button><h1>Rename Exercise</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll">
+      <div class="field-label">Name</div>
+      <div class="field-card"><input class="field-input" id="renameInput" type="text" value="${exerciseName.replace(/"/g, '&quot;')}" style="font-size:15px; font-weight:400;"></div>
+      <div class="form-sub" style="margin-top:0;">This renames every instance of this exercise across all days, and keeps all its logged history.</div>
+      <button class="save-btn" id="saveRenameBtn">Save</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeRename').onclick = () => overlay.remove();
+  overlay.querySelector('#saveRenameBtn').onclick = async () => {
+    const newName = document.getElementById('renameInput').value.trim();
+    if (!newName || newName === exerciseName){ overlay.remove(); return; }
+    const { data: userData } = await supabaseClient.auth.getUser();
+    // Rename all rows sharing the old name (an exercise can exist on multiple days), so history stays consistent.
+    const { error } = await supabaseClient.from('exercises')
+      .update({ name: newName })
+      .eq('user_id', userData.user.id)
+      .eq('name', exerciseName);
+    if (error){ alert(error.message); return; }
+    overlay.remove();
+    if (state.currentTab === 'track') renderTrack();
+  };
 }
 
 function openEditAltGroupForm(exerciseId, exerciseName){
@@ -594,9 +624,8 @@ async function openPicker(){
     <div class="form-header"><button id="closePicker">✕</button><h1>Log a Set</h1><div style="width:18px;"></div></div>
     <div class="overlay-scroll">
       <div class="search-bar">🔍 <input id="pickerSearch" placeholder="Search all exercises…"></div>
+      <div class="pick-row" id="createNewRow" style="border-bottom:1px solid var(--line);"><div class="ex-name" style="color:var(--flame);">+ Create New Exercise</div></div>
       <div id="pickerList"><div class="empty-state">Loading…</div></div>
-      <div class="divider-label">Not on the list?</div>
-      <div class="pick-row" id="createNewRow"><div class="ex-name" style="color:var(--flame);">+ Create New Exercise</div></div>
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#closePicker').onclick = () => overlay.remove();
