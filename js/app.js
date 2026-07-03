@@ -889,28 +889,62 @@ function openLogForm(exerciseId, exerciseName){
     let chartHtml = '';
     if (chartable.length >= 2){
       const weights = chartable.map(s => s.chartWeight);
-      const min = Math.min(...weights), max = Math.max(...weights), range = (max - min) || 1;
-      const W = 300, H = 70, pad = 6;
-      const points = chartable.map((s, i) => {
-        const x = (i / (chartable.length - 1)) * W;
-        const y = H - pad - ((s.chartWeight - min) / range) * (H - pad*2);
-        return `${x.toFixed(1)},${y.toFixed(1)}`;
-      });
-      const dots = chartable.map((s, i) => {
-        const [x, y] = points[i].split(',');
-        const isLast = i === chartable.length - 1;
-        return `<circle cx="${x}" cy="${y}" r="${isLast ? 3.5 : 2.5}" fill="${isLast ? '#FF5630' : '#8C8E94'}"/>`;
+      const dataMin = Math.min(...weights), dataMax = Math.max(...weights);
+      // Pad the y-range a little so the line isn't glued to the top/bottom edges.
+      const span = (dataMax - dataMin) || 1;
+      const yMin = Math.max(0, dataMin - span * 0.15);
+      const yMax = dataMax + span * 0.15;
+      const yRange = (yMax - yMin) || 1;
+
+      // Plot area with real margins for the axes.
+      const W = 320, H = 150;
+      const mL = 34, mR = 10, mT = 12, mB = 22;
+      const plotW = W - mL - mR, plotH = H - mT - mB;
+      const fmt = (v) => (Math.round(v * 10) / 10).toString();
+
+      const xAt = (i) => mL + (chartable.length === 1 ? plotW / 2 : (i / (chartable.length - 1)) * plotW);
+      const yAt = (w) => mT + plotH - ((w - yMin) / yRange) * plotH;
+
+      // Y gridlines + labels (3 rows: min, mid, max of the padded range).
+      const yTicks = [yMin, (yMin + yMax) / 2, yMax];
+      const gridLines = yTicks.map(t => {
+        const y = yAt(t);
+        return `<line x1="${mL}" y1="${y.toFixed(1)}" x2="${W - mR}" y2="${y.toFixed(1)}" stroke="#34363B" stroke-width="1"/>
+                <text x="${mL - 5}" y="${(y + 3).toFixed(1)}" text-anchor="end" font-family="monospace" font-size="9" fill="#8C8E94">${fmt(t)}</text>`;
       }).join('');
-      const fmt = (v) => Math.round(v * 10) / 10;
+
+      // X date labels: first, middle, last (short form).
+      const shortDate = (d) => { const p = d.split('-'); return `${p[2]}/${p[1]}`; };
+      const xIdx = chartable.length <= 2 ? [0, chartable.length - 1] : [0, Math.floor((chartable.length - 1) / 2), chartable.length - 1];
+      const xLabels = xIdx.map(i => {
+        const x = xAt(i);
+        return `<text x="${x.toFixed(1)}" y="${H - 6}" text-anchor="middle" font-family="monospace" font-size="9" fill="#8C8E94">${shortDate(chartable[i].logged_at)}</text>`;
+      }).join('');
+
+      const linePts = chartable.map((s, i) => `${xAt(i).toFixed(1)},${yAt(s.chartWeight).toFixed(1)}`).join(' ');
+      // Area fill polygon (line + down to baseline).
+      const areaPts = `${mL},${(mT + plotH).toFixed(1)} ${linePts} ${(W - mR)},${(mT + plotH).toFixed(1)}`;
+      const dots = chartable.map((s, i) => {
+        const isLast = i === chartable.length - 1;
+        return `<circle cx="${xAt(i).toFixed(1)}" cy="${yAt(s.chartWeight).toFixed(1)}" r="${isLast ? 4 : 2.8}" fill="${isLast ? '#FF5630' : '#EDEAE2'}" stroke="#24262A" stroke-width="1.5"/>`;
+      }).join('');
+
       chartHtml = `<div class="stat-card" style="margin:0 18px 16px 18px;">
-        <div style="display:flex; justify-content:space-between; font-family:'JetBrains Mono', monospace; font-size:10px; color:var(--slate); margin-bottom:2px;">
-          <span>all in ${chartUnit}</span><span>${fmt(min)}–${fmt(max)}${chartUnit}</span>
+        <div style="display:flex; justify-content:space-between; font-family:'JetBrains Mono', monospace; font-size:10px; color:var(--slate); margin-bottom:6px;">
+          <span>Weight (${chartUnit})</span>
+          <span>latest ${fmt(chartable[chartable.length-1].chartWeight)}${chartUnit}</span>
         </div>
-        <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}">
-          <polyline points="${points.join(' ')}" fill="none" stroke="#FF5630" stroke-width="2.5" stroke-linecap="round"/>
+        <svg viewBox="0 0 ${W} ${H}" width="100%" height="auto">
+          <defs><linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#FF5630" stop-opacity="0.28"/>
+            <stop offset="100%" stop-color="#FF5630" stop-opacity="0"/>
+          </linearGradient></defs>
+          ${gridLines}
+          <polygon points="${areaPts}" fill="url(#areaFill)"/>
+          <polyline points="${linePts}" fill="none" stroke="#FF5630" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
           ${dots}
+          ${xLabels}
         </svg>
-        <div class="small" style="text-align:center; margin-top:4px;">${chartable[0].logged_at} → ${chartable[chartable.length-1].logged_at} · latest ${fmt(chartable[chartable.length-1].chartWeight)}${chartUnit}</div>
       </div>`;
     }
     overlay.querySelector('#chartArea').innerHTML = chartHtml;
