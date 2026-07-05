@@ -246,6 +246,76 @@ function formatSetsReps(s){
   return '';
 }
 
+// ---- Exercise Guide (external public-domain data: yuhonas/free-exercise-db, The Unlicense) ----
+// Dynamic name lookup so this works for ANY exercise and ANY user, not a hardcoded table.
+const EXDB_JSON_URL = 'https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/dist/exercises.json';
+const EXDB_IMG_BASE = 'https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/exercises/';
+const EXDB_CACHE_KEY = 'zealift_exdb_v1';
+let _exdbCache = null;
+let _exdbPromise = null;
+
+const EXDB_SYNONYMS = {
+  'skullcrusher':'triceps extension','skullcrushers':'triceps extension',
+  'bayesian':'cable','iso':'leverage','hammer strength':'leverage',
+  'meow':'wrist','farmer':'farmers walk','preacher':'preacher curl'
+};
+
+function exdbNormalize(s){
+  s = (s || '').toLowerCase();
+  s = s.replace(/\([^)]*\)/g, ' ');
+  for (const k in EXDB_SYNONYMS){ if (s.includes(k)) s += ' ' + EXDB_SYNONYMS[k]; }
+  s = s.replace(/[^a-z0-9 ]/g, ' ');
+  const stop = new Set(['machine','the','a','with','via','plate','loaded','pin','free','weight','weights','strength','seated','standing']);
+  let words = s.split(/\s+/).filter(w => w && !stop.has(w));
+  words = words.map(w => (w.endsWith('s') && w.length > 3) ? w.slice(0, -1) : w);
+  return new Set(words);
+}
+
+async function loadExerciseDB(){
+  if (_exdbCache) return _exdbCache;
+  if (_exdbPromise) return _exdbPromise;
+  // Try localStorage cache first (only download once per device).
+  try {
+    const cached = localStorage.getItem(EXDB_CACHE_KEY);
+    if (cached){ _exdbCache = JSON.parse(cached); return _exdbCache; }
+  } catch(e){}
+  _exdbPromise = (async () => {
+    try {
+      const res = await fetch(EXDB_JSON_URL);
+      if (!res.ok) throw new Error('fetch failed');
+      const data = await res.json();
+      // Keep only the fields we need, to stay well under localStorage limits.
+      const slim = data.map(e => ({
+        name: e.name, primaryMuscles: e.primaryMuscles, secondaryMuscles: e.secondaryMuscles,
+        instructions: e.instructions, equipment: e.equipment, level: e.level,
+        mechanic: e.mechanic, images: e.images
+      }));
+      _exdbCache = slim;
+      try { localStorage.setItem(EXDB_CACHE_KEY, JSON.stringify(slim)); } catch(e){}
+      return slim;
+    } catch(e){
+      return null; // offline or unreachable — caller shows a graceful fallback
+    }
+  })();
+  return _exdbPromise;
+}
+
+function matchExercise(name, db){
+  if (!db) return null;
+  const qwords = exdbNormalize(name);
+  if (!qwords.size) return null;
+  let best = null, bestScore = 0;
+  for (const e of db){
+    const ewords = exdbNormalize(e.name);
+    if (!ewords.size) continue;
+    let overlap = 0;
+    for (const w of qwords){ if (ewords.has(w)) overlap++; }
+    const score = overlap / Math.max(qwords.size, ewords.size);
+    if (score > bestScore){ best = e; bestScore = score; }
+  }
+  return bestScore >= 0.34 ? best : null;
+}
+
 function convertWeight(value, fromUnit, toUnit){
   if (fromUnit === toUnit) return value;
   if (fromUnit === 'lb' && toUnit === 'kg') return value / 2.20462;
@@ -775,6 +845,155 @@ function openNewExerciseForm(){
 }
 
 // ---------- LOG SET FORM ----------
+async function loadExerciseGuide(overlay, exerciseName){
+  const area = overlay.querySelector('#guideArea');
+  if (!area) return;
+  area.innerHTML = `<div class="small" style="color:var(--slate); padding:0 18px;">Looking up form guide…</div>`;
+  const db = await loadExerciseDB();
+  if (!db){
+    area.innerHTML = `<div class="small" style="color:var(--slate); padding:0 18px;">Form guide unavailable offline.</div>`;
+    return;
+  }
+  const match = matchExercise(exerciseName, db);
+  if (!match){
+    area.innerHTML = `<div class="small" style="color:var(--slate); padding:0 18px;">No form guide found for this exercise.</div>`;
+    return;
+  }
+  const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
+  const muscles = [...(match.primaryMuscles||[]), ...(match.secondaryMuscles||[])].map(cap);
+  const primarySet = new Set((match.primaryMuscles||[]));
+  const muscleChips = [...(match.primaryMuscles||[]), ...(match.secondaryMuscles||[])].map(m => {
+    const isPrimary = primarySet.has(m);
+    return `<span style="display:inline-block; font-size:10px; padding:3px 8px; border-radius:20px; margin:2px 3px 2px 0;
+      background:${isPrimary ? 'rgba(255,86,48,0.16)' : 'var(--panel)'};
+      color:${isPrimary ? '#FF5630' : 'var(--slate)'};">${cap(m)}</span>`;
+  }).join('');
+  const img = (match.images && match.images.length)
+    ? `<img src="${EXDB_IMG_BASE}${match.images[0]}" alt="" style="width:100%; border-radius:12px; margin-bottom:10px; background:#fff;" loading="lazy">`
+    : '';
+  const steps = (match.instructions||[]).map((s,i) =>
+    `<div style="display:flex; gap:8px; margin-bottom:7px;">
+       <span style="color:#FF5630; font-weight:600; font-size:12px; flex-shrink:0;">${i+1}</span>
+       <span style="font-size:12.5px; color:var(--chalk); line-height:1.45;">${s}</span>
+     </div>`).join('');
+  const meta = [match.equipment, match.level, match.mechanic].filter(Boolean).map(cap).join(' · ');
+
+  area.innerHTML = `
+    <div style="padding:0 18px;">
+      <div id="guideToggle" style="display:flex; align-items:center; justify-content:space-between; cursor:pointer; padding:12px 0;">
+        <div style="font-family:'Oswald',sans-serif; font-size:12px; letter-spacing:1px; text-transform:uppercase; color:var(--slate);">Form Guide</div>
+        <div id="guideChev" style="color:var(--slate); font-size:14px; transition:transform 0.2s;">▾</div>
+      </div>
+      <div id="guideBody" style="display:none;">
+        ${img}
+        <div style="margin-bottom:10px;">${muscleChips}</div>
+        ${meta ? `<div class="small" style="color:var(--slate); margin-bottom:12px;">${meta}</div>` : ''}
+        ${steps}
+        <div class="small" style="color:var(--slate); margin-top:10px; font-style:italic; opacity:0.7;">
+          General guidance from a public exercise library — not a substitute for a coach. Matched to "${match.name}".
+        </div>
+      </div>
+    </div>`;
+  const toggle = area.querySelector('#guideToggle');
+  const body = area.querySelector('#guideBody');
+  const chev = area.querySelector('#guideChev');
+  toggle.onclick = () => {
+    const open = body.style.display !== 'none';
+    body.style.display = open ? 'none' : 'block';
+    chev.style.transform = open ? 'rotate(0deg)' : 'rotate(180deg)';
+  };
+}
+
+// ---------- PR CELEBRATION ----------
+function celebratePR(exerciseName, weight, unit, priorBest){
+  const gain = Math.round((weight - priorBest) * 10) / 10;
+  const overlay = document.createElement('div');
+  overlay.style = `position:fixed; inset:0; z-index:60; display:flex; align-items:center; justify-content:center;
+    background:rgba(0,0,0,0.55); animation:prFade 0.25s ease;`;
+  // Simple confetti dots.
+  let confetti = '';
+  const colors = ['#FF5630','#3FCB7E','#F0C542','#5A9BF0','#EDEAE2'];
+  for (let i=0;i<28;i++){
+    const left = Math.random()*100, delay = Math.random()*0.4, dur = 1.4+Math.random()*0.8;
+    const c = colors[i % colors.length], size = 6+Math.random()*6;
+    confetti += `<div style="position:absolute; top:-20px; left:${left}%; width:${size}px; height:${size}px;
+      background:${c}; border-radius:2px; animation:prConfetti ${dur}s ${delay}s ease-in forwards;"></div>`;
+  }
+  overlay.innerHTML = `
+    <style>
+      @keyframes prFade{from{opacity:0}to{opacity:1}}
+      @keyframes prConfetti{to{transform:translateY(105vh) rotate(${Math.random()*720}deg); opacity:0.2;}}
+      @keyframes prPop{0%{transform:scale(0.6); opacity:0;}60%{transform:scale(1.08);}100%{transform:scale(1); opacity:1;}}
+    </style>
+    ${confetti}
+    <div style="background:var(--panel); border-radius:20px; padding:28px 26px; text-align:center; max-width:300px;
+      animation:prPop 0.4s ease; box-shadow:0 20px 60px rgba(0,0,0,0.6); position:relative;">
+      <div style="font-size:38px; margin-bottom:6px;">🏆</div>
+      <div style="font-family:'Oswald',sans-serif; font-size:20px; letter-spacing:1px; text-transform:uppercase; color:#FF5630; margin-bottom:6px;">New PR!</div>
+      <div style="font-size:14px; color:var(--chalk); margin-bottom:4px;">${exerciseName}</div>
+      <div style="font-family:'JetBrains Mono',monospace; font-size:22px; font-weight:600; margin-bottom:4px;">${weight}${unit}</div>
+      <div class="small" style="color:var(--slate);">+${gain}${unit} over your previous best of ${Math.round(priorBest*10)/10}${unit}</div>
+      <button id="prClose" style="margin-top:18px; background:#FF5630; color:var(--ink); font-weight:600; border-radius:10px; padding:10px 24px; font-size:13px;">Nice</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  if (navigator.vibrate) navigator.vibrate([80,40,80,40,160]);
+  overlay.querySelector('#prClose').onclick = () => overlay.remove();
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  setTimeout(() => { if (overlay.parentNode) overlay.remove(); }, 6000);
+}
+
+// ---------- PLATE CALCULATOR ----------
+// Gym plates: 45, 35 (rarer), 25, 10 lb. Standard bar 45lb / ~20kg.
+function computePlates(totalWeight, unit){
+  if (!totalWeight || totalWeight <= 0) return null;
+  let plates, bar, dispUnit;
+  if (unit === 'kg'){
+    // Convert to lb for the physical plates the gym actually has.
+    bar = 20; // ~45lb bar, expressed in kg
+    dispUnit = 'kg';
+    const totalLb = totalWeight * 2.20462;
+    const barLb = 45;
+    const perSideLb = (totalLb - barLb) / 2;
+    if (perSideLb < 0) return { belowBar:true };
+    return greedyPlates(perSideLb, [45,35,25,10], 'lb', totalWeight, 'kg');
+  } else {
+    bar = 45; dispUnit = 'lb';
+    const perSide = (totalWeight - bar) / 2;
+    if (perSide < 0) return { belowBar:true };
+    return greedyPlates(perSide, [45,35,25,10], 'lb', totalWeight, 'lb');
+  }
+}
+function greedyPlates(perSide, plates, plateUnit, total, inputUnit){
+  let remaining = perSide;
+  const used = [];
+  for (const p of plates){
+    const n = Math.floor(remaining / p);
+    if (n > 0){ used.push({n, p}); remaining -= n*p; }
+  }
+  return { used, leftover: Math.round(remaining*10)/10, plateUnit, total, inputUnit, perSide: Math.round(perSide*10)/10 };
+}
+function renderPlateCalc(overlay){
+  const area = overlay.querySelector('#plateCalcArea');
+  if (!area) return;
+  const wInput = overlay.querySelector('#weightInput');
+  const activeUnit = overlay.querySelector('.unit-toggle button.active')?.dataset.u;
+  const val = parseFloat(wInput?.value);
+  if (!val || (activeUnit !== 'kg' && activeUnit !== 'lb')){ area.innerHTML = ''; return; }
+  const res = computePlates(val, activeUnit);
+  if (!res){ area.innerHTML = ''; return; }
+  if (res.belowBar){
+    area.innerHTML = `<div class="small" style="color:var(--slate);">Below bar weight (45lb / 20kg bar).</div>`;
+    return;
+  }
+  if (!res.used.length){
+    area.innerHTML = `<div class="small" style="color:var(--slate);">Just the bar${res.leftover>0.1?` (+${res.leftover}lb short per side)`:''}.</div>`;
+    return;
+  }
+  const desc = res.used.map(u => `${u.n}×${u.p}`).join(' + ');
+  const short = res.leftover > 0.1 ? ` <span style="color:var(--flame);">(~${res.leftover}lb short)</span>` : '';
+  area.innerHTML = `<div class="small" style="color:var(--slate);">🏋 Per side: <span style="color:var(--chalk); font-weight:600;">${desc}</span> lb${short}</div>`;
+}
+
 function openLogForm(exerciseId, exerciseName){
   let unit = 'kg';
   let weightType = 'total';
@@ -784,6 +1003,7 @@ function openLogForm(exerciseId, exerciseName){
   overlay.innerHTML = `
     <div class="form-header"><button id="closeLog">✕</button><h1>${exerciseName}</h1><div style="width:18px;"></div></div>
     <div class="overlay-scroll">
+      <div id="guideArea" style="margin-bottom:18px;"></div>
       <div id="sameAsLastArea" style="margin-bottom:18px;"></div>
       <div style="height:1px; background:var(--line); margin:0 18px 18px 18px;"></div>
       <div class="field-label">Weight or Time <span class="opt">(optional)</span></div>
@@ -793,6 +1013,7 @@ function openLogForm(exerciseId, exerciseName){
           <button class="active" data-u="kg">kg</button><button data-u="lb">lb</button><button data-u="sec">sec</button><button data-u="pin">pin</button>
         </div>
       </div>
+      <div id="plateCalcArea" style="padding:0 18px; margin-top:-6px; margin-bottom:6px;"></div>
       <div class="field-label">Per Side or Total?</div>
       <div class="chip-row">
         <div class="chip active" data-wt="total">Total</div>
@@ -811,8 +1032,9 @@ function openLogForm(exerciseId, exerciseName){
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#closeLog').onclick = () => overlay.remove();
+  overlay.querySelector('#weightInput').addEventListener('input', () => renderPlateCalc(overlay));
   overlay.querySelectorAll('.unit-toggle button').forEach(b => {
-    b.onclick = () => { overlay.querySelectorAll('.unit-toggle button').forEach(x=>x.classList.remove('active')); b.classList.add('active'); unit = b.dataset.u; };
+    b.onclick = () => { overlay.querySelectorAll('.unit-toggle button').forEach(x=>x.classList.remove('active')); b.classList.add('active'); unit = b.dataset.u; renderPlateCalc(overlay); };
   });
   overlay.querySelectorAll('.chip[data-wt]').forEach(b => {
     b.onclick = () => { overlay.querySelectorAll('.chip[data-wt]').forEach(x=>x.classList.remove('active')); b.classList.add('active'); weightType = b.dataset.wt; };
@@ -820,6 +1042,17 @@ function openLogForm(exerciseId, exerciseName){
 
   async function saveEntry(weight, unit, weightType, reps, numSets, notes){
     const { data: userData } = await supabaseClient.auth.getUser();
+    // Capture prior best BEFORE inserting, for PR detection (weight-based only).
+    let priorBest = null;
+    if (weight !== null && (unit === 'kg' || unit === 'lb')){
+      const prevSets = await supabaseClient.from('sets')
+        .select('weight, weight_unit')
+        .eq('exercise_id', exerciseId)
+        .in('weight_unit', ['kg','lb']);
+      if (prevSets.data && prevSets.data.length){
+        priorBest = Math.max(...prevSets.data.map(s => convertWeight(s.weight, s.weight_unit, unit)));
+      }
+    }
     const { data, error } = await supabaseClient.from('sets').insert({
       user_id: userData.user.id, exercise_id: exerciseId,
       weight, weight_unit: weight !== null ? unit : 'bodyweight',
@@ -829,6 +1062,10 @@ function openLogForm(exerciseId, exerciseName){
       logged_at: todayStr()
     }).select();
     if (error){ alert(error.message); return null; }
+    // Celebrate a new PR: strictly greater than the prior best, and there must be a prior best.
+    if (priorBest !== null && weight > priorBest + 0.01){
+      celebratePR(exerciseName, weight, unit, priorBest);
+    }
     return data && data[0] ? data[0].id : null;
   }
 
@@ -966,6 +1203,7 @@ function openLogForm(exerciseId, exerciseName){
     });
   }
   loadHistory();
+  loadExerciseGuide(overlay, exerciseName);
 
   overlay.querySelector('#saveSetBtn').onclick = async () => {
     const weightRaw = document.getElementById('weightInput').value;
@@ -978,8 +1216,67 @@ function openLogForm(exerciseId, exerciseName){
     if (insertedId){
       overlay.remove();
       if (state.currentTab === 'track') renderTrack();
+      startRestTimer();
     }
   };
+}
+
+// ---------- REST TIMER ----------
+let _restInterval = null;
+function startRestTimer(seconds){
+  seconds = seconds || parseInt(localStorage.getItem('zealift_rest_default') || '90', 10);
+  if (_restInterval){ clearInterval(_restInterval); _restInterval = null; }
+  const existing = document.getElementById('restTimerBar');
+  if (existing) existing.remove();
+
+  let remaining = seconds;
+  const bar = document.createElement('div');
+  bar.id = 'restTimerBar';
+  bar.style = `position:fixed; left:50%; transform:translateX(-50%); bottom:78px; z-index:40;
+    background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:10px 14px;
+    display:flex; align-items:center; gap:12px; box-shadow:0 8px 24px rgba(0,0,0,0.5); min-width:230px;`;
+  const render = () => {
+    const m = Math.floor(remaining/60), s = remaining%60;
+    bar.innerHTML = `
+      <div style="font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:600; color:${remaining<=0?'#3FCB7E':'var(--chalk)'}; min-width:56px;">
+        ${remaining<=0 ? 'Done' : `${m}:${s.toString().padStart(2,'0')}`}
+      </div>
+      <div style="display:flex; gap:6px; flex:1; justify-content:flex-end;">
+        <button id="restMinus" style="background:var(--ink); color:var(--chalk); border-radius:8px; padding:6px 9px; font-size:12px;">−15</button>
+        <button id="restPlus" style="background:var(--ink); color:var(--chalk); border-radius:8px; padding:6px 9px; font-size:12px;">+15</button>
+        <button id="restClose" style="background:var(--flame); color:var(--ink); border-radius:8px; padding:6px 10px; font-size:12px; font-weight:600;">✕</button>
+      </div>`;
+    bar.querySelector('#restMinus').onclick = () => { remaining = Math.max(0, remaining-15); render(); };
+    bar.querySelector('#restPlus').onclick = () => { remaining += 15; if (remaining>0 && !_restInterval) tick(); render(); };
+    bar.querySelector('#restClose').onclick = () => { if (_restInterval) clearInterval(_restInterval); _restInterval=null; bar.remove(); };
+  };
+  const buzz = () => {
+    if (navigator.vibrate) navigator.vibrate([200,100,200]);
+    try {
+      const ctx = new (window.AudioContext||window.webkitAudioContext)();
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.connect(g); g.connect(ctx.destination);
+      o.frequency.value = 880; o.type = 'sine';
+      g.gain.setValueAtTime(0.001, ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.3, ctx.currentTime+0.02);
+      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime+0.5);
+      o.start(); o.stop(ctx.currentTime+0.5);
+    } catch(e){}
+  };
+  const tick = () => {
+    _restInterval = setInterval(() => {
+      remaining--;
+      render();
+      if (remaining <= 0){
+        clearInterval(_restInterval); _restInterval = null;
+        buzz();
+        setTimeout(() => { if (bar.parentNode) bar.remove(); }, 4000);
+      }
+    }, 1000);
+  };
+  document.body.appendChild(bar);
+  render();
+  tick();
 }
 
 // ---------- SCALE ----------
