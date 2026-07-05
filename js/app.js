@@ -985,7 +985,7 @@ function openLogForm(exerciseId, exerciseName){
 // ---------- SCALE ----------
 async function loadBodyWeight(){
   const result = await withTimeout(
-    supabaseClient.from('body_weight').select('weight, unit, logged_at').order('logged_at', { ascending: false }).limit(20),
+    supabaseClient.from('body_weight').select('id, weight, unit, logged_at').order('logged_at', { ascending: false }).limit(20),
     15000
   );
   return result.__timeout || result.error ? [] : (result.data || []);
@@ -1002,31 +1002,58 @@ async function renderScale(){
     const arrow = diff > 0 ? '↑' : (diff < 0 ? '↓' : '→');
     deltaHtml = `<div class="delta">${arrow} ${Math.abs(diff)}${latest.unit} since last entry</div>`;
   }
-  const rows = entries.map(e => `<div class="log-row"><div class="log-date">${e.logged_at}</div><div class="log-weight">${e.weight}${e.unit}</div></div>`).join('');
+  const rows = entries.map(e => `<div class="log-row" data-id="${e.id}"><div class="log-date">${e.logged_at}</div><div class="log-weight">${e.weight}${e.unit}</div></div>`).join('');
 
   let chartHtml = '';
   if (entries.length >= 2){
     const chrono = [...entries].reverse(); // oldest first for left-to-right chart
-    const weights = chrono.map(e => e.weight);
-    const min = Math.min(...weights), max = Math.max(...weights);
-    const range = max - min || 1;
-    const W = 300, H = 80, pad = 6;
-    const points = chrono.map((e, i) => {
-      const x = chrono.length === 1 ? W/2 : (i / (chrono.length - 1)) * W;
-      const y = H - pad - ((e.weight - min) / range) * (H - pad*2);
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    });
-    const dots = chrono.map((e, i) => {
-      const [x, y] = points[i].split(',');
-      const isLast = i === chrono.length - 1;
-      return `<circle cx="${x}" cy="${y}" r="${isLast ? 3.5 : 3}" fill="${isLast ? '#FF5630' : '#8C8E94'}"/>`;
+    const chartUnit = chrono[chrono.length - 1].unit === 'lb' ? 'lb' : 'kg';
+    const weights = chrono.map(e => convertWeight(e.weight, e.unit, chartUnit));
+    const dataMin = Math.min(...weights), dataMax = Math.max(...weights);
+    const spanW = (dataMax - dataMin) || 1;
+    const yMin = Math.max(0, dataMin - spanW * 0.15);
+    const yMax = dataMax + spanW * 0.15;
+    const yRange = (yMax - yMin) || 1;
+    const W = 320, H = 150, mL = 34, mR = 10, mT = 12, mB = 22;
+    const plotW = W - mL - mR, plotH = H - mT - mB;
+    const fmt = (v) => (Math.round(v * 10) / 10).toString();
+    const xAt = (i) => mL + (chrono.length === 1 ? plotW / 2 : (i / (chrono.length - 1)) * plotW);
+    const yAt = (w) => mT + plotH - ((w - yMin) / yRange) * plotH;
+
+    const yTicks = [yMin, (yMin + yMax) / 2, yMax];
+    const gridLines = yTicks.map(t => {
+      const y = yAt(t);
+      return `<line x1="${mL}" y1="${y.toFixed(1)}" x2="${W - mR}" y2="${y.toFixed(1)}" stroke="#34363B" stroke-width="1"/>
+              <text x="${mL - 5}" y="${(y + 3).toFixed(1)}" text-anchor="end" font-family="monospace" font-size="9" fill="#8C8E94">${fmt(t)}</text>`;
     }).join('');
+
+    const shortDate = (d) => { const p = d.split('-'); return `${p[2]}/${p[1]}`; };
+    const xIdx = chrono.length <= 2 ? [0, chrono.length - 1] : [0, Math.floor((chrono.length - 1) / 2), chrono.length - 1];
+    const xLabels = xIdx.map(i => `<text x="${xAt(i).toFixed(1)}" y="${H - 6}" text-anchor="middle" font-family="monospace" font-size="9" fill="#8C8E94">${shortDate(chrono[i].logged_at)}</text>`).join('');
+
+    const linePts = chrono.map((e, i) => `${xAt(i).toFixed(1)},${yAt(convertWeight(e.weight, e.unit, chartUnit)).toFixed(1)}`).join(' ');
+    const areaPts = `${mL},${(mT + plotH).toFixed(1)} ${linePts} ${(W - mR)},${(mT + plotH).toFixed(1)}`;
+    const dots = chrono.map((e, i) => {
+      const isLast = i === chrono.length - 1;
+      return `<circle cx="${xAt(i).toFixed(1)}" cy="${yAt(convertWeight(e.weight, e.unit, chartUnit)).toFixed(1)}" r="${isLast ? 4 : 2.8}" fill="${isLast ? '#FF5630' : '#EDEAE2'}" stroke="#24262A" stroke-width="1.5"/>`;
+    }).join('');
+
     chartHtml = `<div class="stat-card">
-      <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}">
-        <polyline points="${points.join(' ')}" fill="none" stroke="#FF5630" stroke-width="2.5" stroke-linecap="round"/>
+      <div style="display:flex; justify-content:space-between; font-family:'JetBrains Mono', monospace; font-size:10px; color:var(--slate); margin-bottom:6px;">
+        <span>Body weight (${chartUnit})</span>
+        <span>latest ${fmt(convertWeight(chrono[chrono.length-1].weight, chrono[chrono.length-1].unit, chartUnit))}${chartUnit}</span>
+      </div>
+      <svg viewBox="0 0 ${W} ${H}" width="100%" height="auto">
+        <defs><linearGradient id="scaleAreaFill" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#FF5630" stop-opacity="0.28"/>
+          <stop offset="100%" stop-color="#FF5630" stop-opacity="0"/>
+        </linearGradient></defs>
+        ${gridLines}
+        <polygon points="${areaPts}" fill="url(#scaleAreaFill)"/>
+        <polyline points="${linePts}" fill="none" stroke="#FF5630" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
         ${dots}
+        ${xLabels}
       </svg>
-      <div class="small" style="text-align:center; margin-top:4px;">${chrono[0].logged_at} → ${chrono[chrono.length-1].logged_at}</div>
     </div>`;
   }
 
@@ -1045,6 +1072,36 @@ async function renderScale(){
       ${renderTabbar()}
     </div>`;
   attachShellHandlers();
+  document.querySelectorAll('.scroll-area .log-row[data-id]').forEach(row => {
+    let pressTimer = null;
+    const start = () => { pressTimer = setTimeout(() => confirmDeleteBodyWeight(row.dataset.id), 550); };
+    const cancel = () => clearTimeout(pressTimer);
+    row.addEventListener('pointerdown', start);
+    row.addEventListener('pointerup', cancel);
+    row.addEventListener('pointerleave', cancel);
+    row.addEventListener('pointercancel', cancel);
+  });
+}
+
+function confirmDeleteBodyWeight(entryId){
+  const overlay = document.createElement('div');
+  overlay.style = 'position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:25; display:flex; align-items:center; justify-content:center;';
+  overlay.innerHTML = `
+    <div style="background:var(--panel); border-radius:16px; padding:22px; width:280px; text-align:center;">
+      <div style="font-family:'Oswald', sans-serif; font-size:16px; margin-bottom:8px;">Delete Weigh-In?</div>
+      <div style="font-size:13px; color:var(--slate); margin-bottom:18px;">This removes the entry permanently. There's no undo.</div>
+      <div style="display:flex; gap:10px;">
+        <button id="cancelBW" style="flex:1; padding:11px; border-radius:10px; background:var(--ink); color:var(--chalk); font-size:13px;">Cancel</button>
+        <button id="confirmBW" style="flex:1; padding:11px; border-radius:10px; background:var(--flame); color:var(--ink); font-weight:600; font-size:13px;">Delete</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#cancelBW').onclick = () => overlay.remove();
+  overlay.querySelector('#confirmBW').onclick = async () => {
+    overlay.remove();
+    await supabaseClient.from('body_weight').delete().eq('id', entryId);
+    renderScale();
+  };
 }
 
 function openLogWeightForm(){
