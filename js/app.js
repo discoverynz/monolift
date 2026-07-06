@@ -4,6 +4,100 @@ const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
+
+// Common starter exercises shown as quick-add suggestions on an empty day, keyed by
+// day-type label. Falls back to a generic set for custom/renamed day types.
+const STARTER_EXERCISES = {
+  'chest & triceps': [
+    { name: 'Barbell Bench Press', category: 'Free Weights - Bench' },
+    { name: 'Dumbbell Incline Press', category: 'Free Weights - Bench' },
+    { name: 'Tricep Pushdown', category: 'Cable' },
+    { name: 'Chest Press Machine', category: 'Pin-Loaded' }
+  ],
+  'back & biceps': [
+    { name: 'Lat Pulldown', category: 'Pin-Loaded' },
+    { name: 'Seated Row', category: 'Pin-Loaded' },
+    { name: 'Dumbbell Curl', category: 'Free Weights - No Bench' },
+    { name: 'One Arm Dumbbell Row', category: 'Free Weights - Bench' }
+  ],
+  'chest & back': [
+    { name: 'Bench Press', category: 'Free Weights - Bench' },
+    { name: 'Lat Pulldown', category: 'Pin-Loaded' },
+    { name: 'Chest Fly Machine', category: 'Pin-Loaded' },
+    { name: 'Seated Row', category: 'Pin-Loaded' }
+  ],
+  'shoulders & arms': [
+    { name: 'Shoulder Press Machine', category: 'Pin-Loaded' },
+    { name: 'Dumbbell Lateral Raise', category: 'Free Weights - No Bench' },
+    { name: 'Dumbbell Curl', category: 'Free Weights - No Bench' },
+    { name: 'Tricep Extension', category: 'Cable' }
+  ],
+  'legs & abs': [
+    { name: 'Leg Press', category: 'Pin-Loaded' },
+    { name: 'Leg Extension', category: 'Pin-Loaded' },
+    { name: 'Leg Curl', category: 'Pin-Loaded' },
+    { name: 'Cable Crunch', category: 'Cable' }
+  ],
+  'hybrid circuit': [
+    { name: 'Dumbbell Bench Press', category: 'Free Weights - Bench' },
+    { name: 'Lat Pulldown', category: 'Pin-Loaded' },
+    { name: 'Shoulder Press Machine', category: 'Pin-Loaded' },
+    { name: 'Leg Press', category: 'Pin-Loaded' }
+  ]
+};
+const DEFAULT_STARTERS = [
+  { name: 'Bench Press', category: 'Free Weights - Bench' },
+  { name: 'Lat Pulldown', category: 'Pin-Loaded' },
+  { name: 'Squat', category: 'Other' },
+  { name: 'Dumbbell Curl', category: 'Free Weights - No Bench' },
+  { name: 'Plank', category: 'Other' }
+];
+function getStarterExercises(dayTypeLabel){
+  const key = (dayTypeLabel || '').toLowerCase().trim();
+  return STARTER_EXERCISES[key] || DEFAULT_STARTERS;
+}
+async function quickAddStarter(name, category, weekday){
+  const { data: userData } = await supabaseClient.auth.getUser();
+  const { error } = await supabaseClient.from('exercises').insert({
+    user_id: userData.user.id, name, category, weekday, alt_group_id: null
+  });
+  if (error){ alert(error.message); return; }
+  renderTrack();
+}
+
+function getGroupByPref(){ return localStorage.getItem('zealift_group_by') || 'equipment'; }
+function setGroupByPref(v){ localStorage.setItem('zealift_group_by', v); }
+
+// Groups a list of {name, category, ...} exercises either by their stored equipment
+// category, or by primary muscle looked up dynamically against the cached exercise DB —
+// same DB and matcher the form guide uses, so no schema change or per-exercise setup needed.
+async function groupExercisesByChoice(exercises, groupBy){
+  const grouped = {};
+  let orderedKeys;
+  if (groupBy === 'muscle'){
+    const db = await loadExerciseDB();
+    const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
+    exercises.forEach(ex => {
+      const m = db ? matchExercise(ex.name, db) : null;
+      const label = (m && m.primaryMuscles && m.primaryMuscles[0]) ? cap(m.primaryMuscles[0]) : 'Other';
+      (grouped[label] = grouped[label] || []).push(ex);
+    });
+    orderedKeys = Object.keys(grouped).sort((a,b) => a === 'Other' ? 1 : b === 'Other' ? -1 : a.localeCompare(b));
+  } else {
+    CATEGORIES.forEach(c => grouped[c] = []);
+    exercises.forEach(ex => { (grouped[ex.category] || (grouped[ex.category] = [])).push(ex); });
+    const knownCats = new Set(CATEGORIES);
+    const extraCats = Object.keys(grouped).filter(c => !knownCats.has(c) && grouped[c].length > 0);
+    orderedKeys = [...CATEGORIES, ...extraCats];
+  }
+  return { grouped, orderedKeys };
+}
+function groupByToggleHtml(current){
+  return `<div class="chip-row" style="padding:0 18px 10px 18px;">
+    <div class="chip groupby-chip ${current==='equipment'?'active':''}" data-groupby="equipment" style="font-size:11px; padding:6px 12px;">By Equipment</div>
+    <div class="chip groupby-chip ${current==='muscle'?'active':''}" data-groupby="muscle" style="font-size:11px; padding:6px 12px;">By Muscle</div>
+  </div>`;
+}
 const ALT_COLORS = ["#2DD4BF","#9B7EDE","#E8A33D","#6FA8DC","#E8718D","#7FD17A"];
 
 const QUOTES = [
@@ -485,9 +579,8 @@ async function renderTrack(){
   });
   const pct = totalSlots > 0 ? Math.round((doneSlots / totalSlots) * 100) : 0;
 
-  const grouped = {};
-  CATEGORIES.forEach(c => grouped[c] = []);
-  state.exercises.forEach(ex => { (grouped[ex.category] || (grouped[ex.category] = [])).push(ex); });
+  const groupBy = getGroupByPref();
+  const { grouped, orderedKeys } = await groupExercisesByChoice(state.exercises, groupBy);
 
   const q = todayQuote();
   const dayChips = DAY_NAMES.map((d, i) => {
@@ -497,16 +590,17 @@ async function renderTrack(){
   }).join('');
 
   let listHtml = '';
-  const knownCats = new Set(CATEGORIES);
-  const extraCats = Object.keys(grouped).filter(c => !knownCats.has(c) && grouped[c].length > 0);
-  [...CATEGORIES, ...extraCats].forEach(cat => {
+  orderedKeys.forEach(cat => {
     const items = grouped[cat] || [];
     if (items.length === 0) return;
     listHtml += `<div class="category">${cat}</div>` + items.map(exerciseRow).join('');
   });
   if (state.exercises.length === 0){
-    listHtml = `<div class="empty-state">No exercises set for ${DAY_LABELS[state.selectedDay]} yet.<br>
-      <button class="btn-primary" id="emptyAddBtn">+ Add an Exercise</button></div>`;
+    const starters = getStarterExercises(dayTypeLabel);
+    listHtml = `<div class="empty-state">No exercises set for ${DAY_LABELS[state.selectedDay]} yet.</div>
+      <div class="category">Quick Add — Common for ${dayTypeLabel}</div>
+      ${starters.map(s => `<div class="pick-row starter-add" data-name="${s.name}" data-cat="${s.category}"><div class="ex-name">${s.name}</div><div class="chev" style="color:var(--flame); font-size:20px;">+</div></div>`).join('')}
+      <div style="padding:14px 18px;"><button class="btn-primary" id="emptyAddBtn">+ Add a Different Exercise</button></div>`;
   }
 
   app.innerHTML = `
@@ -522,6 +616,7 @@ async function renderTrack(){
         <div style="margin:12px 18px 0 18px; height:4px; background:var(--panel); border-radius:4px; overflow:hidden;">
           <div style="height:100%; width:${pct}%; background:var(--good); border-radius:4px;"></div>
         </div>
+        ${state.exercises.length > 0 ? groupByToggleHtml(groupBy) : ''}
         ${listHtml}
       </div>
       ${renderTabbar()}
@@ -529,6 +624,9 @@ async function renderTrack(){
 
   attachShellHandlers();
   document.getElementById('dayTypeHeader').onclick = () => openEditDayTypeForm(state.selectedDay, dayTypeLabel);
+  document.querySelectorAll('.groupby-chip').forEach(chip => {
+    chip.onclick = () => { setGroupByPref(chip.dataset.groupby); renderTrack(); };
+  });
   const scrollEl = document.querySelector('.scroll-area');
   requestAnimationFrame(() => { scrollEl.scrollTop = state.trackScrollY; });
   scrollEl.onscroll = () => { state.trackScrollY = scrollEl.scrollTop; };
@@ -551,6 +649,9 @@ async function renderTrack(){
   });
   const emptyBtn = document.getElementById('emptyAddBtn');
   if (emptyBtn) emptyBtn.onclick = openNewExerciseForm;
+  document.querySelectorAll('.starter-add').forEach(el => {
+    el.onclick = () => quickAddStarter(el.dataset.name, el.dataset.cat, state.selectedDay);
+  });
 }
 
 function showExerciseActionsMenu(exerciseId, exerciseName){
@@ -695,6 +796,7 @@ async function openPicker(){
     <div class="overlay-scroll">
       <div class="search-bar">🔍 <input id="pickerSearch" placeholder="Search all exercises…"></div>
       <div class="pick-row" id="createNewRow" style="border-bottom:1px solid var(--line);"><div class="ex-name" style="color:var(--flame);">+ Create New Exercise</div></div>
+      <div id="pickerGroupToggle"></div>
       <div id="pickerList"><div class="empty-state">Loading…</div></div>
     </div>`;
   document.body.appendChild(overlay);
@@ -707,7 +809,7 @@ async function openPicker(){
   );
   const all = result.__timeout || result.error ? [] : (result.data || []);
 
-  function renderList(filter){
+  async function renderList(filter){
     const f = (filter || '').toLowerCase();
     const byName = {};
     all.forEach(ex => {
@@ -715,18 +817,19 @@ async function openPicker(){
       if (!byName[key] || ex.weekday < byName[key].weekday) byName[key] = ex;
     });
     const deduped = Object.values(byName).filter(ex => ex.name.toLowerCase().includes(f));
-    const byCat = {};
-    CATEGORIES.forEach(c => byCat[c] = []);
-    deduped.forEach(ex => { (byCat[ex.category] || (byCat[ex.category] = [])).push(ex); });
+    const groupBy = getGroupByPref();
+    const { grouped, orderedKeys } = await groupExercisesByChoice(deduped, groupBy);
 
     let html = '';
-    const knownCats = new Set(CATEGORIES);
-    const extraCats = Object.keys(byCat).filter(c => !knownCats.has(c) && byCat[c].length > 0);
-    [...CATEGORIES, ...extraCats].forEach(cat => {
-      const items = (byCat[cat] || []).sort((a, b) => a.name.localeCompare(b.name));
+    orderedKeys.forEach(cat => {
+      const items = (grouped[cat] || []).slice().sort((a, b) => a.name.localeCompare(b.name));
       if (items.length === 0) return;
       html += `<div class="category">${cat}</div>`;
       html += items.map(ex => `<div class="pick-row" data-id="${ex.id}" data-name="${ex.name}"><div class="ex-name">${ex.name}</div><div class="chev">›</div></div>`).join('');
+    });
+    overlay.querySelector('#pickerGroupToggle').innerHTML = groupByToggleHtml(groupBy);
+    overlay.querySelectorAll('.groupby-chip').forEach(chip => {
+      chip.onclick = () => { setGroupByPref(chip.dataset.groupby); renderList(overlay.querySelector('#pickerSearch').value); };
     });
     overlay.querySelector('#pickerList').innerHTML = html || '<div class="empty-state">No matches.</div>';
     overlay.querySelectorAll('.pick-row[data-id]').forEach(el => {
@@ -909,36 +1012,6 @@ function renderMuscleMap(primaryMuscles, secondaryMuscles){
   return `<div style="display:flex; justify-content:center; gap:22px; background:var(--ink); border-radius:14px; padding:14px 8px 8px 8px; margin-bottom:12px;">${figures.join('')}</div>`;
 }
 
-// ---- Wikimedia Commons diagrams (CC BY-SA 3.0, "Weight training diagrams" category) ----
-// Small curated set of confirmed filenames — most exercises won't match, and that's fine:
-// unmatched or failed-to-load images fall back to the free-exercise-db photo automatically.
-const WIKIMEDIA_BASE = 'https://commons.wikimedia.org/wiki/Special:FilePath/';
-const WIKIMEDIA_MATCHES = [
-  { keywords: ['hammer','curl','dumbbell'], file: 'Bicep hammer curl with dumbbell' },
-  { keywords: ['reverse','curl','dumbbell'], file: 'Biceps curl reverse with dumbbells' },
-  { keywords: ['alternat','curl','dumbbell'], file: 'Alternating bicep curl with dumbbell' },
-  { keywords: ['curl','dumbbell'], file: 'Biceps curl with dumbbell' },
-  { keywords: ['cable','crossover'], file: 'Cable crossover' },
-  { keywords: ['cable','shrug'], file: 'Cable shoulder shrugs' },
-  { keywords: ['butterfly'], file: 'Butterfly machine' },
-  { keywords: ['pec','fly','machine'], file: 'Butterfly machine' },
-  { keywords: ['bosu'], file: 'Bosu ball push up' },
-  { keywords: ['bridge'], file: 'Bridging' },
-  { keywords: ['inverted','row'], file: 'Body row' },
-  { keywords: ['leg','lift'], file: 'Body leg lifts' },
-  { keywords: ['ab','rollout'], file: 'Ab rollout on knees with barbell' }
-];
-function matchWikimedia(name){
-  const n = (name || '').toLowerCase();
-  for (const entry of WIKIMEDIA_MATCHES){
-    if (entry.keywords.every(k => n.includes(k))) return entry.file;
-  }
-  return null;
-}
-function wikimediaUrl(file, frame){
-  return WIKIMEDIA_BASE + encodeURIComponent(file.replace(/ /g,'_') + '_' + frame + '.svg');
-}
-
 async function loadExerciseGuide(overlay, exerciseName){
   const area = overlay.querySelector('#guideArea');
   if (!area) return;
@@ -962,28 +1035,11 @@ async function loadExerciseGuide(overlay, exerciseName){
       background:${isPrimary ? 'rgba(255,86,48,0.16)' : 'var(--panel)'};
       color:${isPrimary ? '#FF5630' : 'var(--slate)'};">${cap(m)}</span>`;
   }).join('');
-  const muscleMap = ''; // schematic diagram removed per earlier decision — not reintroduced here
-  const fallbackPhoto = (match.images && match.images.length)
-    ? `${EXDB_IMG_BASE}${match.images[0]}` : '';
-  const wikiFile = matchWikimedia(exerciseName) || matchWikimedia(match.name);
-  let img;
-  if (wikiFile){
-    const f1 = wikimediaUrl(wikiFile, 1), f2 = wikimediaUrl(wikiFile, 2);
-    // Each frame falls back to the free-exercise-db photo if Wikimedia fails to load;
-    // if there's no photo either, the image just hides itself rather than showing a broken icon.
-    const onerr = fallbackPhoto
-      ? `this.onerror=null; this.src='${fallbackPhoto}'; this.style.gridColumn='1 / -1';`
-      : `this.style.display='none';`;
-    img = `<div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:10px;">
-        <img src="${f1}" alt="" style="width:100%; border-radius:12px; background:#fff;" loading="lazy" onerror="${onerr}">
-        <img src="${f2}" alt="" style="width:100%; border-radius:12px; background:#fff;" loading="lazy" onerror="${onerr}">
-      </div>
-      <div class="small" style="color:var(--slate); margin:-4px 0 10px 0;">Diagram: Wikimedia Commons (CC BY-SA 3.0)</div>`;
-  } else {
-    img = fallbackPhoto
-      ? `<img src="${fallbackPhoto}" alt="" style="width:100%; border-radius:12px; margin-bottom:10px; background:#fff;" loading="lazy">`
-      : '';
-  }
+  // Single photo only — the Wikimedia two-frame attempt was pulled after it failed
+  // to load in production (both frames silently fell back to a duplicate photo).
+  const img = (match.images && match.images.length)
+    ? `<img src="${EXDB_IMG_BASE}${match.images[0]}" alt="" style="width:100%; border-radius:12px; margin-bottom:10px; background:#fff;" loading="lazy">`
+    : '';
   const steps = (match.instructions||[]).map((s,i) =>
     `<div style="display:flex; gap:8px; margin-bottom:7px;">
        <span style="color:#FF5630; font-weight:600; font-size:12px; flex-shrink:0;">${i+1}</span>
@@ -998,7 +1054,6 @@ async function loadExerciseGuide(overlay, exerciseName){
         <div id="guideChev" style="color:var(--slate); font-size:14px; transition:transform 0.2s;">▾</div>
       </div>
       <div id="guideBody" style="display:none;">
-        ${muscleMap}
         <div style="margin-bottom:10px;">${muscleChips}</div>
         ${meta ? `<div class="small" style="color:var(--slate); margin-bottom:12px;">${meta}</div>` : ''}
         ${img}
@@ -1056,55 +1111,71 @@ function celebratePR(exerciseName, weight, unit, priorBest){
 }
 
 // ---------- PLATE CALCULATOR ----------
-// Gym plates: 45, 35 (rarer), 25, 10 lb. Standard bar 45lb / ~20kg.
-function computePlates(totalWeight, unit){
-  if (!totalWeight || totalWeight <= 0) return null;
-  let plates, bar, dispUnit;
-  if (unit === 'kg'){
-    // Convert to lb for the physical plates the gym actually has.
-    bar = 20; // ~45lb bar, expressed in kg
-    dispUnit = 'kg';
-    const totalLb = totalWeight * 2.20462;
-    const barLb = 45;
-    const perSideLb = (totalLb - barLb) / 2;
-    if (perSideLb < 0) return { belowBar:true };
-    return greedyPlates(perSideLb, [45,35,25,10], 'lb', totalWeight, 'kg');
-  } else {
-    bar = 45; dispUnit = 'lb';
-    const perSide = (totalWeight - bar) / 2;
-    if (perSide < 0) return { belowBar:true };
-    return greedyPlates(perSide, [45,35,25,10], 'lb', totalWeight, 'lb');
-  }
+// Gym plates: 45, 35 (rarer), 25, 10 lb. Standard barbell = 45lb / ~20kg.
+// Only makes sense for equipment you actually load plates onto — not dumbbells,
+// not pin-loaded machines. Gated by exercise name since that's what's available.
+function exerciseUsesLoadPlates(exerciseName){
+  const n = (exerciseName || '').toLowerCase();
+  return ['barbell','plate-loaded','plate loaded','hammer strength','iso-lateral','iso lateral',
+          'leg press','hack squat','smith machine'].some(k => n.includes(k));
 }
-function greedyPlates(perSide, plates, plateUnit, total, inputUnit){
-  let remaining = perSide;
+// weightType 'total' = classic barbell math (total = bar + plates on both sides).
+// weightType 'per' = the number entered IS already the per-side/per-peg load — decompose it directly.
+function computePlates(weight, unit, weightType){
+  if (!weight || weight <= 0) return null;
+  const toLb = (v, u) => u === 'kg' ? v * 2.20462 : v;
+  if (weightType === 'per'){
+    const perSideLb = toLb(weight, unit);
+    return greedyPlates(perSideLb, [45,35,25,10]);
+  }
+  // 'total': subtract a standard bar, split the rest across both sides.
+  const barLb = 45;
+  const totalLb = toLb(weight, unit);
+  const perSideLb = (totalLb - barLb) / 2;
+  if (perSideLb < 0) return { belowBar: true };
+  return greedyPlates(perSideLb, [45,35,25,10]);
+}
+function greedyPlates(perSideLb, plates){
+  let remaining = perSideLb;
   const used = [];
   for (const p of plates){
     const n = Math.floor(remaining / p);
     if (n > 0){ used.push({n, p}); remaining -= n*p; }
   }
-  return { used, leftover: Math.round(remaining*10)/10, plateUnit, total, inputUnit, perSide: Math.round(perSide*10)/10 };
+  return { used, leftover: Math.round(remaining*10)/10, perSide: Math.round(perSideLb*10)/10 };
 }
-function renderPlateCalc(overlay){
-  const area = overlay.querySelector('#plateCalcArea');
-  if (!area) return;
-  const wInput = overlay.querySelector('#weightInput');
-  const activeUnit = overlay.querySelector('.unit-toggle button.active')?.dataset.u;
-  const val = parseFloat(wInput?.value);
-  if (!val || (activeUnit !== 'kg' && activeUnit !== 'lb')){ area.innerHTML = ''; return; }
-  const res = computePlates(val, activeUnit);
-  if (!res){ area.innerHTML = ''; return; }
-  if (res.belowBar){
-    area.innerHTML = `<div class="small" style="color:var(--slate);">Below bar weight (45lb / 20kg bar).</div>`;
-    return;
-  }
-  if (!res.used.length){
-    area.innerHTML = `<div class="small" style="color:var(--slate);">Just the bar${res.leftover>0.1?` (+${res.leftover}lb short per side)`:''}.</div>`;
-    return;
-  }
+function describePlates(res){
+  if (!res) return '';
+  if (res.belowBar) return `Below bar weight (45lb / 20kg bar).`;
+  if (!res.used.length) return `Just the bar${res.leftover>0.1?` (+${res.leftover}lb short per side)`:''}.`;
   const desc = res.used.map(u => `${u.n}×${u.p}`).join(' + ');
   const short = res.leftover > 0.1 ? ` <span style="color:var(--flame);">(~${res.leftover}lb short)</span>` : '';
-  area.innerHTML = `<div class="small" style="color:var(--slate);">🏋 Per side: <span style="color:var(--chalk); font-weight:600;">${desc}</span> lb${short}</div>`;
+  return `Per side: <span style="color:var(--chalk); font-weight:600;">${desc}</span> lb${short}`;
+}
+function renderPlateCalc(overlay, exerciseName){
+  const area = overlay.querySelector('#plateCalcArea');
+  if (!area) return;
+  if (!exerciseUsesLoadPlates(exerciseName)){ area.innerHTML = ''; return; }
+  const wInput = overlay.querySelector('#weightInput');
+  const activeUnit = overlay.querySelector('.unit-toggle button.active')?.dataset.u;
+  const activeType = overlay.querySelector('.chip[data-wt].active')?.dataset.wt || 'total';
+  const val = parseFloat(wInput?.value);
+  if (!val || (activeUnit !== 'kg' && activeUnit !== 'lb')){ area.innerHTML = ''; return; }
+  const res = computePlates(val, activeUnit, activeType);
+  area.innerHTML = `<div class="small" style="color:var(--slate);">🏋 ${describePlates(res)}</div>`;
+}
+// Proactive hint shown immediately (before the person types anything), based on
+// their last logged weight — "what did I load last time" is the useful question,
+// not "here's a breakdown of the number I already lifted and am now recording."
+function renderLastTimePlates(overlay, exerciseName, lastEntry){
+  const area = overlay.querySelector('#lastTimePlatesArea');
+  if (!area) return;
+  if (!lastEntry || !exerciseUsesLoadPlates(exerciseName) ||
+      lastEntry.weight === null || (lastEntry.weight_unit !== 'kg' && lastEntry.weight_unit !== 'lb')){
+    area.innerHTML = ''; return;
+  }
+  const res = computePlates(lastEntry.weight, lastEntry.weight_unit, lastEntry.weight_type || 'total');
+  area.innerHTML = `<div class="small" style="color:var(--slate); margin-top:4px;">🏋 Last time (${lastEntry.weight}${lastEntry.weight_unit}): ${describePlates(res)}</div>`;
 }
 
 function openLogForm(exerciseId, exerciseName){
@@ -1118,6 +1189,7 @@ function openLogForm(exerciseId, exerciseName){
     <div class="overlay-scroll">
       <div id="guideArea" style="margin-bottom:18px;"></div>
       <div id="sameAsLastArea" style="margin-bottom:18px;"></div>
+      <div id="lastTimePlatesArea" style="padding:0 18px; margin-top:-14px; margin-bottom:14px;"></div>
       <div style="height:1px; background:var(--line); margin:0 18px 18px 18px;"></div>
       <div class="field-label">Weight or Time <span class="opt">(optional)</span></div>
       <div class="field-card">
@@ -1145,13 +1217,14 @@ function openLogForm(exerciseId, exerciseName){
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#closeLog').onclick = () => overlay.remove();
-  overlay.querySelector('#weightInput').addEventListener('input', () => renderPlateCalc(overlay));
+  overlay.querySelector('#weightInput').addEventListener('input', () => renderPlateCalc(overlay, exerciseName));
   overlay.querySelectorAll('.unit-toggle button').forEach(b => {
-    b.onclick = () => { overlay.querySelectorAll('.unit-toggle button').forEach(x=>x.classList.remove('active')); b.classList.add('active'); unit = b.dataset.u; renderPlateCalc(overlay); };
+    b.onclick = () => { overlay.querySelectorAll('.unit-toggle button').forEach(x=>x.classList.remove('active')); b.classList.add('active'); unit = b.dataset.u; renderPlateCalc(overlay, exerciseName); };
   });
   overlay.querySelectorAll('.chip[data-wt]').forEach(b => {
-    b.onclick = () => { overlay.querySelectorAll('.chip[data-wt]').forEach(x=>x.classList.remove('active')); b.classList.add('active'); weightType = b.dataset.wt; };
+    b.onclick = () => { overlay.querySelectorAll('.chip[data-wt]').forEach(x=>x.classList.remove('active')); b.classList.add('active'); weightType = b.dataset.wt; renderPlateCalc(overlay, exerciseName); };
   });
+
 
   async function saveEntry(weight, unit, weightType, reps, numSets, notes){
     const { data: userData } = await supabaseClient.auth.getUser();
@@ -1222,6 +1295,7 @@ function openLogForm(exerciseId, exerciseName){
     overlay.querySelector('#sameAsLastArea').innerHTML =
       `<div class="action-row" id="sameAsLastBtn"><div class="ex-name" style="color:var(--flame); font-size:13px;">↻ Same as last time — ${formatSetValue(lastEntry)}</div></div>`;
     overlay.querySelector('#sameAsLastBtn').onclick = applySameAsLast;
+    renderLastTimePlates(overlay, exerciseName, lastEntry);
 
     // Chart in one standard unit so mixed kg/lb entries plot coherently:
     // lb for Plate-Loaded (most common there), kg for everything else.
