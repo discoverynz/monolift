@@ -78,7 +78,7 @@ async function groupExercisesByChoice(exercises, groupBy){
     const db = await loadExerciseDB();
     const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
     exercises.forEach(ex => {
-      const m = db ? matchExercise(ex.name, db) : null;
+      const m = matchExercise(ex.name, db);
       const label = (m && m.primaryMuscles && m.primaryMuscles[0]) ? cap(m.primaryMuscles[0]) : 'Other';
       (grouped[label] = grouped[label] || []).push(ex);
     });
@@ -394,7 +394,30 @@ async function loadExerciseDB(){
   return _exdbPromise;
 }
 
+// Curated overrides for names the fuzzy matcher gets wrong: either it finds nothing
+// (machine names free-exercise-db doesn't have, like "Pec Fly" or "Back Extension Bench"),
+// or it false-positives on shared words (e.g. "Dead Hang" matching "Dead Bug").
+// Muscle names sourced from Joel's own exercise notes where he documented them.
+const EXERCISE_OVERRIDES = [
+  { keywords: ['pec','fly'], primaryMuscles: ['chest'], secondaryMuscles: ['shoulders'] },
+  { keywords: ['pullover'], primaryMuscles: ['lats'], secondaryMuscles: ['triceps','chest'] },
+  { keywords: ['back','extension'], primaryMuscles: ['lower back'], secondaryMuscles: ['hamstrings','glutes'] },
+  { keywords: ['x','wing'], primaryMuscles: ['lats'], secondaryMuscles: ['shoulders','biceps'] },
+  { keywords: ['lat','pulldown'], primaryMuscles: ['lats'], secondaryMuscles: ['biceps','shoulders'] },
+  { keywords: ['dead','hang'], primaryMuscles: ['lats'], secondaryMuscles: ['forearms','shoulders'] }
+];
+function checkExerciseOverride(name){
+  const n = (name || '').toLowerCase();
+  for (const o of EXERCISE_OVERRIDES){
+    if (o.keywords.every(k => n.includes(k))){
+      return { name, primaryMuscles: o.primaryMuscles, secondaryMuscles: o.secondaryMuscles, instructions: [], images: [] };
+    }
+  }
+  return null;
+}
 function matchExercise(name, db){
+  const override = checkExerciseOverride(name);
+  if (override) return override;
   if (!db) return null;
   const qwords = exdbNormalize(name);
   if (!qwords.size) return null;
@@ -435,10 +458,56 @@ function formatSetValue(s, withAlt){
   return `${s.weight}${u}${alt}${perSuffix}${formatSetsReps(s)}`;
 }
 
+async function showAltGroupHistory(groupId, groupName){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeAltHist">✕</button><h1>${groupName}</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll">
+      <div class="small" style="padding:0 18px 12px 18px; color:var(--slate);">Combined history across every exercise in this alt group.</div>
+      <div id="altHistList"><div class="empty-state" style="padding:20px;">Loading…</div></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeAltHist').onclick = () => overlay.remove();
+
+  const exResult = await withTimeout(
+    supabaseClient.from('exercises').select('id, name').eq('alt_group_id', groupId),
+    15000
+  );
+  const members = exResult.__timeout || exResult.error ? [] : (exResult.data || []);
+  const list = overlay.querySelector('#altHistList');
+  if (members.length === 0){
+    list.innerHTML = '<div class="empty-state" style="padding:20px;">No exercises in this group anymore.</div>';
+    return;
+  }
+  const memberIds = members.map(m => m.id);
+  const nameById = Object.fromEntries(members.map(m => [m.id, m.name]));
+  const setsResult = await withTimeout(
+    supabaseClient.from('sets').select('id, exercise_id, weight, weight_unit, weight_type, reps, num_sets, notes, logged_at')
+      .in('exercise_id', memberIds).order('logged_at', { ascending: false }).limit(60),
+    15000
+  );
+  const sets = setsResult.__timeout || setsResult.error ? [] : (setsResult.data || []);
+  if (sets.length === 0){
+    list.innerHTML = '<div class="empty-state" style="padding:20px;">No history logged yet for this group.</div>';
+    return;
+  }
+  list.innerHTML = sets.map(s => `
+    <div class="log-row" style="flex-direction:column; align-items:flex-start; gap:3px;">
+      <div style="display:flex; justify-content:space-between; width:100%;">
+        <div class="log-date">${s.logged_at}</div>
+        <div class="log-weight">${formatSetValue(s, true)}</div>
+      </div>
+      <div class="small" style="color:var(--slate);">${nameById[s.exercise_id] || 'Unknown exercise'}</div>
+    </div>`).join('');
+}
+
 function exerciseRow(ex){
   const groupName = ex.alt_groups ? ex.alt_groups.name : null;
   const groupColor = ex.alt_groups ? ex.alt_groups.color : null;
-  const badge = groupName ? `<div class="badge" style="background:${groupColor}26; color:${groupColor};">${groupName}</div>` : '';
+  const badge = groupName
+    ? `<div class="badge alt-badge-tap" data-group-id="${ex.alt_group_id}" data-group-name="${groupName}" style="background:${groupColor}26; color:${groupColor}; display:inline-block; margin-top:4px;">${groupName} ↗</div>`
+    : '';
   const borderStyle = groupColor ? `border-left:3px solid ${groupColor};` : '';
 
   let subtitle, showCheck, doneStyle = '';
@@ -454,7 +523,11 @@ function exerciseRow(ex){
   }
 
   return `<div class="exercise" style="${borderStyle} ${doneStyle}" data-id="${ex.id}" data-name="${ex.name}">
-    <div><div class="ex-name-row"><div class="ex-name">${ex.name}</div>${badge}</div>${subtitle}</div>
+    <div style="flex:1; min-width:0;">
+      <div class="ex-name">${ex.name}</div>
+      ${badge}
+      ${subtitle}
+    </div>
     ${showCheck ? `<div class="check-circle">${ICON_CHECK}</div>` : `<div class="chev">›</div>`}
   </div>`;
 }
@@ -739,6 +812,58 @@ async function maybeShowOnboarding(){
   }
 }
 
+// Maps a (possibly custom, renamed) day-type label to target muscle names via
+// keyword matching, so suggestions work even for days the user has renamed themselves.
+const MUSCLE_KEYWORDS = [
+  { words:['chest'], muscles:['chest'] },
+  { words:['back'], muscles:['lats','middle back','lower back','traps'] },
+  { words:['shoulder'], muscles:['shoulders'] },
+  { words:['tricep'], muscles:['triceps'] },
+  { words:['bicep'], muscles:['biceps'] },
+  { words:['leg'], muscles:['quadriceps','hamstrings','calves','glutes'] },
+  { words:['arm'], muscles:['biceps','triceps','forearms'] },
+  { words:['ab','core'], muscles:['abdominals'] },
+  { words:['glute'], muscles:['glutes'] },
+  { words:['calf','calves'], muscles:['calves'] },
+  { words:['quad'], muscles:['quadriceps'] },
+  { words:['hamstring'], muscles:['hamstrings'] },
+  { words:['push'], muscles:['chest','shoulders','triceps'] },
+  { words:['pull'], muscles:['lats','biceps','middle back'] },
+  { words:['upper'], muscles:['chest','back','shoulders','biceps','triceps','lats'] },
+  { words:['lower'], muscles:['quadriceps','hamstrings','calves','glutes'] },
+  { words:['full'], muscles:['chest','back','quadriceps','shoulders'] }
+];
+function getTargetMusclesForDayType(label){
+  const n = (label || '').toLowerCase();
+  const set = new Set();
+  MUSCLE_KEYWORDS.forEach(k => { if (k.words.some(w => n.includes(w))) k.muscles.forEach(m => set.add(m)); });
+  return [...set];
+}
+function namesAreSimilar(a, b){
+  const wa = exdbNormalize(a), wb = exdbNormalize(b);
+  if (!wa.size || !wb.size) return false;
+  let overlap = 0;
+  for (const w of wa){ if (wb.has(w)) overlap++; }
+  return (overlap / Math.max(wa.size, wb.size)) >= 0.34;
+}
+const EQUIPMENT_TO_CATEGORY = {
+  cable: 'Cable', machine: 'Pin-Loaded', barbell: 'Free Weights - No Bench',
+  dumbbell: 'Free Weights - No Bench', 'body only': 'Other', kettlebells: 'Free Weights - No Bench',
+  bands: 'Cable', 'e-z curl bar': 'Free Weights - No Bench', 'exercise ball': 'Other',
+  'foam roll': 'Other', 'medicine ball': 'Other', other: 'Other'
+};
+async function getSuggestedExercises(dayTypeLabel, existingLibraryExercises){
+  const targets = getTargetMusclesForDayType(dayTypeLabel);
+  if (!targets.length) return [];
+  const db = await loadExerciseDB();
+  if (!db) return [];
+  const existingNames = existingLibraryExercises.map(e => e.name);
+  const candidates = db.filter(e => (e.primaryMuscles || []).some(m => targets.includes(m)));
+  const fresh = candidates.filter(cand => !existingNames.some(name => namesAreSimilar(name, cand.name)));
+  const shuffled = fresh.slice().sort(() => Math.random() - 0.5);
+  return shuffled.slice(0, 4);
+}
+
 async function renderTrack(){
   app.innerHTML = `<div class="app-shell"><div class="login-wrap"><div class="login-sub">Loading your exercises…</div></div></div>`;
   await loadExercises();
@@ -758,6 +883,16 @@ async function renderTrack(){
 
   const groupBy = getGroupByPref();
   const { grouped, orderedKeys } = await groupExercisesByChoice(state.exercises, groupBy);
+
+  let suggestions = [];
+  if (state.exercises.length > 0){
+    const libResult = await withTimeout(
+      supabaseClient.from('exercises').select('name').eq('active', true),
+      15000
+    );
+    const fullLibrary = libResult.__timeout || libResult.error ? state.exercises : (libResult.data || []);
+    suggestions = await getSuggestedExercises(dayTypeLabel, fullLibrary);
+  }
 
   const q = todayQuote();
   const dayChips = DAY_NAMES.map((d, i) => {
@@ -779,6 +914,20 @@ async function renderTrack(){
       ${starters.map(s => `<div class="pick-row starter-add" data-name="${s.name}" data-cat="${s.category}"><div class="ex-name">${s.name}</div><div class="chev" style="color:var(--flame); font-size:20px;">+</div></div>`).join('')}
       <div style="padding:14px 18px;"><button class="btn-primary" id="emptyAddBtn">+ Add a Different Exercise</button></div>`;
   }
+  let suggestionsHtml = '';
+  if (suggestions.length > 0){
+    const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
+    suggestionsHtml = `<div class="category">Try Something New for ${dayTypeLabel}</div>
+      <div class="small" style="padding:0 18px 8px 18px; color:var(--slate);">Not in your library yet — pulled from a public exercise database based on today's focus.</div>
+      ${suggestions.map(s => {
+        const cat = EQUIPMENT_TO_CATEGORY[s.equipment] || 'Other';
+        const muscleLabel = s.primaryMuscles && s.primaryMuscles[0] ? cap(s.primaryMuscles[0]) : '';
+        return `<div class="pick-row suggestion-add" data-name="${s.name}" data-cat="${cat}">
+          <div><div class="ex-name">${s.name}</div><div class="small" style="color:var(--slate);">${muscleLabel}</div></div>
+          <div class="chev" style="color:var(--flame); font-size:20px;">+</div>
+        </div>`;
+      }).join('')}`;
+  }
 
   app.innerHTML = `
     <div class="app-shell">
@@ -795,6 +944,7 @@ async function renderTrack(){
         </div>
         ${state.exercises.length > 0 ? groupByToggleHtml(groupBy) : ''}
         ${listHtml}
+        ${suggestionsHtml}
       </div>
       ${renderTabbar()}
     </div>`;
@@ -824,9 +974,18 @@ async function renderTrack(){
     el.addEventListener('pointercancel', cancel);
     el.onclick = () => { if (!longPressed) openLogForm(el.dataset.id, el.dataset.name); };
   });
+  document.querySelectorAll('.alt-badge-tap').forEach(el => {
+    el.onclick = (e) => {
+      e.stopPropagation();
+      showAltGroupHistory(el.dataset.groupId, el.dataset.groupName);
+    };
+  });
   const emptyBtn = document.getElementById('emptyAddBtn');
   if (emptyBtn) emptyBtn.onclick = openNewExerciseForm;
   document.querySelectorAll('.starter-add').forEach(el => {
+    el.onclick = () => quickAddStarter(el.dataset.name, el.dataset.cat, state.selectedDay);
+  });
+  document.querySelectorAll('.suggestion-add').forEach(el => {
     el.onclick = () => quickAddStarter(el.dataset.name, el.dataset.cat, state.selectedDay);
   });
 }
@@ -850,6 +1009,7 @@ function showExerciseActionsMenu(exerciseId, exerciseName){
 }
 
 function openRenameExerciseForm(exerciseId, exerciseName){
+  let scope = 'everywhere'; // 'everywhere' or 'thisDay'
   const overlay = document.createElement('div');
   overlay.className = 'overlay-screen';
   overlay.innerHTML = `
@@ -857,20 +1017,43 @@ function openRenameExerciseForm(exerciseId, exerciseName){
     <div class="overlay-scroll">
       <div class="field-label">Name</div>
       <div class="field-card"><input class="field-input" id="renameInput" type="text" value="${exerciseName.replace(/"/g, '&quot;')}" style="font-size:15px; font-weight:400;"></div>
-      <div class="form-sub" style="margin-top:0;">This renames every instance of this exercise across all days, and keeps all its logged history.</div>
+      <div class="field-label">Apply To</div>
+      <div class="chip-row">
+        <div class="chip active" data-scope="everywhere">Everywhere</div>
+        <div class="chip" data-scope="thisDay">Just This Day</div>
+      </div>
+      <div class="form-sub" id="renameScopeHint" style="margin-top:0;">Renames every instance of this exercise across all days, and keeps all its logged history.</div>
       <button class="save-btn" id="saveRenameBtn">Save</button>
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#closeRename').onclick = () => overlay.remove();
+  overlay.querySelectorAll('.chip[data-scope]').forEach(chip => {
+    chip.onclick = () => {
+      overlay.querySelectorAll('.chip[data-scope]').forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      scope = chip.dataset.scope;
+      overlay.querySelector('#renameScopeHint').textContent = scope === 'everywhere'
+        ? 'Renames every instance of this exercise across all days, and keeps all its logged history.'
+        : 'Renames only the version on this specific day. Other days keep the original name.';
+    };
+  });
   overlay.querySelector('#saveRenameBtn').onclick = async () => {
     const newName = document.getElementById('renameInput').value.trim();
     if (!newName || newName === exerciseName){ overlay.remove(); return; }
     const { data: userData } = await supabaseClient.auth.getUser();
-    // Rename all rows sharing the old name (an exercise can exist on multiple days), so history stays consistent.
-    const { error } = await supabaseClient.from('exercises')
-      .update({ name: newName })
-      .eq('user_id', userData.user.id)
-      .eq('name', exerciseName);
+    let error;
+    if (scope === 'everywhere'){
+      // Rename all rows sharing the old name (an exercise can exist on multiple days), so history stays consistent.
+      ({ error } = await supabaseClient.from('exercises')
+        .update({ name: newName })
+        .eq('user_id', userData.user.id)
+        .eq('name', exerciseName));
+    } else {
+      // Just this one row, identified by id - other days keep the original name.
+      ({ error } = await supabaseClient.from('exercises')
+        .update({ name: newName })
+        .eq('id', exerciseId));
+    }
     if (error){ alert(error.message); return; }
     overlay.remove();
     if (state.currentTab === 'track') renderTrack();
@@ -1194,13 +1377,11 @@ async function loadExerciseGuide(overlay, exerciseName){
   if (!area) return;
   area.innerHTML = `<div class="small" style="color:var(--slate); padding:0 18px;">Looking up form guide…</div>`;
   const db = await loadExerciseDB();
-  if (!db){
-    area.innerHTML = `<div class="small" style="color:var(--slate); padding:0 18px;">Form guide unavailable offline.</div>`;
-    return;
-  }
   const match = matchExercise(exerciseName, db);
   if (!match){
-    area.innerHTML = `<div class="small" style="color:var(--slate); padding:0 18px;">No form guide found for this exercise.</div>`;
+    area.innerHTML = db
+      ? `<div class="small" style="color:var(--slate); padding:0 18px;">No form guide found for this exercise.</div>`
+      : `<div class="small" style="color:var(--slate); padding:0 18px;">Form guide unavailable offline.</div>`;
     return;
   }
   const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
