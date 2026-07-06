@@ -93,9 +93,13 @@ async function groupExercisesByChoice(exercises, groupBy){
   return { grouped, orderedKeys };
 }
 function groupByToggleHtml(current){
-  return `<div class="chip-row" style="padding:0 18px 10px 18px;">
-    <div class="chip groupby-chip ${current==='equipment'?'active':''}" data-groupby="equipment" style="font-size:11px; padding:6px 12px;">By Equipment</div>
-    <div class="chip groupby-chip ${current==='muscle'?'active':''}" data-groupby="muscle" style="font-size:11px; padding:6px 12px;">By Muscle</div>
+  return `<div style="padding:0 18px 10px 18px;">
+    <div style="display:flex; background:var(--panel); border-radius:10px; padding:3px;">
+      <div class="groupby-chip ${current==='equipment'?'active':''}" data-groupby="equipment"
+        style="flex:1; text-align:center; padding:7px 0; font-size:11px; font-weight:600; border-radius:8px; color:${current==='equipment'?'var(--chalk)':'var(--slate)'}; background:${current==='equipment'?'var(--ink)':'transparent'}; ${current==='equipment'?'box-shadow:0 1px 4px rgba(0,0,0,0.3);':''}">Equipment</div>
+      <div class="groupby-chip ${current==='muscle'?'active':''}" data-groupby="muscle"
+        style="flex:1; text-align:center; padding:7px 0; font-size:11px; font-weight:600; border-radius:8px; color:${current==='muscle'?'var(--chalk)':'var(--slate)'}; background:${current==='muscle'?'var(--ink)':'transparent'}; ${current==='muscle'?'box-shadow:0 1px 4px rgba(0,0,0,0.3);':''}">Muscle</div>
+    </div>
   </div>`;
 }
 const ALT_COLORS = ["#2DD4BF","#9B7EDE","#E8A33D","#6FA8DC","#E8718D","#7FD17A"];
