@@ -917,12 +917,19 @@ async function renderTrack(){
 
   let suggestions = [];
   if (state.exercises.length > 0){
-    const libResult = await withTimeout(
-      supabaseClient.from('exercises').select('name').eq('active', true),
-      15000
-    );
-    const fullLibrary = libResult.__timeout || libResult.error ? state.exercises : (libResult.data || []);
-    suggestions = await getSuggestedExercises(dayTypeLabel, fullLibrary);
+    if (!state.suggestionsCache) state.suggestionsCache = {};
+    const cacheKey = state.selectedDay;
+    if (state.suggestionsCache[cacheKey]){
+      suggestions = state.suggestionsCache[cacheKey];
+    } else {
+      const libResult = await withTimeout(
+        supabaseClient.from('exercises').select('name').eq('active', true),
+        15000
+      );
+      const fullLibrary = libResult.__timeout || libResult.error ? state.exercises : (libResult.data || []);
+      suggestions = await getSuggestedExercises(dayTypeLabel, fullLibrary);
+      state.suggestionsCache[cacheKey] = suggestions;
+    }
   }
 
   const q = todayQuote();
@@ -1023,7 +1030,10 @@ async function renderTrack(){
     el.onclick = () => openSuggestionPreview(el.dataset.name, el.dataset.cat);
   });
   const refreshBtn = document.getElementById('refreshSuggestions');
-  if (refreshBtn) refreshBtn.onclick = () => renderTrack();
+  if (refreshBtn) refreshBtn.onclick = () => {
+    if (state.suggestionsCache) delete state.suggestionsCache[state.selectedDay];
+    renderTrack();
+  };
 }
 
 function showExerciseActionsMenu(exerciseId, exerciseName){
@@ -2153,13 +2163,24 @@ function weeksBetween(startStr, endStr){
   return { totalWeeks, elapsedWeeks, pct: Math.round((elapsedWeeks/totalWeeks)*100) };
 }
 
+// Determines which phase is actually active by checking today's real date against
+// the stored ranges, rather than trusting a static field that never re-evaluates.
+function determineActivePhase(phase){
+  const today = todayStr();
+  const inRange = (start, end) => start && end && today >= start && today <= end;
+  if (inRange(phase.bulk_start, phase.bulk_end)) return 'bulk';
+  if (inRange(phase.cut_start, phase.cut_end)) return 'cut';
+  return phase.current_phase || null; // today falls in neither range - fall back to the stored value
+}
+
 async function renderPhase(){
   app.innerHTML = `<div class="app-shell"><div class="login-wrap"><div class="login-sub">Loading your phase…</div></div></div>`;
   const phase = await loadPhase();
+  const activePhase = phase ? determineActivePhase(phase) : null;
 
   let bulkHtml, cutHtml;
   if (phase && phase.bulk_start && phase.bulk_end){
-    const isActive = phase.current_phase === 'bulk';
+    const isActive = activePhase === 'bulk';
     const w = weeksBetween(phase.bulk_start, phase.bulk_end);
     bulkHtml = `<div class="phase-card ${isActive ? 'active' : 'upcoming'}">
       <div class="top-row"><div class="name">Bulk</div><div class="status">${isActive ? 'ACTIVE' : 'SET'}</div></div>
@@ -2170,7 +2191,7 @@ async function renderPhase(){
     bulkHtml = `<div class="phase-card upcoming"><div class="top-row"><div class="name">Bulk</div><div class="status">NOT SET</div></div></div>`;
   }
   if (phase && phase.cut_start && phase.cut_end){
-    const isActive = phase.current_phase === 'cut';
+    const isActive = activePhase === 'cut';
     const w = weeksBetween(phase.cut_start, phase.cut_end);
     cutHtml = `<div class="phase-card ${isActive ? 'active' : 'upcoming'}">
       <div class="top-row"><div class="name">Cut</div><div class="status">${isActive ? 'ACTIVE' : 'SET'}</div></div>

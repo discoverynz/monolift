@@ -1,5 +1,5 @@
 const CACHE_NAME = 'zealift-v3';
-const SHELL = ['./', './index.html', './css/styles.css?v=30', './js/app.js?v=30', './js/supabase-client.js?v=30', './manifest.json'];
+const SHELL = ['./', './index.html', './css/styles.css?v=31', './js/app.js?v=31', './js/supabase-client.js?v=31', './manifest.json'];
 
 self.addEventListener('install', (event) => {
   self.skipWaiting(); // don't wait for old tabs to close — take over immediately
