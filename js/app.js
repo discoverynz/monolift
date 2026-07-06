@@ -861,7 +861,34 @@ async function getSuggestedExercises(dayTypeLabel, existingLibraryExercises){
   const candidates = db.filter(e => (e.primaryMuscles || []).some(m => targets.includes(m)));
   const fresh = candidates.filter(cand => !existingNames.some(name => namesAreSimilar(name, cand.name)));
   const shuffled = fresh.slice().sort(() => Math.random() - 0.5);
-  return shuffled.slice(0, 4);
+  return shuffled.slice(0, 6);
+}
+
+async function openSuggestionPreview(name, category){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeSugPreview">✕</button><h1>${name}</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll">
+      <div id="sugPreviewArea" style="padding:0 18px;"><div class="small" style="color:var(--slate);">Loading…</div></div>
+      <button class="save-btn" id="addSuggestionBtn" style="margin-top:6px;">+ Add to ${DAY_LABELS[state.selectedDay]}</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeSugPreview').onclick = () => overlay.remove();
+
+  const db = await loadExerciseDB();
+  const match = matchExercise(name, db) || { name, primaryMuscles: [], secondaryMuscles: [], instructions: [], images: [] };
+  overlay.querySelector('#sugPreviewArea').innerHTML = renderGuideContent(match);
+
+  overlay.querySelector('#addSuggestionBtn').onclick = async () => {
+    const { data: userData } = await supabaseClient.auth.getUser();
+    const { data: inserted, error } = await supabaseClient.from('exercises').insert({
+      user_id: userData.user.id, name, category, weekday: state.selectedDay, alt_group_id: null
+    }).select();
+    if (error){ alert(error.message); return; }
+    overlay.remove();
+    if (inserted && inserted[0]) openLogForm(inserted[0].id, name);
+  };
 }
 
 async function renderTrack(){
@@ -917,7 +944,10 @@ async function renderTrack(){
   let suggestionsHtml = '';
   if (suggestions.length > 0){
     const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
-    suggestionsHtml = `<div class="category">Try Something New for ${dayTypeLabel}</div>
+    suggestionsHtml = `<div class="category" style="display:flex; align-items:center; justify-content:space-between;">
+        <div>Try Something New for ${dayTypeLabel}</div>
+        <button id="refreshSuggestions" style="background:none; color:var(--flame); font-size:11px; padding:4px 8px;">↻ Refresh</button>
+      </div>
       <div class="small" style="padding:0 18px 8px 18px; color:var(--slate);">Not in your library yet — pulled from a public exercise database based on today's focus.</div>
       ${suggestions.map(s => {
         const cat = EQUIPMENT_TO_CATEGORY[s.equipment] || 'Other';
@@ -986,8 +1016,10 @@ async function renderTrack(){
     el.onclick = () => quickAddStarter(el.dataset.name, el.dataset.cat, state.selectedDay);
   });
   document.querySelectorAll('.suggestion-add').forEach(el => {
-    el.onclick = () => quickAddStarter(el.dataset.name, el.dataset.cat, state.selectedDay);
+    el.onclick = () => openSuggestionPreview(el.dataset.name, el.dataset.cat);
   });
+  const refreshBtn = document.getElementById('refreshSuggestions');
+  if (refreshBtn) refreshBtn.onclick = () => renderTrack();
 }
 
 function showExerciseActionsMenu(exerciseId, exerciseName){
@@ -1372,6 +1404,48 @@ function renderMuscleMap(primaryMuscles, secondaryMuscles){
   return `<div style="display:flex; justify-content:center; gap:22px; background:var(--ink); border-radius:14px; padding:14px 8px 8px 8px; margin-bottom:12px;">${figures.join('')}</div>`;
 }
 
+// Free-exercise-db has no free-text description field, so we synthesize a short
+// one from what it does give us (level/mechanic/equipment/muscles).
+function synthesizeDescription(match){
+  const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
+  const muscles = (match.primaryMuscles || []).map(cap);
+  const muscleText = muscles.length ? muscles.join(' and ') : null;
+  if (match.level && match.equipment && match.mechanic){
+    return `A ${match.level} ${match.mechanic} movement using ${match.equipment}${muscleText ? `, primarily working the ${muscleText}` : ''}.`;
+  }
+  if (muscleText) return `Primarily targets the ${muscleText}.`;
+  return '';
+}
+
+function renderGuideContent(match){
+  const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
+  const primarySet = new Set(match.primaryMuscles || []);
+  const muscleChips = [...(match.primaryMuscles||[]), ...(match.secondaryMuscles||[])].map(m => {
+    const isPrimary = primarySet.has(m);
+    return `<span style="display:inline-block; font-size:10px; padding:3px 8px; border-radius:20px; margin:2px 3px 2px 0;
+      background:${isPrimary ? 'rgba(255,86,48,0.16)' : 'var(--panel)'};
+      color:${isPrimary ? '#FF5630' : 'var(--slate)'};">${cap(m)}</span>`;
+  }).join('');
+  const description = synthesizeDescription(match);
+  const img = (match.images && match.images.length)
+    ? `<img src="${EXDB_IMG_BASE}${match.images[0]}" alt="" style="width:100%; border-radius:12px; margin-bottom:10px; background:#fff;" loading="lazy">`
+    : '';
+  const steps = (match.instructions||[]).map((s,i) =>
+    `<div style="display:flex; gap:8px; margin-bottom:7px;">
+       <span style="color:#FF5630; font-weight:600; font-size:12px; flex-shrink:0;">${i+1}</span>
+       <span style="font-size:12.5px; color:var(--chalk); line-height:1.45;">${s}</span>
+     </div>`).join('');
+  const meta = [match.equipment, match.level, match.mechanic].filter(Boolean).map(cap).join(' · ');
+  return `
+    <div style="margin-bottom:10px;">${muscleChips}</div>
+    ${meta ? `<div class="small" style="color:var(--slate); margin-bottom:10px;">${meta}</div>` : ''}
+    ${description ? `<div style="font-size:12.5px; color:var(--chalk); line-height:1.5; margin-bottom:12px;">${description}</div>` : ''}
+    ${img}
+    ${steps}
+    <div class="small" style="color:var(--slate); margin-top:10px; font-style:italic; opacity:0.7;">Matched to "${match.name}".</div>
+  `;
+}
+
 async function loadExerciseGuide(overlay, exerciseName){
   const area = overlay.querySelector('#guideArea');
   if (!area) return;
@@ -1384,27 +1458,6 @@ async function loadExerciseGuide(overlay, exerciseName){
       : `<div class="small" style="color:var(--slate); padding:0 18px;">Form guide unavailable offline.</div>`;
     return;
   }
-  const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
-  const muscles = [...(match.primaryMuscles||[]), ...(match.secondaryMuscles||[])].map(cap);
-  const primarySet = new Set((match.primaryMuscles||[]));
-  const muscleChips = [...(match.primaryMuscles||[]), ...(match.secondaryMuscles||[])].map(m => {
-    const isPrimary = primarySet.has(m);
-    return `<span style="display:inline-block; font-size:10px; padding:3px 8px; border-radius:20px; margin:2px 3px 2px 0;
-      background:${isPrimary ? 'rgba(255,86,48,0.16)' : 'var(--panel)'};
-      color:${isPrimary ? '#FF5630' : 'var(--slate)'};">${cap(m)}</span>`;
-  }).join('');
-  // Single photo only — the Wikimedia two-frame attempt was pulled after it failed
-  // to load in production (both frames silently fell back to a duplicate photo).
-  const img = (match.images && match.images.length)
-    ? `<img src="${EXDB_IMG_BASE}${match.images[0]}" alt="" style="width:100%; border-radius:12px; margin-bottom:10px; background:#fff;" loading="lazy">`
-    : '';
-  const steps = (match.instructions||[]).map((s,i) =>
-    `<div style="display:flex; gap:8px; margin-bottom:7px;">
-       <span style="color:#FF5630; font-weight:600; font-size:12px; flex-shrink:0;">${i+1}</span>
-       <span style="font-size:12.5px; color:var(--chalk); line-height:1.45;">${s}</span>
-     </div>`).join('');
-  const meta = [match.equipment, match.level, match.mechanic].filter(Boolean).map(cap).join(' · ');
-
   area.innerHTML = `
     <div style="padding:0 18px;">
       <div id="guideToggle" style="display:flex; align-items:center; justify-content:space-between; cursor:pointer; padding:12px 0;">
@@ -1412,13 +1465,7 @@ async function loadExerciseGuide(overlay, exerciseName){
         <div id="guideChev" style="color:var(--slate); font-size:14px; transition:transform 0.2s;">▾</div>
       </div>
       <div id="guideBody" style="display:none;">
-        <div style="margin-bottom:10px;">${muscleChips}</div>
-        ${meta ? `<div class="small" style="color:var(--slate); margin-bottom:12px;">${meta}</div>` : ''}
-        ${img}
-        ${steps}
-        <div class="small" style="color:var(--slate); margin-top:10px; font-style:italic; opacity:0.7;">
-          General guidance from a public exercise library — not a substitute for a coach. Matched to "${match.name}".
-        </div>
+        ${renderGuideContent(match)}
       </div>
     </div>`;
   const toggle = area.querySelector('#guideToggle');
