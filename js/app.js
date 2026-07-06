@@ -512,7 +512,7 @@ async function renderTrack(){
   app.innerHTML = `
     <div class="app-shell">
       <div class="scroll-area">
-        <div class="brandbar"><img src="icons/icon-inapp-32.png" alt=""><div class="name">ZEALIFT</div></div>
+        <div class="brandbar"><img src="icons/icon-inapp-32.png" alt=""><div class="name">ZEALIFT</div><button class="brandbar-timer" onclick="openTimer()" aria-label="Timer" style="margin-left:auto; background:none; color:var(--slate); padding:6px; display:flex; align-items:center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg></button></div>
         <div class="day-strip">${dayChips}</div>
         <div class="header">
           <div class="eyebrow">${DAY_LABELS[state.selectedDay].toUpperCase()}</div>
@@ -1216,67 +1216,164 @@ function openLogForm(exerciseId, exerciseName){
     if (insertedId){
       overlay.remove();
       if (state.currentTab === 'track') renderTrack();
-      startRestTimer();
     }
   };
 }
 
-// ---------- REST TIMER ----------
-let _restInterval = null;
-function startRestTimer(seconds){
-  seconds = seconds || parseInt(localStorage.getItem('zealift_rest_default') || '90', 10);
-  if (_restInterval){ clearInterval(_restInterval); _restInterval = null; }
-  const existing = document.getElementById('restTimerBar');
-  if (existing) existing.remove();
+// ---------- REST TIMER (standalone, manual) ----------
+let _timerState = { interval:null, remaining:0, total:0, running:false };
 
-  let remaining = seconds;
-  const bar = document.createElement('div');
-  bar.id = 'restTimerBar';
-  bar.style = `position:fixed; left:50%; transform:translateX(-50%); bottom:78px; z-index:40;
-    background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:10px 14px;
-    display:flex; align-items:center; gap:12px; box-shadow:0 8px 24px rgba(0,0,0,0.5); min-width:230px;`;
-  const render = () => {
-    const m = Math.floor(remaining/60), s = remaining%60;
-    bar.innerHTML = `
-      <div style="font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:600; color:${remaining<=0?'#3FCB7E':'var(--chalk)'}; min-width:56px;">
-        ${remaining<=0 ? 'Done' : `${m}:${s.toString().padStart(2,'0')}`}
-      </div>
-      <div style="display:flex; gap:6px; flex:1; justify-content:flex-end;">
-        <button id="restMinus" style="background:var(--ink); color:var(--chalk); border-radius:8px; padding:6px 9px; font-size:12px;">−15</button>
-        <button id="restPlus" style="background:var(--ink); color:var(--chalk); border-radius:8px; padding:6px 9px; font-size:12px;">+15</button>
-        <button id="restClose" style="background:var(--flame); color:var(--ink); border-radius:8px; padding:6px 10px; font-size:12px; font-weight:600;">✕</button>
-      </div>`;
-    bar.querySelector('#restMinus').onclick = () => { remaining = Math.max(0, remaining-15); render(); };
-    bar.querySelector('#restPlus').onclick = () => { remaining += 15; if (remaining>0 && !_restInterval) tick(); render(); };
-    bar.querySelector('#restClose').onclick = () => { if (_restInterval) clearInterval(_restInterval); _restInterval=null; bar.remove(); };
-  };
-  const buzz = () => {
-    if (navigator.vibrate) navigator.vibrate([200,100,200]);
-    try {
-      const ctx = new (window.AudioContext||window.webkitAudioContext)();
+const TIMER_SOUNDS = {
+  chime:  { label:'Chime',  freq:880, type:'sine',     pattern:[[880,0.15],[1320,0.3]] },
+  buzzer: { label:'Buzzer', freq:220, type:'sawtooth', pattern:[[220,0.25],[220,0.25]] },
+  beep:   { label:'Beep',   freq:1000,type:'square',   pattern:[[1000,0.12],[1000,0.12],[1000,0.12]] },
+  mute:   { label:'Mute',   pattern:[] }
+};
+
+function getTimerSound(){ return localStorage.getItem('zealift_timer_sound') || 'chime'; }
+function setTimerSound(k){ localStorage.setItem('zealift_timer_sound', k); }
+function getTimerDefault(){ return parseInt(localStorage.getItem('zealift_timer_default') || '90', 10); }
+function setTimerDefault(s){ localStorage.setItem('zealift_timer_default', String(s)); }
+
+function playTimerSound(){
+  const key = getTimerSound();
+  const snd = TIMER_SOUNDS[key];
+  if (navigator.vibrate && key !== 'mute') navigator.vibrate([200,100,200]);
+  if (!snd || !snd.pattern.length) return;
+  try {
+    const ctx = new (window.AudioContext||window.webkitAudioContext)();
+    let t = ctx.currentTime;
+    snd.pattern.forEach(([freq, dur]) => {
       const o = ctx.createOscillator(), g = ctx.createGain();
       o.connect(g); g.connect(ctx.destination);
-      o.frequency.value = 880; o.type = 'sine';
-      g.gain.setValueAtTime(0.001, ctx.currentTime);
-      g.gain.exponentialRampToValueAtTime(0.3, ctx.currentTime+0.02);
-      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime+0.5);
-      o.start(); o.stop(ctx.currentTime+0.5);
-    } catch(e){}
+      o.type = snd.type; o.frequency.value = freq;
+      g.gain.setValueAtTime(0.001, t);
+      g.gain.exponentialRampToValueAtTime(0.35, t+0.02);
+      g.gain.exponentialRampToValueAtTime(0.001, t+dur);
+      o.start(t); o.stop(t+dur+0.02);
+      t += dur + 0.06;
+    });
+  } catch(e){}
+}
+
+function openTimer(){
+  if (_timerState.interval){ clearInterval(_timerState.interval); _timerState.interval = null; }
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.id = 'timerOverlay';
+  const presets = [30,60,90,120,180,300];
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeTimer">✕</button><h1>Timer</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll" style="display:flex; flex-direction:column; align-items:center;">
+      <div id="timerDisplay" style="font-family:'JetBrains Mono',monospace; font-size:64px; font-weight:600; margin:24px 0 8px 0; letter-spacing:1px;">0:00</div>
+      <div id="timerRing" style="width:230px; height:6px; background:var(--panel); border-radius:6px; overflow:hidden; margin-bottom:26px;">
+        <div id="timerRingFill" style="height:100%; width:0%; background:#FF5630; transition:width 0.3s linear;"></div>
+      </div>
+
+      <div style="display:flex; gap:10px; margin-bottom:24px;">
+        <button id="timerStartPause" style="background:#FF5630; color:var(--ink); font-weight:600; border-radius:12px; padding:14px 30px; font-size:15px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:1px;">Start</button>
+        <button id="timerReset" style="background:var(--panel); color:var(--chalk); border-radius:12px; padding:14px 20px; font-size:14px;">Reset</button>
+      </div>
+
+      <div class="field-label" style="align-self:flex-start;">Presets</div>
+      <div style="display:flex; flex-wrap:wrap; gap:8px; padding:0 18px 18px 18px; width:100%;">
+        ${presets.map(p => `<button class="timer-preset" data-sec="${p}" style="background:var(--panel); color:var(--chalk); border-radius:20px; padding:9px 16px; font-size:13px; font-family:'JetBrains Mono',monospace;">${Math.floor(p/60)?Math.floor(p/60)+'m':''}${p%60?(p%60)+'s':''}</button>`).join('')}
+      </div>
+
+      <div class="field-label" style="align-self:flex-start;">Custom</div>
+      <div style="display:flex; align-items:center; gap:8px; padding:0 18px 18px 18px; width:100%;">
+        <input id="timerMin" type="number" inputmode="numeric" min="0" max="59" placeholder="min" class="field-input" style="text-align:center; background:var(--panel); border-radius:10px; padding:12px;">
+        <span style="color:var(--slate); font-size:20px;">:</span>
+        <input id="timerSec" type="number" inputmode="numeric" min="0" max="59" placeholder="sec" class="field-input" style="text-align:center; background:var(--panel); border-radius:10px; padding:12px;">
+        <button id="timerSetCustom" style="background:var(--ink); color:var(--chalk); border-radius:10px; padding:12px 16px; font-size:13px;">Set</button>
+      </div>
+
+      <div class="field-label" style="align-self:flex-start;">Alert Sound</div>
+      <div style="display:flex; flex-wrap:wrap; gap:8px; padding:0 18px 24px 18px; width:100%;">
+        ${Object.entries(TIMER_SOUNDS).map(([k,v]) => `<button class="timer-sound" data-snd="${k}" style="border-radius:20px; padding:9px 16px; font-size:13px;">${v.label}</button>`).join('')}
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  _timerState.total = _timerState.total || getTimerDefault();
+  _timerState.remaining = _timerState.total;
+  _timerState.running = false;
+
+  const disp = overlay.querySelector('#timerDisplay');
+  const fill = overlay.querySelector('#timerRingFill');
+  const startPauseBtn = overlay.querySelector('#timerStartPause');
+
+  const paint = () => {
+    const r = Math.max(0, _timerState.remaining);
+    const m = Math.floor(r/60), s = r%60;
+    disp.textContent = `${m}:${s.toString().padStart(2,'0')}`;
+    disp.style.color = r<=0 ? '#3FCB7E' : 'var(--chalk)';
+    const pct = _timerState.total>0 ? ((_timerState.total - r)/_timerState.total)*100 : 0;
+    fill.style.width = `${Math.min(100,pct)}%`;
+    startPauseBtn.textContent = _timerState.running ? 'Pause' : (r<=0 ? 'Start' : (r<_timerState.total ? 'Resume' : 'Start'));
   };
+
   const tick = () => {
-    _restInterval = setInterval(() => {
-      remaining--;
-      render();
-      if (remaining <= 0){
-        clearInterval(_restInterval); _restInterval = null;
-        buzz();
-        setTimeout(() => { if (bar.parentNode) bar.remove(); }, 4000);
+    _timerState.interval = setInterval(() => {
+      _timerState.remaining--;
+      paint();
+      if (_timerState.remaining <= 0){
+        clearInterval(_timerState.interval); _timerState.interval = null;
+        _timerState.running = false;
+        playTimerSound();
+        paint();
       }
     }, 1000);
   };
-  document.body.appendChild(bar);
-  render();
-  tick();
+
+  const setTime = (sec) => {
+    if (_timerState.interval){ clearInterval(_timerState.interval); _timerState.interval = null; }
+    _timerState.total = sec; _timerState.remaining = sec; _timerState.running = false;
+    setTimerDefault(sec);
+    paint();
+  };
+
+  startPauseBtn.onclick = () => {
+    if (_timerState.running){
+      clearInterval(_timerState.interval); _timerState.interval = null;
+      _timerState.running = false; paint();
+    } else {
+      if (_timerState.remaining <= 0){ _timerState.remaining = _timerState.total; }
+      if (_timerState.remaining <= 0) return;
+      _timerState.running = true; tick(); paint();
+    }
+  };
+  overlay.querySelector('#timerReset').onclick = () => {
+    if (_timerState.interval){ clearInterval(_timerState.interval); _timerState.interval = null; }
+    _timerState.remaining = _timerState.total; _timerState.running = false; paint();
+  };
+  overlay.querySelector('#closeTimer').onclick = () => {
+    // Keep the timer running in the background if active; just close the panel.
+    overlay.remove();
+  };
+  overlay.querySelectorAll('.timer-preset').forEach(b => {
+    b.onclick = () => setTime(parseInt(b.dataset.sec,10));
+  });
+  overlay.querySelector('#timerSetCustom').onclick = () => {
+    const m = parseInt(overlay.querySelector('#timerMin').value || '0', 10);
+    const s = parseInt(overlay.querySelector('#timerSec').value || '0', 10);
+    const total = m*60 + s;
+    if (total > 0) setTime(total);
+  };
+
+  const paintSoundBtns = () => {
+    const cur = getTimerSound();
+    overlay.querySelectorAll('.timer-sound').forEach(b => {
+      const active = b.dataset.snd === cur;
+      b.style.background = active ? 'rgba(255,86,48,0.16)' : 'var(--panel)';
+      b.style.color = active ? '#FF5630' : 'var(--chalk)';
+    });
+  };
+  overlay.querySelectorAll('.timer-sound').forEach(b => {
+    b.onclick = () => { setTimerSound(b.dataset.snd); paintSoundBtns(); if (b.dataset.snd !== 'mute') playTimerSound(); };
+  });
+  paintSoundBtns();
+  paint();
 }
 
 // ---------- SCALE ----------
@@ -1357,7 +1454,7 @@ async function renderScale(){
   app.innerHTML = `
     <div class="app-shell">
       <div class="scroll-area">
-        <div class="brandbar"><img src="icons/icon-inapp-32.png" alt=""><div class="name">ZEALIFT</div></div>
+        <div class="brandbar"><img src="icons/icon-inapp-32.png" alt=""><div class="name">ZEALIFT</div><button class="brandbar-timer" onclick="openTimer()" aria-label="Timer" style="margin-left:auto; background:none; color:var(--slate); padding:6px; display:flex; align-items:center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg></button></div>
         <div class="header"><div class="eyebrow">BODY WEIGHT</div><h1>Scale</h1></div>
         <div class="stat-card">
           ${latest ? `<div class="big">${latest.weight}${latest.unit}</div><div class="small">${latest.logged_at}</div>${deltaHtml}` : `<div class="small">No entries yet — tap + to log your weight.</div>`}
@@ -1484,7 +1581,7 @@ async function renderPhase(){
   app.innerHTML = `
     <div class="app-shell">
       <div class="scroll-area">
-        <div class="brandbar"><img src="icons/icon-inapp-32.png" alt=""><div class="name">ZEALIFT</div></div>
+        <div class="brandbar"><img src="icons/icon-inapp-32.png" alt=""><div class="name">ZEALIFT</div><button class="brandbar-timer" onclick="openTimer()" aria-label="Timer" style="margin-left:auto; background:none; color:var(--slate); padding:6px; display:flex; align-items:center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg></button></div>
         <div class="header"><div class="eyebrow">BULK / CUT</div><h1>Phase</h1></div>
         <div class="section-label">Bulk</div>
         ${bulkHtml}
@@ -1657,7 +1754,7 @@ async function renderMe(){
   app.innerHTML = `
     <div class="app-shell">
       <div class="scroll-area">
-        <div class="brandbar"><img src="icons/icon-inapp-32.png" alt=""><div class="name">ZEALIFT</div></div>
+        <div class="brandbar"><img src="icons/icon-inapp-32.png" alt=""><div class="name">ZEALIFT</div><button class="brandbar-timer" onclick="openTimer()" aria-label="Timer" style="margin-left:auto; background:none; color:var(--slate); padding:6px; display:flex; align-items:center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg></button></div>
         <div class="header"><div class="eyebrow">ACCOUNT</div><h1>Me</h1></div>
         <div class="account-card">
           <div class="avatar">${initial}</div>
