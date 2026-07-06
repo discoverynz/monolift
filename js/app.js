@@ -1316,11 +1316,11 @@ async function openPicker(initialTab){
     const starterMatches = starterNames.map(n => matchExercise(n, db)).filter(Boolean);
     if (starterMatches.length){
       body.querySelector('#starterBlock').innerHTML = `
-        <div style="margin:0 0 10px 0; background:var(--panel); border-radius:12px; padding:10px 12px;">
-          <div style="font-family:'Oswald',sans-serif; font-size:10.5px; letter-spacing:1px; text-transform:uppercase; color:var(--brass); margin-bottom:2px;">New to the gym?</div>
-          <div style="font-size:9.5px; color:var(--slate); margin-bottom:8px;">A handful of reliable staples to start with.</div>
-          <div style="display:flex; flex-wrap:wrap; gap:6px;">
-            ${starterMatches.map(m => `<div class="db-starter-chip" data-name="${m.name}" data-equip="${m.equipment||''}" style="background:var(--ink); border-radius:16px; padding:6px 11px; font-size:10.5px; color:var(--chalk); cursor:pointer;">${m.name}</div>`).join('')}
+        <div style="margin:14px 18px 14px 18px; background:var(--panel); border-radius:14px; padding:14px 16px;">
+          <div style="font-family:'Oswald',sans-serif; font-size:12.5px; letter-spacing:1px; text-transform:uppercase; color:var(--brass); margin-bottom:3px;">New to the gym?</div>
+          <div style="font-size:11.5px; color:var(--slate); margin-bottom:11px;">A handful of reliable staples to start with.</div>
+          <div style="display:flex; flex-wrap:wrap; gap:8px;">
+            ${starterMatches.map(m => `<div class="db-starter-chip" data-name="${m.name}" data-equip="${m.equipment||''}" style="background:var(--ink); border-radius:18px; padding:8px 14px; font-size:12px; color:var(--chalk); cursor:pointer;">${m.name}</div>`).join('')}
           </div>
         </div>`;
       body.querySelectorAll('.db-starter-chip').forEach(chip => {
