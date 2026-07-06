@@ -957,7 +957,10 @@ async function renderTrack(){
     const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
     suggestionsHtml = `<div class="category" style="display:flex; align-items:center; justify-content:space-between;">
         <div>Try Something New for ${dayTypeLabel}</div>
-        <button id="refreshSuggestions" style="background:none; color:var(--flame); font-size:11px; padding:4px 8px;">↻ Refresh</button>
+        <div style="display:flex; gap:6px;">
+          <button id="refreshSuggestions" style="background:none; color:var(--flame); font-size:11px; padding:4px 8px;">↻ Refresh</button>
+          <button id="seeAllSuggestions" style="background:none; color:var(--flame); font-size:11px; padding:4px 8px;">See All →</button>
+        </div>
       </div>
       <div class="small" style="padding:0 18px 8px 18px; color:var(--slate);">Not in your library yet — pulled from a public exercise database based on today's focus.</div>
       ${suggestions.map(s => {
@@ -980,7 +983,7 @@ async function renderTrack(){
           <h1 id="dayTypeHeader" style="cursor:pointer;">${dayTypeLabel}</h1>
           <div class="quote">"${q.t}" — ${q.a}</div>
         </div>
-        <div style="margin:12px 18px 0 18px; height:4px; background:var(--panel); border-radius:4px; overflow:hidden;">
+        <div style="margin:12px 18px 14px 18px; height:4px; background:var(--panel); border-radius:4px; overflow:hidden;">
           <div style="height:100%; width:${pct}%; background:var(--good); border-radius:4px;"></div>
         </div>
         ${state.exercises.length > 0 ? groupByToggleHtml(groupBy) : ''}
@@ -1034,6 +1037,8 @@ async function renderTrack(){
     if (state.suggestionsCache) delete state.suggestionsCache[state.selectedDay];
     renderTrack();
   };
+  const seeAllBtn = document.getElementById('seeAllSuggestions');
+  if (seeAllBtn) seeAllBtn.onclick = () => openPicker('database');
 }
 
 function showExerciseActionsMenu(exerciseId, exerciseName){
@@ -1193,21 +1198,33 @@ function showUndoToast(exerciseName, onUndo){
   toast.querySelector('#undoBtn').onclick = () => { clearTimeout(timer); toast.remove(); onUndo(); };
 }
 
-// ---------- PICKER (the + button on Track) — now shows ALL exercises across all days ----------
-async function openPicker(){
+// Groups raw free-exercise-db records (not the user's own exercises) either by
+// primary muscle or by their own equipment field directly.
+function groupDatabaseExercises(list, groupBy){
+  const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
+  const grouped = {};
+  list.forEach(e => {
+    const key = groupBy === 'muscle'
+      ? ((e.primaryMuscles && e.primaryMuscles[0]) ? cap(e.primaryMuscles[0]) : 'Other')
+      : (e.equipment ? cap(e.equipment) : 'Other');
+    (grouped[key] = grouped[key] || []).push(e);
+  });
+  const orderedKeys = Object.keys(grouped).sort((a,b) => a==='Other'?1:b==='Other'?-1:a.localeCompare(b));
+  return { grouped, orderedKeys };
+}
+
+async function openPicker(initialTab){
   const overlay = document.createElement('div');
   overlay.className = 'overlay-screen';
   overlay.innerHTML = `
     <div class="form-header"><button id="closePicker">✕</button><h1>Log a Set</h1><div style="width:18px;"></div></div>
-    <div class="overlay-scroll">
-      <div class="search-bar">🔍 <input id="pickerSearch" placeholder="Search all exercises…"></div>
-      <div class="pick-row" id="createNewRow" style="border-bottom:1px solid var(--line);"><div class="ex-name" style="color:var(--flame);">+ Create New Exercise</div></div>
-      <div id="pickerGroupToggle"></div>
-      <div id="pickerList"><div class="empty-state">Loading…</div></div>
-    </div>`;
+    <div style="display:flex; padding:0 18px; border-bottom:1px solid var(--line);">
+      <div class="picker-toptab" data-tab="mine" style="flex:1; text-align:center; padding:10px 0; font-family:'Oswald',sans-serif; font-size:12px; text-transform:uppercase; letter-spacing:0.5px; color:var(--slate); border-bottom:2px solid transparent; cursor:pointer;">Your Exercises</div>
+      <div class="picker-toptab" data-tab="database" style="flex:1; text-align:center; padding:10px 0; font-family:'Oswald',sans-serif; font-size:12px; text-transform:uppercase; letter-spacing:0.5px; color:var(--slate); border-bottom:2px solid transparent; cursor:pointer;">Database</div>
+    </div>
+    <div class="overlay-scroll" id="pickerBody"></div>`;
   document.body.appendChild(overlay);
-  overlay.querySelector('#closePicker').onclick = () => overlay.remove();
-  overlay.querySelector('#createNewRow').onclick = () => { overlay.remove(); openNewExerciseForm(); };
+  overlay.querySelector('#closePicker').onclick = () => { removeDbSideIndex(); overlay.remove(); };
 
   const result = await withTimeout(
     supabaseClient.from('exercises').select('id, name, category, weekday, alt_group_id').eq('active', true),
@@ -1215,55 +1232,165 @@ async function openPicker(){
   );
   const all = result.__timeout || result.error ? [] : (result.data || []);
 
-  async function renderList(filter){
-    const f = (filter || '').toLowerCase();
-    const byName = {};
-    all.forEach(ex => {
-      const key = ex.name.toLowerCase();
-      if (!byName[key] || ex.weekday < byName[key].weekday) byName[key] = ex;
-    });
-    const deduped = Object.values(byName).filter(ex => ex.name.toLowerCase().includes(f));
-    const groupBy = getGroupByPref();
-    const { grouped, orderedKeys } = await groupExercisesByChoice(deduped, groupBy);
-
-    let html = '';
-    orderedKeys.forEach(cat => {
-      const items = (grouped[cat] || []).slice().sort((a, b) => a.name.localeCompare(b.name));
-      if (items.length === 0) return;
-      html += `<div class="category">${cat}</div>`;
-      html += items.map(ex => `<div class="pick-row" data-id="${ex.id}" data-name="${ex.name}"><div class="ex-name">${ex.name}</div><div class="chev">›</div></div>`).join('');
-    });
-    overlay.querySelector('#pickerGroupToggle').innerHTML = groupByToggleHtml(groupBy);
-    overlay.querySelectorAll('.groupby-chip').forEach(chip => {
-      chip.onclick = () => { setGroupByPref(chip.dataset.groupby); renderList(overlay.querySelector('#pickerSearch').value); };
-    });
-    overlay.querySelector('#pickerList').innerHTML = html || '<div class="empty-state">No matches.</div>';
-    overlay.querySelectorAll('.pick-row[data-id]').forEach(el => {
-      el.onclick = async () => {
-        const picked = all.find(ex => ex.id === el.dataset.id);
-        overlay.remove();
-        if (!picked || picked.weekday === state.selectedDay){
-          openLogForm(el.dataset.id, el.dataset.name);
-          return;
-        }
-        // Not on today's day yet - check if a same-named exercise already exists today before creating a duplicate.
-        const existingToday = all.find(ex => ex.weekday === state.selectedDay && ex.name.toLowerCase() === picked.name.toLowerCase());
-        if (existingToday){
-          openLogForm(existingToday.id, existingToday.name);
-          return;
-        }
-        const { data: userData } = await supabaseClient.auth.getUser();
-        const { data: inserted, error } = await supabaseClient.from('exercises').insert({
-          user_id: userData.user.id, name: picked.name, category: picked.category,
-          weekday: state.selectedDay, alt_group_id: null
-        }).select();
-        if (error){ alert(error.message); return; }
-        openLogForm(inserted[0].id, picked.name);
-      };
-    });
+  function removeDbSideIndex(){
+    const existing = document.getElementById('dbSideIndex');
+    if (existing) existing.remove();
   }
-  renderList('');
-  overlay.querySelector('#pickerSearch').oninput = (e) => renderList(e.target.value);
+
+  function renderMineTab(){
+    removeDbSideIndex();
+    const body = overlay.querySelector('#pickerBody');
+    body.innerHTML = `
+      <div class="search-bar">🔍 <input id="pickerSearch" placeholder="Search your exercises…"></div>
+      <div class="pick-row" id="createNewRow" style="border-bottom:1px solid var(--line);"><div class="ex-name" style="color:var(--flame);">+ Create New Exercise</div></div>
+      <div id="pickerGroupToggle"></div>
+      <div id="pickerList"><div class="empty-state">Loading…</div></div>`;
+    body.querySelector('#createNewRow').onclick = () => { overlay.remove(); openNewExerciseForm(); };
+
+    async function renderList(filter){
+      const f = (filter || '').toLowerCase();
+      const byName = {};
+      all.forEach(ex => {
+        const key = ex.name.toLowerCase();
+        if (!byName[key] || ex.weekday < byName[key].weekday) byName[key] = ex;
+      });
+      const deduped = Object.values(byName).filter(ex => ex.name.toLowerCase().includes(f));
+      const groupBy = getGroupByPref();
+      const { grouped, orderedKeys } = await groupExercisesByChoice(deduped, groupBy);
+
+      let html = '';
+      orderedKeys.forEach(cat => {
+        const items = (grouped[cat] || []).slice().sort((a, b) => a.name.localeCompare(b.name));
+        if (items.length === 0) return;
+        html += `<div class="category">${cat}</div>`;
+        html += items.map(ex => `<div class="pick-row" data-id="${ex.id}" data-name="${ex.name}"><div class="ex-name">${ex.name}</div><div class="chev">›</div></div>`).join('');
+      });
+      body.querySelector('#pickerGroupToggle').innerHTML = groupByToggleHtml(groupBy);
+      body.querySelectorAll('.groupby-chip').forEach(chip => {
+        chip.onclick = () => { setGroupByPref(chip.dataset.groupby); renderList(body.querySelector('#pickerSearch').value); };
+      });
+      body.querySelector('#pickerList').innerHTML = html || '<div class="empty-state">No matches.</div>';
+      body.querySelectorAll('.pick-row[data-id]').forEach(el => {
+        el.onclick = async () => {
+          const picked = all.find(ex => ex.id === el.dataset.id);
+          overlay.remove();
+          if (!picked || picked.weekday === state.selectedDay){
+            openLogForm(el.dataset.id, el.dataset.name);
+            return;
+          }
+          const existingToday = all.find(ex => ex.weekday === state.selectedDay && ex.name.toLowerCase() === picked.name.toLowerCase());
+          if (existingToday){
+            openLogForm(existingToday.id, existingToday.name);
+            return;
+          }
+          const { data: userData } = await supabaseClient.auth.getUser();
+          const { data: inserted, error } = await supabaseClient.from('exercises').insert({
+            user_id: userData.user.id, name: picked.name, category: picked.category,
+            weekday: state.selectedDay, alt_group_id: null
+          }).select();
+          if (error){ alert(error.message); return; }
+          openLogForm(inserted[0].id, picked.name);
+        };
+      });
+    }
+    renderList('');
+    body.querySelector('#pickerSearch').oninput = (e) => renderList(e.target.value);
+  }
+
+  async function renderDatabaseTab(){
+    const body = overlay.querySelector('#pickerBody');
+    body.innerHTML = `<div class="small" style="padding:12px 18px; color:var(--slate);">Loading database…</div>`;
+    const db = await loadExerciseDB();
+    if (!db){
+      body.innerHTML = `<div class="empty-state">Database unavailable offline.</div>`;
+      return;
+    }
+    const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
+    body.innerHTML = `
+      <div class="search-bar">🔍 <input id="dbSearch" placeholder="Search ${db.length} exercises…"></div>
+      <div id="starterBlock"></div>
+      <div id="dbGroupToggle"></div>
+      <div id="dbList" style="padding-right:26px;"></div>`;
+
+    const starterNames = ['Chest Press','Shoulder Press','Lat Pulldown','Tricep Pushdown','Bicep Curl','Leg Press','Seated Row','Plank'];
+    const starterMatches = starterNames.map(n => matchExercise(n, db)).filter(Boolean);
+    if (starterMatches.length){
+      body.querySelector('#starterBlock').innerHTML = `
+        <div style="margin:0 0 10px 0; background:var(--panel); border-radius:12px; padding:10px 12px;">
+          <div style="font-family:'Oswald',sans-serif; font-size:10.5px; letter-spacing:1px; text-transform:uppercase; color:var(--brass); margin-bottom:2px;">New to the gym?</div>
+          <div style="font-size:9.5px; color:var(--slate); margin-bottom:8px;">A handful of reliable staples to start with.</div>
+          <div style="display:flex; flex-wrap:wrap; gap:6px;">
+            ${starterMatches.map(m => `<div class="db-starter-chip" data-name="${m.name}" data-equip="${m.equipment||''}" style="background:var(--ink); border-radius:16px; padding:6px 11px; font-size:10.5px; color:var(--chalk); cursor:pointer;">${m.name}</div>`).join('')}
+          </div>
+        </div>`;
+      body.querySelectorAll('.db-starter-chip').forEach(chip => {
+        chip.onclick = () => { removeDbSideIndex(); overlay.remove(); openSuggestionPreview(chip.dataset.name, EQUIPMENT_TO_CATEGORY[chip.dataset.equip] || 'Other'); };
+      });
+    }
+
+    function renderDbList(filter){
+      const f = (filter || '').toLowerCase();
+      const filtered = db.filter(e => e.name.toLowerCase().includes(f));
+      const groupBy = getGroupByPref();
+      const { grouped, orderedKeys } = groupDatabaseExercises(filtered, groupBy);
+      let html = '';
+      const presentKeys = orderedKeys.filter(k => (grouped[k]||[]).length);
+      presentKeys.forEach(cat => {
+        const items = (grouped[cat]||[]).slice().sort((a,b)=>a.name.localeCompare(b.name));
+        const slug = 'cat-' + cat.replace(/[^a-z0-9]/gi,'');
+        html += `<div class="category" id="${slug}">${cat}</div>`;
+        html += items.map(e => `<div class="pick-row db-pick" data-name="${e.name}" data-equip="${e.equipment||''}"><div><div class="ex-name">${e.name}</div><div class="small" style="color:var(--slate);">${[cap(e.equipment), cap(e.level)].filter(Boolean).join(' · ')}</div></div><div class="chev">›</div></div>`).join('');
+      });
+      body.querySelector('#dbGroupToggle').innerHTML = groupByToggleHtml(groupBy);
+      body.querySelectorAll('.groupby-chip').forEach(chip => {
+        chip.onclick = () => { setGroupByPref(chip.dataset.groupby); renderDbList(body.querySelector('#dbSearch').value); };
+      });
+      body.querySelector('#dbList').innerHTML = html || '<div class="empty-state">No matches.</div>';
+
+      // Fixed side index over the whole overlay (not nested in the scrolling body),
+      // so it stays put regardless of scroll position. Click jumps to that section.
+      removeDbSideIndex();
+      const idx = document.createElement('div');
+      idx.id = 'dbSideIndex';
+      idx.style = 'position:fixed; right:6px; top:170px; bottom:110px; display:flex; flex-direction:column; justify-content:center; gap:2px; padding:4px 3px; z-index:15;';
+      idx.innerHTML = presentKeys.map(cat => {
+        const slug = 'cat-' + cat.replace(/[^a-z0-9]/gi,'');
+        const short = cat.length > 3 ? cat.slice(0,3) : cat;
+        return `<div class="db-side-index-item" data-target="${slug}" style="font-family:'JetBrains Mono',monospace; font-size:8.5px; color:var(--slate); padding:1.5px 3px; cursor:pointer; text-align:right;">${short}</div>`;
+      }).join('');
+      overlay.appendChild(idx);
+      idx.querySelectorAll('.db-side-index-item').forEach(item => {
+        item.onclick = () => {
+          const target = document.getElementById(item.dataset.target);
+          if (target) target.scrollIntoView({ behavior:'smooth', block:'start' });
+        };
+      });
+
+      body.querySelectorAll('.db-pick').forEach(el => {
+        el.onclick = () => {
+          removeDbSideIndex();
+          overlay.remove();
+          openSuggestionPreview(el.dataset.name, EQUIPMENT_TO_CATEGORY[el.dataset.equip] || 'Other');
+        };
+      });
+    }
+    renderDbList('');
+    body.querySelector('#dbSearch').oninput = (e) => renderDbList(e.target.value);
+  }
+
+  overlay.querySelectorAll('.picker-toptab').forEach(tab => {
+    tab.onclick = () => {
+      overlay.querySelectorAll('.picker-toptab').forEach(t => {
+        t.classList.remove('active'); t.style.color = 'var(--slate)'; t.style.borderBottomColor = 'transparent';
+      });
+      tab.classList.add('active'); tab.style.color = 'var(--chalk)'; tab.style.borderBottomColor = 'var(--flame)';
+      if (tab.dataset.tab === 'mine') renderMineTab(); else renderDatabaseTab();
+    };
+  });
+
+  const startTab = overlay.querySelector(`.picker-toptab[data-tab="${initialTab === 'database' ? 'database' : 'mine'}"]`);
+  startTab.classList.add('active'); startTab.style.color = 'var(--chalk)'; startTab.style.borderBottomColor = 'var(--flame)';
+  if (initialTab === 'database') renderDatabaseTab(); else renderMineTab();
 }
 
 // ---------- ALT GROUP PICKER (inline, used inside the new-exercise form) ----------
@@ -1992,7 +2119,7 @@ function openTimer(){
 // ---------- SCALE ----------
 async function loadBodyWeight(){
   const result = await withTimeout(
-    supabaseClient.from('body_weight').select('id, weight, unit, logged_at').order('logged_at', { ascending: false }).limit(20),
+    supabaseClient.from('body_weight').select('id, weight, unit, logged_at, notes').order('logged_at', { ascending: false }).limit(20),
     15000
   );
   return result.__timeout || result.error ? [] : (result.data || []);
@@ -2009,7 +2136,10 @@ async function renderScale(){
     const arrow = diff > 0 ? '↑' : (diff < 0 ? '↓' : '→');
     deltaHtml = `<div class="delta">${arrow} ${Math.abs(diff)}${latest.unit} since last entry</div>`;
   }
-  const rows = entries.map(e => `<div class="log-row" data-id="${e.id}"><div class="log-date">${e.logged_at}</div><div class="log-weight">${e.weight}${e.unit}</div></div>`).join('');
+  const rows = entries.map(e => `<div class="log-row" data-id="${e.id}" style="flex-direction:column; align-items:flex-start; gap:3px;">
+    <div style="display:flex; justify-content:space-between; width:100%;"><div class="log-date">${e.logged_at}</div><div class="log-weight">${e.weight}${e.unit}</div></div>
+    ${e.notes ? `<div style="font-size:11px; color:var(--slate); font-style:italic;">${e.notes}</div>` : ''}
+  </div>`).join('');
 
   let chartHtml = '';
   if (entries.length >= 2){
@@ -2123,6 +2253,8 @@ function openLogWeightForm(){
         <input class="field-input" id="bwInput" type="number" inputmode="decimal" placeholder="0">
         <div class="unit-toggle"><button class="active" data-u="kg">kg</button><button data-u="lb">lb</button></div>
       </div>
+      <div class="field-label">Notes (optional)</div>
+      <div class="field-card"><input class="field-input" id="bwNotes" type="text" placeholder="Anything worth remembering"></div>
       <button class="save-btn" id="saveWBtn">Save Weight</button>
     </div>`;
   document.body.appendChild(overlay);
@@ -2133,9 +2265,10 @@ function openLogWeightForm(){
   overlay.querySelector('#saveWBtn').onclick = async () => {
     const weight = parseFloat(document.getElementById('bwInput').value);
     if (!weight){ alert('Enter a weight.'); return; }
+    const notes = document.getElementById('bwNotes').value.trim();
     const { data: userData } = await supabaseClient.auth.getUser();
     const { error } = await supabaseClient.from('body_weight').insert({
-      user_id: userData.user.id, weight, unit, logged_at: todayStr()
+      user_id: userData.user.id, weight, unit, logged_at: todayStr(), notes: notes || null
     });
     if (error){ alert(error.message); return; }
     overlay.remove();
