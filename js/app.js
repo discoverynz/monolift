@@ -932,7 +932,7 @@ async function loadExerciseGuide(overlay, exerciseName){
       background:${isPrimary ? 'rgba(255,86,48,0.16)' : 'var(--panel)'};
       color:${isPrimary ? '#FF5630' : 'var(--slate)'};">${cap(m)}</span>`;
   }).join('');
-  const muscleMap = renderMuscleMap(match.primaryMuscles, match.secondaryMuscles);
+  const muscleMap = ''; // pulled from the live guide — disliked, reverting until a better option is previewed and approved
   const img = (match.images && match.images.length)
     ? `<img src="${EXDB_IMG_BASE}${match.images[0]}" alt="" style="width:100%; border-radius:12px; margin-bottom:10px; background:#fff;" loading="lazy">`
     : '';
