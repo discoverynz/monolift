@@ -845,6 +845,70 @@ function openNewExerciseForm(){
 }
 
 // ---------- LOG SET FORM ----------
+// ---- Muscle Map (original schematic figure, not third-party artwork) ----
+// Simple front/back mannequin built from basic shapes; regions colored per
+// the exercise's own primaryMuscles/secondaryMuscles. Entirely our own art,
+// so there's no copyright question the way there is with illustrated anatomy charts.
+const MUSCLE_SKELETON = [
+  ['circle',80,22,16], ['rect',72,36,16,10,4], ['rect',48,46,64,90,18],
+  ['rect',24,50,20,55,10], ['rect',116,50,20,55,10],
+  ['rect',18,100,16,55,8], ['rect',126,100,16,55,8],
+  ['rect',52,132,56,30,14], ['rect',52,158,24,70,12], ['rect',84,158,24,70,12],
+  ['rect',54,224,20,60,10], ['rect',86,224,20,60,10]
+];
+const MUSCLE_REGIONS_FRONT = {
+  neck: [['rect',72,34,16,10,5]],
+  shoulders: [['circle',34,54,11],['circle',126,54,11]],
+  chest: [['rect',54,52,52,26,10]],
+  biceps: [['rect',26,58,16,38,8],['rect',118,58,16,38,8]],
+  forearms: [['rect',20,100,12,48,6],['rect',128,100,12,48,6]],
+  abdominals: [['rect',58,80,44,44,8]],
+  abductors: [['rect',48,134,10,26,5],['rect',102,134,10,26,5]],
+  adductors: [['rect',74,160,12,50,6]],
+  quadriceps: [['rect',54,160,20,64,10],['rect',86,160,20,64,10]]
+};
+const MUSCLE_REGIONS_BACK = {
+  traps: [['rect',58,46,44,20,8]],
+  lats: [['rect',44,64,18,42,9],['rect',98,64,18,42,9]],
+  'middle back': [['rect',62,64,36,30,8]],
+  'lower back': [['rect',64,100,32,26,8]],
+  triceps: [['rect',26,58,16,38,8],['rect',118,58,16,38,8]],
+  glutes: [['rect',54,134,52,28,14]],
+  hamstrings: [['rect',54,162,20,62,10],['rect',86,162,20,62,10]],
+  calves: [['rect',54,226,20,56,10],['rect',86,226,20,56,10]]
+};
+function muscleShapeSvg(shape, fill, opacity){
+  if (shape[0] === 'rect'){
+    const [,x,y,w,h,rx] = shape;
+    return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${rx}" fill="${fill}" opacity="${opacity}"/>`;
+  }
+  const [,cx,cy,r] = shape;
+  return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${fill}" opacity="${opacity}"/>`;
+}
+function renderMuscleFigure(regions, primarySet, secondarySet){
+  let parts = MUSCLE_SKELETON.map(s => muscleShapeSvg(s, '#2A2C31', 1));
+  for (const muscle in regions){
+    let fill = null, op = 1;
+    if (primarySet.has(muscle)){ fill = '#FF5630'; op = 1; }
+    else if (secondarySet.has(muscle)){ fill = '#FF5630'; op = 0.4; }
+    if (!fill) continue;
+    regions[muscle].forEach(s => parts.push(muscleShapeSvg(s, fill, op)));
+  }
+  return `<svg viewBox="0 0 160 300" width="120" height="225">${parts.join('')}</svg>`;
+}
+function renderMuscleMap(primaryMuscles, secondaryMuscles){
+  const primarySet = new Set(primaryMuscles || []);
+  const secondarySet = new Set(secondaryMuscles || []);
+  const all = new Set([...primarySet, ...secondarySet]);
+  const hasFront = [...all].some(m => m in MUSCLE_REGIONS_FRONT);
+  const hasBack = [...all].some(m => m in MUSCLE_REGIONS_BACK);
+  if (!hasFront && !hasBack) return '';
+  const figures = [];
+  if (hasFront) figures.push(`<div style="text-align:center;">${renderMuscleFigure(MUSCLE_REGIONS_FRONT, primarySet, secondarySet)}<div class="small" style="color:var(--slate); margin-top:-4px;">Front</div></div>`);
+  if (hasBack) figures.push(`<div style="text-align:center;">${renderMuscleFigure(MUSCLE_REGIONS_BACK, primarySet, secondarySet)}<div class="small" style="color:var(--slate); margin-top:-4px;">Back</div></div>`);
+  return `<div style="display:flex; justify-content:center; gap:22px; background:var(--ink); border-radius:14px; padding:14px 8px 8px 8px; margin-bottom:12px;">${figures.join('')}</div>`;
+}
+
 async function loadExerciseGuide(overlay, exerciseName){
   const area = overlay.querySelector('#guideArea');
   if (!area) return;
@@ -868,6 +932,7 @@ async function loadExerciseGuide(overlay, exerciseName){
       background:${isPrimary ? 'rgba(255,86,48,0.16)' : 'var(--panel)'};
       color:${isPrimary ? '#FF5630' : 'var(--slate)'};">${cap(m)}</span>`;
   }).join('');
+  const muscleMap = renderMuscleMap(match.primaryMuscles, match.secondaryMuscles);
   const img = (match.images && match.images.length)
     ? `<img src="${EXDB_IMG_BASE}${match.images[0]}" alt="" style="width:100%; border-radius:12px; margin-bottom:10px; background:#fff;" loading="lazy">`
     : '';
@@ -885,9 +950,10 @@ async function loadExerciseGuide(overlay, exerciseName){
         <div id="guideChev" style="color:var(--slate); font-size:14px; transition:transform 0.2s;">▾</div>
       </div>
       <div id="guideBody" style="display:none;">
-        ${img}
+        ${muscleMap}
         <div style="margin-bottom:10px;">${muscleChips}</div>
         ${meta ? `<div class="small" style="color:var(--slate); margin-bottom:12px;">${meta}</div>` : ''}
+        ${img}
         ${steps}
         <div class="small" style="color:var(--slate); margin-top:10px; font-style:italic; opacity:0.7;">
           General guidance from a public exercise library — not a substitute for a coach. Matched to "${match.name}".
@@ -939,7 +1005,6 @@ function celebratePR(exerciseName, weight, unit, priorBest){
   if (navigator.vibrate) navigator.vibrate([80,40,80,40,160]);
   overlay.querySelector('#prClose').onclick = () => overlay.remove();
   overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
-  setTimeout(() => { if (overlay.parentNode) overlay.remove(); }, 6000);
 }
 
 // ---------- PLATE CALCULATOR ----------
@@ -1235,24 +1300,31 @@ function setTimerSound(k){ localStorage.setItem('zealift_timer_sound', k); }
 function getTimerDefault(){ return parseInt(localStorage.getItem('zealift_timer_default') || '90', 10); }
 function setTimerDefault(s){ localStorage.setItem('zealift_timer_default', String(s)); }
 
+let _timerAudioCtx = null;
 function playTimerSound(){
   const key = getTimerSound();
   const snd = TIMER_SOUNDS[key];
   if (navigator.vibrate && key !== 'mute') navigator.vibrate([200,100,200]);
   if (!snd || !snd.pattern.length) return;
   try {
-    const ctx = new (window.AudioContext||window.webkitAudioContext)();
-    let t = ctx.currentTime;
-    snd.pattern.forEach(([freq, dur]) => {
-      const o = ctx.createOscillator(), g = ctx.createGain();
-      o.connect(g); g.connect(ctx.destination);
-      o.type = snd.type; o.frequency.value = freq;
-      g.gain.setValueAtTime(0.001, t);
-      g.gain.exponentialRampToValueAtTime(0.35, t+0.02);
-      g.gain.exponentialRampToValueAtTime(0.001, t+dur);
-      o.start(t); o.stop(t+dur+0.02);
-      t += dur + 0.06;
-    });
+    if (!_timerAudioCtx) _timerAudioCtx = new (window.AudioContext||window.webkitAudioContext)();
+    const ctx = _timerAudioCtx;
+    const startPattern = () => {
+      let t = ctx.currentTime;
+      snd.pattern.forEach(([freq, dur]) => {
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.connect(g); g.connect(ctx.destination);
+        o.type = snd.type; o.frequency.value = freq;
+        g.gain.setValueAtTime(0.001, t);
+        g.gain.exponentialRampToValueAtTime(0.35, t+0.02);
+        g.gain.exponentialRampToValueAtTime(0.001, t+dur);
+        o.start(t); o.stop(t+dur+0.02);
+        t += dur + 0.06;
+      });
+    };
+    // iOS/Safari suspend a freshly-created (or backgrounded) context until resumed
+    // inside a user gesture — resume before playing or the sound silently fails.
+    if (ctx.state === 'suspended'){ ctx.resume().then(startPattern); } else { startPattern(); }
   } catch(e){}
 }
 
