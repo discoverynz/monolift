@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 3.0';
+const APP_VERSION = 'Beta 3.1';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 
 // Common starter exercises shown as quick-add suggestions on an empty day, keyed by
@@ -93,6 +93,72 @@ async function groupExercisesByChoice(exercises, groupBy){
   }
   return { grouped, orderedKeys };
 }
+function removeSideIndex(){
+  const a = document.getElementById('sideIndexEl');
+  if (a) a.remove();
+  const b = document.getElementById('sideIndexBubble');
+  if (b) b.remove();
+}
+
+// Fixed-position side index (like iOS Contacts) that jumps to a section on tap,
+// and drag-scrubs through them with a floating bubble showing the full name.
+// `keys` are the section names in display order; `prefix` must match the id
+// prefix used on each section header element (e.g. 'cat-' + slug).
+function attachSideIndex(keys, prefix, bounds){
+  removeSideIndex();
+  bounds = bounds || { top: 170, bottom: 110 };
+  const idx = document.createElement('div');
+  idx.id = 'sideIndexEl';
+  idx.style = `position:fixed; right:6px; top:${bounds.top}px; bottom:${bounds.bottom}px; display:flex; flex-direction:column; justify-content:center; gap:2px; padding:4px 8px 4px 3px; z-index:15; touch-action:none;`;
+  idx.innerHTML = keys.map(cat => {
+    const slug = prefix + cat.replace(/[^a-z0-9]/gi,'');
+    const short = cat.length > 3 ? cat.slice(0,3) : cat;
+    return `<div class="side-index-item" data-target="${slug}" data-fullname="${cat}" style="font-family:'JetBrains Mono',monospace; font-size:8.5px; color:var(--slate); padding:1.5px 3px; text-align:right;">${short}</div>`;
+  }).join('');
+  document.body.appendChild(idx);
+
+  const bubble = document.createElement('div');
+  bubble.id = 'sideIndexBubble';
+  bubble.style = 'position:fixed; right:34px; background:var(--flame); color:var(--ink); font-family:\'Oswald\',sans-serif; font-weight:600; font-size:16px; padding:8px 16px; border-radius:12px 12px 12px 2px; display:none; z-index:16; box-shadow:0 4px 12px rgba(0,0,0,0.4); white-space:nowrap;';
+  document.body.appendChild(bubble);
+
+  const items = [...idx.querySelectorAll('.side-index-item')];
+  function jumpTo(target){
+    const el = document.getElementById(target);
+    if (el) el.scrollIntoView({ behavior:'auto', block:'start' });
+  }
+  function nearestItem(clientY){
+    let best = items[0], bestDist = Infinity;
+    items.forEach(item => {
+      const r = item.getBoundingClientRect();
+      const mid = r.top + r.height/2;
+      const dist = Math.abs(clientY - mid);
+      if (dist < bestDist){ bestDist = dist; best = item; }
+    });
+    return best;
+  }
+  function showBubble(item){
+    bubble.textContent = item.dataset.fullname;
+    bubble.style.top = (item.getBoundingClientRect().top - 6) + 'px';
+    bubble.style.display = 'block';
+  }
+  idx.addEventListener('pointerdown', (e) => {
+    idx.setPointerCapture(e.pointerId);
+    const item = nearestItem(e.clientY);
+    showBubble(item);
+    jumpTo(item.dataset.target);
+  });
+  idx.addEventListener('pointermove', (e) => {
+    if (bubble.style.display !== 'block') return;
+    const item = nearestItem(e.clientY);
+    showBubble(item);
+    jumpTo(item.dataset.target);
+  });
+  const endDrag = () => { bubble.style.display = 'none'; };
+  idx.addEventListener('pointerup', endDrag);
+  idx.addEventListener('pointercancel', endDrag);
+}
+
 function groupByToggleHtml(current){
   return `<div style="padding:10px 18px 10px 18px;">
     <div style="display:flex; background:var(--panel); border-radius:10px; padding:3px;">
@@ -202,6 +268,7 @@ function attachShellHandlers(){
     el.onclick = () => {
       const tab = el.dataset.tab;
       state.currentTab = tab;
+      removeSideIndex();
       if (tab === 'track') renderTrack();
       else if (tab === 'scale') renderScale();
       else if (tab === 'phase') renderPhase();
@@ -941,10 +1008,13 @@ async function renderTrack(){
   }).join('');
 
   let listHtml = '';
+  state.trackFlatOrder = [];
   orderedKeys.forEach(cat => {
     const items = grouped[cat] || [];
     if (items.length === 0) return;
-    listHtml += `<div class="category">${cat}</div>` + items.map(exerciseRow).join('');
+    const slug = 'trackcat-' + cat.replace(/[^a-z0-9]/gi,'');
+    listHtml += `<div class="category" id="${slug}">${cat}</div>` + items.map(exerciseRow).join('');
+    state.trackFlatOrder.push(...items.map(ex => ({ id: ex.id, name: ex.name })));
   });
   if (state.exercises.length === 0){
     const starters = getStarterExercises(dayTypeLabel);
@@ -999,6 +1069,11 @@ async function renderTrack(){
   document.querySelectorAll('.groupby-chip').forEach(chip => {
     chip.onclick = () => { setGroupByPref(chip.dataset.groupby); renderTrack(); };
   });
+  if (state.exercises.length > 0 && orderedKeys.some(k => (grouped[k]||[]).length)){
+    attachSideIndex(orderedKeys.filter(k => (grouped[k]||[]).length), 'trackcat-', { top: 230, bottom: 100 });
+  } else {
+    removeSideIndex();
+  }
   const scrollEl = document.querySelector('.scroll-area');
   requestAnimationFrame(() => { scrollEl.scrollTop = state.trackScrollY; });
   scrollEl.onscroll = () => { state.trackScrollY = scrollEl.scrollTop; };
@@ -1043,6 +1118,7 @@ async function renderTrack(){
 }
 
 function showExerciseActionsMenu(exerciseId, exerciseName){
+  removeSideIndex();
   const overlay = document.createElement('div');
   overlay.style = 'position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:20; display:flex; align-items:center; justify-content:center;';
   overlay.innerHTML = `
@@ -1225,7 +1301,7 @@ async function openPicker(initialTab){
     </div>
     <div class="overlay-scroll" id="pickerBody"></div>`;
   document.body.appendChild(overlay);
-  overlay.querySelector('#closePicker').onclick = () => { removeDbSideIndex(); overlay.remove(); };
+  overlay.querySelector('#closePicker').onclick = () => { removeSideIndex(); overlay.remove(); };
 
   const result = await withTimeout(
     supabaseClient.from('exercises').select('id, name, category, weekday, alt_group_id').eq('active', true),
@@ -1233,15 +1309,8 @@ async function openPicker(initialTab){
   );
   const all = result.__timeout || result.error ? [] : (result.data || []);
 
-  function removeDbSideIndex(){
-    const existing = document.getElementById('dbSideIndex');
-    if (existing) existing.remove();
-    const existingBubble = document.getElementById('dbIndexBubble');
-    if (existingBubble) existingBubble.remove();
-  }
-
   function renderMineTab(){
-    removeDbSideIndex();
+    removeSideIndex();
     const body = overlay.querySelector('#pickerBody');
     body.innerHTML = `
       <div class="search-bar">🔍 <input id="pickerSearch" placeholder="Search your exercises…"></div>
@@ -1327,7 +1396,7 @@ async function openPicker(initialTab){
           </div>
         </div>`;
       body.querySelectorAll('.db-starter-chip').forEach(chip => {
-        chip.onclick = () => { removeDbSideIndex(); overlay.remove(); openSuggestionPreview(chip.dataset.name, EQUIPMENT_TO_CATEGORY[chip.dataset.equip] || 'Other'); };
+        chip.onclick = () => { removeSideIndex(); overlay.remove(); openSuggestionPreview(chip.dataset.name, EQUIPMENT_TO_CATEGORY[chip.dataset.equip] || 'Other'); };
       });
     }
 
@@ -1350,64 +1419,12 @@ async function openPicker(initialTab){
       });
       body.querySelector('#dbList').innerHTML = html || '<div class="empty-state">No matches.</div>';
 
-      // Fixed side index over the whole overlay (not nested in the scrolling body),
-      // so it stays put regardless of scroll position. Tap jumps; drag scrubs through
-      // sections with a floating bubble showing the full name, like iOS Contacts.
-      removeDbSideIndex();
-      const idx = document.createElement('div');
-      idx.id = 'dbSideIndex';
-      idx.style = 'position:fixed; right:6px; top:170px; bottom:110px; display:flex; flex-direction:column; justify-content:center; gap:2px; padding:4px 8px 4px 3px; z-index:15; touch-action:none;';
-      idx.innerHTML = presentKeys.map(cat => {
-        const slug = 'cat-' + cat.replace(/[^a-z0-9]/gi,'');
-        const short = cat.length > 3 ? cat.slice(0,3) : cat;
-        return `<div class="db-side-index-item" data-target="${slug}" data-fullname="${cat}" style="font-family:'JetBrains Mono',monospace; font-size:8.5px; color:var(--slate); padding:1.5px 3px; text-align:right;">${short}</div>`;
-      }).join('');
-      overlay.appendChild(idx);
-
-      const bubble = document.createElement('div');
-      bubble.id = 'dbIndexBubble';
-      bubble.style = 'position:fixed; right:34px; background:var(--flame); color:var(--ink); font-family:\'Oswald\',sans-serif; font-weight:600; font-size:16px; padding:8px 16px; border-radius:12px 12px 12px 2px; display:none; z-index:16; box-shadow:0 4px 12px rgba(0,0,0,0.4); white-space:nowrap;';
-      overlay.appendChild(bubble);
-
-      const items = [...idx.querySelectorAll('.db-side-index-item')];
-      function jumpTo(target){
-        const el = document.getElementById(target);
-        if (el) el.scrollIntoView({ behavior:'auto', block:'start' });
-      }
-      function nearestItem(clientY){
-        let best = items[0], bestDist = Infinity;
-        items.forEach(item => {
-          const r = item.getBoundingClientRect();
-          const mid = r.top + r.height/2;
-          const dist = Math.abs(clientY - mid);
-          if (dist < bestDist){ bestDist = dist; best = item; }
-        });
-        return best;
-      }
-      function showBubble(item){
-        bubble.textContent = item.dataset.fullname;
-        bubble.style.top = (item.getBoundingClientRect().top - 6) + 'px';
-        bubble.style.display = 'block';
-      }
-      idx.addEventListener('pointerdown', (e) => {
-        idx.setPointerCapture(e.pointerId);
-        const item = nearestItem(e.clientY);
-        showBubble(item);
-        jumpTo(item.dataset.target);
-      });
-      idx.addEventListener('pointermove', (e) => {
-        if (bubble.style.display !== 'block') return; // only while actively dragging
-        const item = nearestItem(e.clientY);
-        showBubble(item);
-        jumpTo(item.dataset.target);
-      });
-      const endDrag = () => { bubble.style.display = 'none'; };
-      idx.addEventListener('pointerup', endDrag);
-      idx.addEventListener('pointercancel', endDrag);
+      // Fixed side index over the whole screen, drag-scrub with a name bubble.
+      attachSideIndex(presentKeys, 'cat-', { top: 170, bottom: 110 });
 
       body.querySelectorAll('.db-pick').forEach(el => {
         el.onclick = () => {
-          removeDbSideIndex();
+          removeSideIndex();
           overlay.remove();
           openSuggestionPreview(el.dataset.name, EQUIPMENT_TO_CATEGORY[el.dataset.equip] || 'Other');
         };
@@ -1765,13 +1782,30 @@ function renderLastTimePlates(overlay, exerciseName, lastEntry){
 }
 
 function openLogForm(exerciseId, exerciseName){
+  removeSideIndex();
   let unit = 'kg';
   let weightType = 'total';
   let lastEntry = null;
+
+  // Prev/next navigation only makes sense if this exercise is part of today's
+  // currently-displayed Track order (won't apply if opened from the picker/
+  // suggestions/search, where there's no natural "list" to page through).
+  const flatOrder = state.trackFlatOrder || [];
+  const navIdx = flatOrder.findIndex(e => e.id === exerciseId);
+  const navPrev = navIdx > 0 ? flatOrder[navIdx - 1] : null;
+  const navNext = (navIdx !== -1 && navIdx < flatOrder.length - 1) ? flatOrder[navIdx + 1] : null;
+
   const overlay = document.createElement('div');
   overlay.className = 'overlay-screen';
   overlay.innerHTML = `
-    <div class="form-header"><button id="closeLog">✕</button><h1>${exerciseName}</h1><div style="width:18px;"></div></div>
+    <div class="form-header" style="justify-content:space-between;">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <button id="prevExerciseBtn" style="font-size:20px; ${navPrev ? '' : 'visibility:hidden;'}">‹</button>
+        <button id="closeLog">✕</button>
+      </div>
+      <h1 style="flex:1; text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:0 6px;">${exerciseName}</h1>
+      <button id="nextExerciseBtn" style="font-size:20px; ${navNext ? '' : 'visibility:hidden;'}">›</button>
+    </div>
     <div class="overlay-scroll">
       <div id="guideArea" style="margin-bottom:18px;"></div>
       <div id="sameAsLastArea" style="margin-bottom:18px;"></div>
@@ -1802,7 +1836,25 @@ function openLogForm(exerciseId, exerciseName){
       <div id="historyList"><div class="empty-state" style="padding:20px;">Loading…</div></div>
     </div>`;
   document.body.appendChild(overlay);
-  overlay.querySelector('#closeLog').onclick = () => overlay.remove();
+  overlay.querySelector('#closeLog').onclick = () => {
+    overlay.remove();
+    if (state.currentTab === 'track') renderTrack();
+  };
+  if (navPrev) overlay.querySelector('#prevExerciseBtn').onclick = () => { overlay.remove(); openLogForm(navPrev.id, navPrev.name); };
+  if (navNext) overlay.querySelector('#nextExerciseBtn').onclick = () => { overlay.remove(); openLogForm(navNext.id, navNext.name); };
+
+  // Swipe left/right to page through exercises, same direction convention as the arrows.
+  let touchStartX = null;
+  overlay.addEventListener('touchstart', (e) => { touchStartX = e.touches[0].clientX; }, { passive: true });
+  overlay.addEventListener('touchend', (e) => {
+    if (touchStartX === null) return;
+    const dx = e.changedTouches[0].clientX - touchStartX;
+    touchStartX = null;
+    if (Math.abs(dx) < 70) return; // require a deliberate swipe, not an incidental scroll drag
+    if (dx < 0 && navNext){ overlay.remove(); openLogForm(navNext.id, navNext.name); }
+    else if (dx > 0 && navPrev){ overlay.remove(); openLogForm(navPrev.id, navPrev.name); }
+  }, { passive: true });
+
   overlay.querySelector('#weightInput').addEventListener('input', () => renderPlateCalc(overlay, exerciseName));
   overlay.querySelectorAll('.unit-toggle button').forEach(b => {
     b.onclick = () => { overlay.querySelectorAll('.unit-toggle button').forEach(x=>x.classList.remove('active')); b.classList.add('active'); unit = b.dataset.u; renderPlateCalc(overlay, exerciseName); };
