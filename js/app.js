@@ -909,6 +909,36 @@ function renderMuscleMap(primaryMuscles, secondaryMuscles){
   return `<div style="display:flex; justify-content:center; gap:22px; background:var(--ink); border-radius:14px; padding:14px 8px 8px 8px; margin-bottom:12px;">${figures.join('')}</div>`;
 }
 
+// ---- Wikimedia Commons diagrams (CC BY-SA 3.0, "Weight training diagrams" category) ----
+// Small curated set of confirmed filenames — most exercises won't match, and that's fine:
+// unmatched or failed-to-load images fall back to the free-exercise-db photo automatically.
+const WIKIMEDIA_BASE = 'https://commons.wikimedia.org/wiki/Special:FilePath/';
+const WIKIMEDIA_MATCHES = [
+  { keywords: ['hammer','curl','dumbbell'], file: 'Bicep hammer curl with dumbbell' },
+  { keywords: ['reverse','curl','dumbbell'], file: 'Biceps curl reverse with dumbbells' },
+  { keywords: ['alternat','curl','dumbbell'], file: 'Alternating bicep curl with dumbbell' },
+  { keywords: ['curl','dumbbell'], file: 'Biceps curl with dumbbell' },
+  { keywords: ['cable','crossover'], file: 'Cable crossover' },
+  { keywords: ['cable','shrug'], file: 'Cable shoulder shrugs' },
+  { keywords: ['butterfly'], file: 'Butterfly machine' },
+  { keywords: ['pec','fly','machine'], file: 'Butterfly machine' },
+  { keywords: ['bosu'], file: 'Bosu ball push up' },
+  { keywords: ['bridge'], file: 'Bridging' },
+  { keywords: ['inverted','row'], file: 'Body row' },
+  { keywords: ['leg','lift'], file: 'Body leg lifts' },
+  { keywords: ['ab','rollout'], file: 'Ab rollout on knees with barbell' }
+];
+function matchWikimedia(name){
+  const n = (name || '').toLowerCase();
+  for (const entry of WIKIMEDIA_MATCHES){
+    if (entry.keywords.every(k => n.includes(k))) return entry.file;
+  }
+  return null;
+}
+function wikimediaUrl(file, frame){
+  return WIKIMEDIA_BASE + encodeURIComponent(file.replace(/ /g,'_') + '_' + frame + '.svg');
+}
+
 async function loadExerciseGuide(overlay, exerciseName){
   const area = overlay.querySelector('#guideArea');
   if (!area) return;
@@ -932,10 +962,28 @@ async function loadExerciseGuide(overlay, exerciseName){
       background:${isPrimary ? 'rgba(255,86,48,0.16)' : 'var(--panel)'};
       color:${isPrimary ? '#FF5630' : 'var(--slate)'};">${cap(m)}</span>`;
   }).join('');
-  const muscleMap = ''; // pulled from the live guide — disliked, reverting until a better option is previewed and approved
-  const img = (match.images && match.images.length)
-    ? `<img src="${EXDB_IMG_BASE}${match.images[0]}" alt="" style="width:100%; border-radius:12px; margin-bottom:10px; background:#fff;" loading="lazy">`
-    : '';
+  const muscleMap = ''; // schematic diagram removed per earlier decision — not reintroduced here
+  const fallbackPhoto = (match.images && match.images.length)
+    ? `${EXDB_IMG_BASE}${match.images[0]}` : '';
+  const wikiFile = matchWikimedia(exerciseName) || matchWikimedia(match.name);
+  let img;
+  if (wikiFile){
+    const f1 = wikimediaUrl(wikiFile, 1), f2 = wikimediaUrl(wikiFile, 2);
+    // Each frame falls back to the free-exercise-db photo if Wikimedia fails to load;
+    // if there's no photo either, the image just hides itself rather than showing a broken icon.
+    const onerr = fallbackPhoto
+      ? `this.onerror=null; this.src='${fallbackPhoto}'; this.style.gridColumn='1 / -1';`
+      : `this.style.display='none';`;
+    img = `<div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:10px;">
+        <img src="${f1}" alt="" style="width:100%; border-radius:12px; background:#fff;" loading="lazy" onerror="${onerr}">
+        <img src="${f2}" alt="" style="width:100%; border-radius:12px; background:#fff;" loading="lazy" onerror="${onerr}">
+      </div>
+      <div class="small" style="color:var(--slate); margin:-4px 0 10px 0;">Diagram: Wikimedia Commons (CC BY-SA 3.0)</div>`;
+  } else {
+    img = fallbackPhoto
+      ? `<img src="${fallbackPhoto}" alt="" style="width:100%; border-radius:12px; margin-bottom:10px; background:#fff;" loading="lazy">`
+      : '';
+  }
   const steps = (match.instructions||[]).map((s,i) =>
     `<div style="display:flex; gap:8px; margin-bottom:7px;">
        <span style="color:#FF5630; font-weight:600; font-size:12px; flex-shrink:0;">${i+1}</span>
