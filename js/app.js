@@ -492,64 +492,241 @@ function openEditDayTypeForm(weekday, currentLabel){
   };
 }
 
-const ONBOARDING_SLIDES = [
-  {
-    title: "Welcome to Zealift",
-    body: "Your gym plan, alt groups, and history — all in one place, synced to your account. A few quick things before you dive in."
-  },
-  {
-    title: "Logging a Set",
-    body: "Tap any exercise on Track to log it. Colored badges show alt groups — pick one from the group, not all of them. A green check means that slot's done for the day, even if a teammate exercise covered it."
-  },
-  {
-    title: "Adding Workouts",
-    body: "Tap the + button to log a set for today. Not on the list? Use \"Add Existing Exercise\" to pull from your full library, or \"Create New Exercise\" to start fresh."
-  },
-  {
-    title: "Make It Yours",
-    body: "Tap the workout type at the top of Track (e.g. \"Back & Biceps\") to rename it. Want to rearrange your whole week? Me → Swap Days moves an entire day's plan — and history — to a new weekday."
-  },
-  {
-    title: "Track Everything",
-    body: "Scale logs your body weight with a trend chart. Phase tracks your bulk/cut progress. Every set you've ever logged stays in that exercise's history, forever."
-  }
-];
+const DAY_PRESETS = {
+  ppl:        { label: 'Push / Pull / Legs', cycle: ['Push','Pull','Legs'] },
+  upperlower: { label: 'Upper / Lower',      cycle: ['Upper Body','Lower Body'] },
+  brosplit:   { label: 'Bro Split',          cycle: ['Chest','Back','Shoulders','Legs','Arms'] },
+  fullbody:   { label: 'Full Body',          cycle: ['Full Body'] },
+  blank:      { label: 'Start Blank',        cycle: ['Workout Day'] }
+};
 
-function showOnboarding(startIndex){
-  let idx = startIndex || 0;
+// Fills Monday-first through the chosen number of active days with the preset's
+// repeating cycle, leaving the remaining trailing days as Rest.
+function computeWeekFromPreset(numDays, presetKey){
+  const cycle = (DAY_PRESETS[presetKey] || DAY_PRESETS.ppl).cycle;
+  const week = [];
+  for (let i = 0; i < 7; i++){
+    week.push(i < numDays ? cycle[i % cycle.length] : 'Rest');
+  }
+  return week;
+}
+
+// Small visual aids built from the app's real CSS classes, not approximations,
+// so they stay pixel-consistent with the actual UI they're describing.
+const ONBOARD_VISUALS = {
+  makeItYours: `<div style="background:var(--panel); border-radius:12px; padding:12px 14px; display:flex; align-items:center; justify-content:space-between;">
+      <div style="font-family:'Oswald',sans-serif; font-size:15px; text-transform:uppercase;">Legs</div>
+      <div style="color:var(--flame); font-size:11px;">✎ tap to rename</div>
+    </div>`,
+  logging: `<div style="display:flex; flex-direction:column; gap:6px;">
+      <div class="exercise" style="background:rgba(63,203,126,0.1); border-radius:10px;">
+        <div><div class="ex-name-row"><div class="ex-name">Incline Press</div><div class="badge" style="background:#2DD4BF26; color:#2DD4BF;">Press Alt</div></div><div class="ex-last done">✓ Logged today</div></div>
+        <div class="check-circle">✓</div>
+      </div>
+      <div class="exercise" style="border-radius:10px;">
+        <div><div class="ex-name-row"><div class="ex-name">HS Incline Press</div><div class="badge" style="background:#2DD4BF26; color:#2DD4BF;">Press Alt</div></div><div class="ex-last">Not logged yet</div></div>
+        <div class="chev">›</div>
+      </div>
+    </div>`,
+  adding: `<div style="display:flex; flex-direction:column; align-items:center; gap:10px;">
+      <div style="width:38px; height:38px; border-radius:50%; background:var(--flame); color:var(--ink); font-size:20px; font-weight:700; display:flex; align-items:center; justify-content:center;">+</div>
+      <div style="width:100%; background:var(--panel); border-radius:10px; padding:8px 12px; font-size:11.5px;">
+        <div style="padding:6px 0; color:var(--flame); border-bottom:1px solid var(--line);">+ Create New Exercise</div>
+        <div style="padding:6px 0; color:var(--chalk);">Add Existing Exercise</div>
+      </div>
+    </div>`,
+  tracking: `<div style="background:var(--panel); border-radius:10px; padding:12px;">
+      <svg viewBox="0 0 200 40" width="100%" height="30"><polyline points="0,32 40,24 80,26 120,14 160,10 200,4" fill="none" stroke="var(--flame)" stroke-width="2.5"/></svg>
+      <div style="display:flex; gap:8px; margin-top:8px;">
+        <div style="flex:1; text-align:center; font-size:10px; color:var(--slate);">⚖ SCALE</div>
+        <div style="flex:1; text-align:center; font-size:10px; color:var(--slate);">📈 PHASE</div>
+      </div>
+    </div>`
+};
+
+function showOnboarding(mode){
+  mode = mode || 'full'; // 'full' (new user), 'teach' (tutorial replay), 'setup' (redo week only)
+  const teachSteps = [
+    { kind:'teach', title:'Welcome to Zealift',
+      body:'Your gym plan, alt groups, and history — all in one place, synced to your account. A few quick things before you dive in.' },
+    { kind:'teach', title:'Make It Yours', visual: ONBOARD_VISUALS.makeItYours,
+      body:`Tap the workout type at the top of Track (e.g. "Back & Biceps") to rename it. Want to rearrange your whole week? Me → Swap Days moves an entire day's plan — and history — to a new weekday.` },
+    { kind:'teach', title:'Logging a Set', visual: ONBOARD_VISUALS.logging,
+      body:`Tap any exercise on Track to log it. Colored badges show alt groups — pick one from the group, not all of them. A green check means that slot's done for the day, even if a teammate exercise covered it.` },
+    { kind:'teach', title:'Adding Workouts', visual: ONBOARD_VISUALS.adding,
+      body:'Tap the + button to log a set for today. Not on the list? Use "Add Existing Exercise" to pull from your full library, or "Create New Exercise" to start fresh.' },
+    { kind:'teach', title:'Track Everything', visual: ONBOARD_VISUALS.tracking,
+      body:`Scale logs your body weight with a trend chart. Phase tracks your bulk/cut progress. Every set you've ever logged stays in that exercise's history, forever.` }
+  ];
+  const setupSteps = [
+    { kind:'frequency' }, { kind:'preset' }, { kind:'confirm' }, { kind:'superset' }, { kind:'finish' }
+  ];
+  // Interleave: welcome -> frequency/preset/confirm -> make it yours -> logging -> superset -> adding -> tracking -> finish
+  let steps;
+  if (mode === 'teach') steps = teachSteps;
+  else if (mode === 'setup') steps = setupSteps;
+  else steps = [teachSteps[0], setupSteps[0], setupSteps[1], setupSteps[2], teachSteps[1], teachSteps[2], setupSteps[3], teachSteps[3], teachSteps[4], setupSteps[4]];
+
+  let idx = 0;
+  const wiz = { numDays: 5, presetKey: 'ppl', week: computeWeekFromPreset(5,'ppl'), superset: null };
   const overlay = document.createElement('div');
   overlay.style = 'position:fixed; inset:0; background:rgba(0,0,0,0.75); z-index:40; display:flex; align-items:center; justify-content:center; padding:20px;';
   document.body.appendChild(overlay);
 
-  function render(){
-    const slide = ONBOARDING_SLIDES[idx];
-    const dots = ONBOARDING_SLIDES.map((_, i) =>
-      `<div style="width:7px; height:7px; border-radius:50%; background:${i === idx ? 'var(--flame)' : 'var(--line)'};"></div>`
-    ).join('');
+  function shell(inner, opts){
+    opts = opts || {};
+    const dots = steps.map((_, i) => `<div style="width:6px; height:6px; border-radius:50%; background:${i===idx?'var(--flame)':'var(--line)'};"></div>`).join('');
     overlay.innerHTML = `
-      <div style="background:var(--panel); border-radius:20px; padding:28px 24px 24px 24px; width:100%; max-width:340px; position:relative;">
+      <div style="background:var(--panel); border-radius:20px; padding:26px 22px 22px 22px; width:100%; max-width:340px; max-height:88vh; overflow-y:auto; position:relative;">
         <div id="skipBtn" style="position:absolute; top:16px; right:18px; color:var(--slate); font-size:20px; cursor:pointer;">✕</div>
-        <div style="font-family:'JetBrains Mono', monospace; font-size:10px; color:var(--brass); letter-spacing:1.5px; margin-bottom:10px;">${idx + 1} / ${ONBOARDING_SLIDES.length}</div>
-        <div style="font-family:'Oswald', sans-serif; font-size:21px; font-weight:600; margin-bottom:12px;">${slide.title}</div>
-        <div style="font-size:13.5px; color:var(--chalk); line-height:1.6; margin-bottom:24px;">${slide.body}</div>
-        <div style="display:flex; gap:6px; justify-content:center; margin-bottom:20px;">${dots}</div>
+        ${inner}
+        <div style="display:flex; gap:6px; justify-content:center; margin:18px 0;">${dots}</div>
         <div style="display:flex; gap:10px;">
-          ${idx > 0 ? `<button id="backBtn" style="flex:1; padding:12px; border-radius:10px; background:var(--ink); color:var(--chalk); font-size:13px;">Back</button>` : ''}
-          <button id="nextBtn" style="flex:2; padding:12px; border-radius:10px; background:var(--flame); color:var(--ink); font-weight:600; font-size:13px;">${idx === ONBOARDING_SLIDES.length - 1 ? 'Get Started' : 'Next'}</button>
+          ${idx > 0 && !opts.noBack ? `<button id="backBtn" style="flex:1; padding:12px; border-radius:10px; background:var(--ink); color:var(--chalk); font-size:13px;">Back</button>` : ''}
+          <button id="nextBtn" style="flex:2; padding:12px; border-radius:10px; background:var(--flame); color:var(--ink); font-weight:600; font-size:13px;" ${opts.nextDisabled ? 'disabled style="opacity:0.5;"' : ''}>${opts.nextLabel || (idx === steps.length - 1 ? 'Finish' : 'Next')}</button>
         </div>
       </div>`;
-    overlay.querySelector('#skipBtn').onclick = closeOnboarding;
+    overlay.querySelector('#skipBtn').onclick = close;
     const backBtn = overlay.querySelector('#backBtn');
     if (backBtn) backBtn.onclick = () => { idx--; render(); };
-    overlay.querySelector('#nextBtn').onclick = () => {
-      if (idx === ONBOARDING_SLIDES.length - 1) closeOnboarding();
-      else { idx++; render(); }
-    };
   }
 
-  async function closeOnboarding(){
+  function render(){
+    const step = steps[idx];
+    if (step.kind === 'teach') renderTeach(step);
+    else if (step.kind === 'frequency') renderFrequency();
+    else if (step.kind === 'preset') renderPreset();
+    else if (step.kind === 'confirm') renderConfirm();
+    else if (step.kind === 'superset') renderSuperset();
+    else if (step.kind === 'finish') renderFinish();
+  }
+
+  function renderTeach(step){
+    shell(`
+      <div style="font-family:'JetBrains Mono', monospace; font-size:10px; color:var(--brass); letter-spacing:1.5px; margin-bottom:10px;">${idx + 1} / ${steps.length}</div>
+      <div style="font-family:'Oswald', sans-serif; font-size:20px; font-weight:600; margin-bottom:10px;">${step.title}</div>
+      <div style="font-size:13px; color:var(--chalk); line-height:1.6; margin-bottom:14px;">${step.body}</div>
+      ${step.visual ? `<div style="margin-bottom:6px;">${step.visual}</div>` : ''}
+    `);
+    overlay.querySelector('#nextBtn').onclick = () => advance();
+  }
+
+  function renderFrequency(){
+    shell(`
+      <div style="font-family:'Oswald', sans-serif; font-size:19px; text-transform:uppercase; margin-bottom:6px;">How many days a week?</div>
+      <div style="font-size:11.5px; color:var(--slate); margin-bottom:18px; line-height:1.5;">Sets up your week — change it anytime from the Me tab.</div>
+      <div style="display:flex; gap:8px; margin-bottom:8px;">
+        ${[3,4,5].map(n => `<button class="freqBtn" data-n="${n}" style="flex:1; background:${wiz.numDays===n?'var(--flame)':'var(--ink)'}; color:${wiz.numDays===n?'var(--ink)':'var(--chalk)'}; border-radius:10px; padding:14px 0; font-family:'JetBrains Mono',monospace; font-size:15px; font-weight:600;">${n}</button>`).join('')}
+      </div>
+      <div style="display:flex; gap:8px; margin-bottom:6px;">
+        ${[6,7].map(n => `<button class="freqBtn" data-n="${n}" style="flex:1; background:${wiz.numDays===n?'var(--flame)':'var(--ink)'}; color:${wiz.numDays===n?'var(--ink)':'var(--chalk)'}; border-radius:10px; padding:14px 0; font-family:'JetBrains Mono',monospace; font-size:15px; font-weight:600;">${n}</button>`).join('')}
+      </div>
+    `);
+    overlay.querySelectorAll('.freqBtn').forEach(b => {
+      b.onclick = () => { wiz.numDays = parseInt(b.dataset.n,10); wiz.week = computeWeekFromPreset(wiz.numDays, wiz.presetKey); render(); };
+    });
+    overlay.querySelector('#nextBtn').onclick = () => advance();
+  }
+
+  function renderPreset(){
+    shell(`
+      <div style="font-family:'Oswald', sans-serif; font-size:19px; text-transform:uppercase; margin-bottom:6px;">Pick a starting point</div>
+      <div style="font-size:11.5px; color:var(--slate); margin-bottom:16px; line-height:1.5;">A quick preset to build from — every day stays fully editable after.</div>
+      <div style="display:flex; flex-wrap:wrap; gap:7px; margin-bottom:6px;">
+        ${Object.entries(DAY_PRESETS).map(([k,v]) => `<button class="presetBtn" data-k="${k}" style="background:${wiz.presetKey===k?'var(--flame)':'var(--ink)'}; color:${wiz.presetKey===k?'var(--ink)':'var(--chalk)'}; border-radius:20px; padding:8px 14px; font-size:11.5px; ${wiz.presetKey===k?'font-weight:600;':''}">${v.label}</button>`).join('')}
+      </div>
+    `);
+    overlay.querySelectorAll('.presetBtn').forEach(b => {
+      b.onclick = () => { wiz.presetKey = b.dataset.k; wiz.week = computeWeekFromPreset(wiz.numDays, wiz.presetKey); render(); };
+    });
+    overlay.querySelector('#nextBtn').onclick = () => advance();
+  }
+
+  function renderConfirm(){
+    const cycle = [...DAY_PRESETS[wiz.presetKey].cycle, 'Rest'];
+    shell(`
+      <div style="font-family:'Oswald', sans-serif; font-size:19px; text-transform:uppercase; margin-bottom:6px;">Confirm your week</div>
+      <div style="font-size:11.5px; color:var(--slate); margin-bottom:14px;">Tap any day to cycle its type. You can rename it properly later too.</div>
+      <div style="display:flex; flex-direction:column; gap:6px; margin-bottom:6px;">
+        ${DAY_NAMES.map((d,i) => `<div class="dayCycle" data-i="${i}" style="display:flex; align-items:center; justify-content:space-between; background:var(--ink); border-radius:10px; padding:10px 14px; cursor:pointer;">
+          <div style="font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--slate); width:34px;">${d}</div>
+          <div style="font-size:12px; font-weight:500; flex:1; ${wiz.week[i]==='Rest'?'color:var(--slate); font-style:italic;':''}">${wiz.week[i]}</div>
+          <div style="color:var(--slate); font-size:12px;">↻</div>
+        </div>`).join('')}
+      </div>
+    `);
+    overlay.querySelectorAll('.dayCycle').forEach(row => {
+      row.onclick = () => {
+        const i = parseInt(row.dataset.i,10);
+        const pos = cycle.indexOf(wiz.week[i]);
+        wiz.week[i] = cycle[(pos + 1) % cycle.length];
+        render();
+      };
+    });
+    overlay.querySelector('#nextBtn').onclick = () => advance();
+  }
+
+  function renderSuperset(){
+    shell(`
+      <div style="font-family:'Oswald', sans-serif; font-size:19px; text-transform:uppercase; margin-bottom:6px;">Use supersets?</div>
+      <div style="font-size:11.5px; color:var(--slate); margin-bottom:16px; line-height:1.5;">That badge you just saw is called an alt group — interchangeable exercises grouped together, like a machine vs. dumbbell version of the same lift.</div>
+      <div style="display:flex; gap:10px; margin-bottom:6px;">
+        <button class="ssBtn" data-v="yes" style="flex:1; background:${wiz.superset==='yes'?'var(--flame)':'var(--ink)'}; color:${wiz.superset==='yes'?'var(--ink)':'var(--chalk)'}; border-radius:12px; padding:14px 0; font-family:'Oswald',sans-serif; font-size:12px; text-transform:uppercase;">Yes, I use these</button>
+        <button class="ssBtn" data-v="no" style="flex:1; background:${wiz.superset==='no'?'var(--flame)':'var(--ink)'}; color:${wiz.superset==='no'?'var(--ink)':'var(--chalk)'}; border-radius:12px; padding:14px 0; font-family:'Oswald',sans-serif; font-size:12px; text-transform:uppercase;">Not for now</button>
+      </div>
+    `);
+    overlay.querySelectorAll('.ssBtn').forEach(b => { b.onclick = () => { wiz.superset = b.dataset.v; render(); }; });
+    overlay.querySelector('#nextBtn').onclick = () => advance();
+  }
+
+  function renderFinish(){
+    shell(`
+      <div style="font-family:'Oswald', sans-serif; font-size:19px; text-transform:uppercase; margin-bottom:4px;">You're all set</div>
+      <div style="font-size:11.5px; color:var(--slate); margin-bottom:14px;">Your week — editable anytime from the Me tab.</div>
+      <div style="margin-bottom:6px;">
+        ${DAY_NAMES.map((d,i) => `<div style="display:flex; justify-content:space-between; padding:7px 0; border-bottom:1px solid var(--line); font-size:11.5px;">
+          <div style="font-family:'JetBrains Mono',monospace; color:var(--slate);">${d}</div>
+          <div style="${wiz.week[i]==='Rest'?'color:var(--slate);':''}">${wiz.week[i]}</div>
+        </div>`).join('')}
+      </div>
+    `, { nextLabel: 'Start Training' });
+    overlay.querySelector('#nextBtn').onclick = () => finishAndClose();
+  }
+
+  function advance(){
+    if (idx === steps.length - 1) finishAndClose();
+    else { idx++; render(); }
+  }
+
+  async function finishAndClose(){
     overlay.remove();
-    await supabaseClient.auth.updateUser({ data: { onboarded: true } });
+    // Only write day-type/superset data if this run actually included the setup steps.
+    const hadSetup = steps.some(s => s.kind === 'finish' || s.kind === 'confirm');
+    if (hadSetup){
+      const { data: userData } = await supabaseClient.auth.getUser();
+      if (userData && userData.user){
+        for (let i = 0; i < 7; i++){
+          await supabaseClient.from('day_types').upsert(
+            { user_id: userData.user.id, weekday: i, label: wiz.week[i] },
+            { onConflict: 'user_id,weekday' }
+          );
+        }
+        if (wiz.superset !== null){
+          await supabaseClient.auth.updateUser({ data: { usesSupersets: wiz.superset === 'yes' } });
+        }
+      }
+      if (state.currentTab === 'track') renderTrack();
+    }
+    if (mode === 'full'){
+      await supabaseClient.auth.updateUser({ data: { onboarded: true } });
+    }
+  }
+
+  async function close(){
+    overlay.remove();
+    if (mode === 'full'){
+      await supabaseClient.auth.updateUser({ data: { onboarded: true } });
+    }
   }
 
   render();
@@ -558,7 +735,7 @@ function showOnboarding(startIndex){
 async function maybeShowOnboarding(){
   const { data: userData } = await supabaseClient.auth.getUser();
   if (userData && userData.user && !userData.user.user_metadata.onboarded){
-    showOnboarding(0);
+    showOnboarding('full');
   }
 }
 
@@ -1956,13 +2133,15 @@ async function renderMe(){
         </div>
         <div class="me-item" id="swapDaysBtn"><div>Swap Days</div><div class="chev">›</div></div>
         <div class="me-item" id="replayTourBtn"><div>How Zealift Works</div><div class="chev">›</div></div>
+        <div class="me-item" id="redoWeekBtn"><div>Redo Week Setup</div><div class="chev">›</div></div>
         <div class="me-item" id="signOutBtn"><div>Sign Out</div><div class="chev">›</div></div>
       </div>
       ${renderTabbar()}
     </div>`;
   attachShellHandlers();
   document.getElementById('swapDaysBtn').onclick = openSwapDaysForm;
-  document.getElementById('replayTourBtn').onclick = () => showOnboarding(0);
+  document.getElementById('replayTourBtn').onclick = () => showOnboarding('teach');
+  document.getElementById('redoWeekBtn').onclick = () => showOnboarding('setup');
   document.getElementById('signOutBtn').onclick = async () => {
     await supabaseClient.auth.signOut();
   };
