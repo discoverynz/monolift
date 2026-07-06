@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 2.9';
+const APP_VERSION = 'Beta 3.0';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 
 // Common starter exercises shown as quick-add suggestions on an empty day, keyed by
@@ -94,7 +94,7 @@ async function groupExercisesByChoice(exercises, groupBy){
   return { grouped, orderedKeys };
 }
 function groupByToggleHtml(current){
-  return `<div style="padding:0 18px 10px 18px;">
+  return `<div style="padding:10px 18px 10px 18px;">
     <div style="display:flex; background:var(--panel); border-radius:10px; padding:3px;">
       <div class="groupby-chip ${current==='equipment'?'active':''}" data-groupby="equipment"
         style="flex:1; text-align:center; padding:7px 0; font-size:11px; font-weight:600; border-radius:8px; color:${current==='equipment'?'var(--chalk)':'var(--slate)'}; background:${current==='equipment'?'var(--ink)':'transparent'}; ${current==='equipment'?'box-shadow:0 1px 4px rgba(0,0,0,0.3);':''}">Equipment</div>
@@ -1236,6 +1236,8 @@ async function openPicker(initialTab){
   function removeDbSideIndex(){
     const existing = document.getElementById('dbSideIndex');
     if (existing) existing.remove();
+    const existingBubble = document.getElementById('dbIndexBubble');
+    if (existingBubble) existingBubble.remove();
   }
 
   function renderMineTab(){
@@ -1349,23 +1351,59 @@ async function openPicker(initialTab){
       body.querySelector('#dbList').innerHTML = html || '<div class="empty-state">No matches.</div>';
 
       // Fixed side index over the whole overlay (not nested in the scrolling body),
-      // so it stays put regardless of scroll position. Click jumps to that section.
+      // so it stays put regardless of scroll position. Tap jumps; drag scrubs through
+      // sections with a floating bubble showing the full name, like iOS Contacts.
       removeDbSideIndex();
       const idx = document.createElement('div');
       idx.id = 'dbSideIndex';
-      idx.style = 'position:fixed; right:6px; top:170px; bottom:110px; display:flex; flex-direction:column; justify-content:center; gap:2px; padding:4px 3px; z-index:15;';
+      idx.style = 'position:fixed; right:6px; top:170px; bottom:110px; display:flex; flex-direction:column; justify-content:center; gap:2px; padding:4px 8px 4px 3px; z-index:15; touch-action:none;';
       idx.innerHTML = presentKeys.map(cat => {
         const slug = 'cat-' + cat.replace(/[^a-z0-9]/gi,'');
         const short = cat.length > 3 ? cat.slice(0,3) : cat;
-        return `<div class="db-side-index-item" data-target="${slug}" style="font-family:'JetBrains Mono',monospace; font-size:8.5px; color:var(--slate); padding:1.5px 3px; cursor:pointer; text-align:right;">${short}</div>`;
+        return `<div class="db-side-index-item" data-target="${slug}" data-fullname="${cat}" style="font-family:'JetBrains Mono',monospace; font-size:8.5px; color:var(--slate); padding:1.5px 3px; text-align:right;">${short}</div>`;
       }).join('');
       overlay.appendChild(idx);
-      idx.querySelectorAll('.db-side-index-item').forEach(item => {
-        item.onclick = () => {
-          const target = document.getElementById(item.dataset.target);
-          if (target) target.scrollIntoView({ behavior:'smooth', block:'start' });
-        };
+
+      const bubble = document.createElement('div');
+      bubble.id = 'dbIndexBubble';
+      bubble.style = 'position:fixed; right:34px; background:var(--flame); color:var(--ink); font-family:\'Oswald\',sans-serif; font-weight:600; font-size:16px; padding:8px 16px; border-radius:12px 12px 12px 2px; display:none; z-index:16; box-shadow:0 4px 12px rgba(0,0,0,0.4); white-space:nowrap;';
+      overlay.appendChild(bubble);
+
+      const items = [...idx.querySelectorAll('.db-side-index-item')];
+      function jumpTo(target){
+        const el = document.getElementById(target);
+        if (el) el.scrollIntoView({ behavior:'auto', block:'start' });
+      }
+      function nearestItem(clientY){
+        let best = items[0], bestDist = Infinity;
+        items.forEach(item => {
+          const r = item.getBoundingClientRect();
+          const mid = r.top + r.height/2;
+          const dist = Math.abs(clientY - mid);
+          if (dist < bestDist){ bestDist = dist; best = item; }
+        });
+        return best;
+      }
+      function showBubble(item){
+        bubble.textContent = item.dataset.fullname;
+        bubble.style.top = (item.getBoundingClientRect().top - 6) + 'px';
+        bubble.style.display = 'block';
+      }
+      idx.addEventListener('pointerdown', (e) => {
+        idx.setPointerCapture(e.pointerId);
+        const item = nearestItem(e.clientY);
+        showBubble(item);
+        jumpTo(item.dataset.target);
       });
+      idx.addEventListener('pointermove', (e) => {
+        if (bubble.style.display !== 'block') return; // only while actively dragging
+        const item = nearestItem(e.clientY);
+        showBubble(item);
+        jumpTo(item.dataset.target);
+      });
+      const endDrag = () => { bubble.style.display = 'none'; };
+      idx.addEventListener('pointerup', endDrag);
+      idx.addEventListener('pointercancel', endDrag);
 
       body.querySelectorAll('.db-pick').forEach(el => {
         el.onclick = () => {
@@ -1385,6 +1423,7 @@ async function openPicker(initialTab){
         t.classList.remove('active'); t.style.color = 'var(--slate)'; t.style.borderBottomColor = 'transparent';
       });
       tab.classList.add('active'); tab.style.color = 'var(--chalk)'; tab.style.borderBottomColor = 'var(--flame)';
+      overlay.querySelector('#pickerBody').scrollTop = 0;
       if (tab.dataset.tab === 'mine') renderMineTab(); else renderDatabaseTab();
     };
   });
