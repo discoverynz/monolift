@@ -45,7 +45,7 @@ input:focus, button:focus{ outline:none; }
 
 /* ---------- Exercise list ---------- */
 .category{ font-family:'Oswald', sans-serif; font-size:17px; font-weight:600; letter-spacing:1.5px; color:var(--brass); text-transform:uppercase; padding:18px 18px 8px 18px; }
-.exercise{ display:flex; align-items:center; justify-content:space-between; padding:12px 18px; border-bottom:1px solid var(--line); }
+.exercise{ display:flex; align-items:center; justify-content:space-between; padding:12px 18px; border-bottom:1px solid var(--line); position:relative; overflow:hidden; }
 .ex-name{ font-size:17.5px; font-weight:500; }
 .ex-last{ font-family:'JetBrains Mono', monospace; font-size:14px; color:var(--slate); margin-top:4px; }
 .ex-last.done{ color:var(--good); font-weight:600; }
@@ -91,6 +91,7 @@ input:focus, button:focus{ outline:none; }
 
 /* ---------- Pass 2: alt badges, search, action rows ---------- */
 .badge{ font-size:11px; font-weight:600; padding:2px 6px; border-radius:5px; }
+.corner-tag{ position:absolute; top:0; right:0; font-size:9.5px; font-weight:700; padding:3px 9px 3px 11px; text-transform:uppercase; letter-spacing:0.3px; border-radius:0 0 0 10px; color:var(--ink); }
 .ex-name-row{ display:flex; align-items:center; gap:6px; }
 .ex-last.via{ color:var(--good); opacity:0.7; font-weight:500; font-style:italic; }
 .search-bar{ margin:12px 18px 14px 18px; background:var(--panel); border-radius:12px; padding:11px 14px; display:flex; align-items:center; gap:8px; font-size:15.5px; color:var(--slate); }

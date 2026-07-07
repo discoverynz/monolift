@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 3.2';
+const APP_VERSION = 'Beta 3.3';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 
 // Common starter exercises shown as quick-add suggestions on an empty day, keyed by
@@ -577,10 +577,11 @@ async function showAltGroupHistory(groupId, groupName){
 function exerciseRow(ex){
   const groupName = ex.alt_groups ? ex.alt_groups.name : null;
   const groupColor = ex.alt_groups ? ex.alt_groups.color : null;
-  const badge = groupName
-    ? `<div class="badge alt-badge-tap" data-group-id="${ex.alt_group_id}" data-group-name="${groupName}" style="background:${groupColor}26; color:${groupColor}; display:inline-block; margin-top:4px;">${groupName} ↗</div>`
+  const cornerTag = groupName
+    ? `<div class="corner-tag alt-badge-tap" data-group-id="${ex.alt_group_id}" data-group-name="${groupName}" style="background:${groupColor};">${groupName}</div>`
     : '';
   const borderStyle = groupColor ? `border-left:3px solid ${groupColor};` : '';
+  const topPad = groupName ? 'padding-top:5px;' : '';
 
   let subtitle, showCheck, doneStyle = '';
   if (ex.loggedToday){
@@ -595,9 +596,9 @@ function exerciseRow(ex){
   }
 
   return `<div class="exercise" style="${borderStyle} ${doneStyle}" data-id="${ex.id}" data-name="${ex.name}">
-    <div style="flex:1; min-width:0;">
+    ${cornerTag}
+    <div style="flex:1; min-width:0; ${topPad}">
       <div class="ex-name">${ex.name}</div>
-      ${badge}
       ${subtitle}
     </div>
     ${showCheck ? `<div class="check-circle">${ICON_CHECK}</div>` : `<div class="chev">›</div>`}
