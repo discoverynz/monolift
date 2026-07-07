@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 4.2';
+const APP_VERSION = 'Beta 4.3';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 
 // Common starter exercises shown as quick-add suggestions on an empty day, keyed by
@@ -121,8 +121,6 @@ function attachCategoryTabs(keys, prefix, scrollEl){
 
   function setActive(target){
     tabs.forEach(t => t.classList.toggle('active', t.dataset.target === target));
-    const activeTab = tabs.find(t => t.dataset.target === target);
-    if (activeTab) activeTab.scrollIntoView({ behavior:'smooth', inline:'nearest', block:'nearest' });
   }
   tabs.forEach(tab => {
     tab.onclick = () => {
@@ -133,6 +131,7 @@ function attachCategoryTabs(keys, prefix, scrollEl){
   });
 
   let ticking = false;
+  let lastActive = sections[0].id;
   function onScroll(){
     if (ticking) return;
     ticking = true;
@@ -143,7 +142,13 @@ function attachCategoryTabs(keys, prefix, scrollEl){
         if (sec.getBoundingClientRect().top - rowBottom <= 4) current = sec;
         else break;
       }
-      setActive(current.id);
+      // Only touch the DOM when the active section actually changed - doing
+      // this unconditionally on every scroll event was fighting the browser's
+      // own momentum scrolling and causing visibly janky, staggered scrolling.
+      if (current.id !== lastActive){
+        lastActive = current.id;
+        setActive(current.id);
+      }
       ticking = false;
     });
   }
@@ -543,22 +548,25 @@ function exerciseRow(ex){
   const cornerTag = groupName
     ? `<div class="corner-tag alt-badge-tap" data-group-id="${ex.alt_group_id}" data-group-name="${groupName}" style="background:${groupColor};">${groupName}</div>`
     : '';
-  const borderStyle = groupColor ? `border-left:4px solid ${groupColor};` : '';
   const topPad = groupName ? 'padding-top:5px;' : '';
 
-  let subtitle, showCheck, doneStyle = '';
+  let subtitle, showCheck, isDone = false;
   if (ex.loggedToday){
     subtitle = `<div class="ex-last done">✓ Logged today — ${formatSetValue(ex.lastSet)}</div>`;
-    showCheck = true; doneStyle = 'background:#2B3D2A; border-top-color:#8FBF7A; border-right-color:#8FBF7A; border-bottom-color:#8FBF7A;';
+    showCheck = true; isDone = true;
   } else if (ex.completeVia){
     subtitle = `<div class="ex-last via">↳ Complete via ${ex.completeVia}</div>`;
-    showCheck = true; doneStyle = 'background:#253323; border-top-color:#8FBF7A; border-right-color:#8FBF7A; border-bottom-color:#8FBF7A;';
+    showCheck = true; isDone = true;
   } else {
     subtitle = `<div class="ex-last">${ex.lastSet ? formatSetValue(ex.lastSet) + ' · ' + ex.lastSet.logged_at : 'Not logged yet'}</div>`;
     showCheck = false;
   }
+  // Alt-group color always owns the left edge when present. Only when there's
+  // no alt-group does "done" get its own thin green accent there instead -
+  // the card itself stays the same neutral background either way.
+  const borderStyle = groupColor ? `border-left:4px solid ${groupColor};` : (isDone ? `border-left:3px solid var(--good);` : '');
 
-  return `<div class="exercise" style="${borderStyle} ${doneStyle}" data-id="${ex.id}" data-name="${ex.name}">
+  return `<div class="exercise" style="${borderStyle}" data-id="${ex.id}" data-name="${ex.name}">
     ${cornerTag}
     <div style="flex:1; min-width:0; ${topPad}">
       <div class="ex-name">${ex.name}</div>

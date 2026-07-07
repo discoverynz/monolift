@@ -44,11 +44,11 @@ input:focus, button:focus{ outline:none; }
 .quote{ font-size:11px; color:var(--slate); font-style:italic; margin-top:6px; line-height:1.4; }
 
 /* ---------- Exercise list ---------- */
-.category{ font-family:'Bebas Neue', sans-serif; font-size:16px; font-weight:400; letter-spacing:1.5px; color:var(--flame); text-transform:uppercase; padding:16px 18px 6px 18px; }
+.category{ font-family:'Bebas Neue', sans-serif; font-size:16px; font-weight:400; letter-spacing:1.5px; color:var(--flame); text-transform:uppercase; padding:16px 18px 6px 18px; scroll-margin-top:46px; }
 .exercise{ display:flex; align-items:center; justify-content:space-between; padding:14px 18px; margin:0 12px 10px 12px; background:var(--panel); border:1px solid var(--line); position:relative; overflow:hidden; }
 .ex-name{ font-size:17.5px; font-weight:500; }
 .ex-last{ font-family:'JetBrains Mono', monospace; font-size:14px; color:var(--slate); margin-top:4px; }
-.ex-last.done{ color:#C8F0BC; font-weight:600; }
+.ex-last.done{ color:var(--good); font-weight:600; }
 .chev{ color:var(--slate); font-size:21.5px; }
 .check-circle{ width:24px; height:24px; border-radius:50%; background:var(--ink); border:1.5px solid var(--good); display:flex; align-items:center; justify-content:center; flex-shrink:0; }
 
@@ -97,7 +97,7 @@ input:focus, button:focus{ outline:none; }
 .cat-tab{ flex-shrink:0; font-family:'Bebas Neue', sans-serif; font-size:13px; letter-spacing:0.5px; color:var(--slate); padding-bottom:9px; border-bottom:2px solid transparent; white-space:nowrap; }
 .cat-tab.active{ color:var(--flame); border-bottom-color:var(--flame); }
 .ex-name-row{ display:flex; align-items:center; gap:6px; }
-.ex-last.via{ color:#C8F0BC; opacity:0.85; font-weight:500; font-style:italic; }
+.ex-last.via{ color:var(--good); opacity:0.7; font-weight:500; font-style:italic; }
 .search-bar{ margin:12px 18px 14px 18px; background:var(--panel); border-radius:12px; padding:11px 14px; display:flex; align-items:center; gap:8px; font-size:15.5px; color:var(--slate); }
 .search-bar input{ flex:1; background:none; color:var(--chalk); font-size:15.5px; }
 .search-bar input::placeholder{ color:#5d5f64; }
