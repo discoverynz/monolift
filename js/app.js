@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 4.8';
+const APP_VERSION = 'Beta 4.9';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 
 // Common starter exercises shown as quick-add suggestions on an empty day, keyed by
@@ -2067,31 +2067,67 @@ function setTimerSound(k){ localStorage.setItem('zealift_timer_sound', k); }
 function getTimerDefault(){ return parseInt(localStorage.getItem('zealift_timer_default') || '90', 10); }
 function setTimerDefault(s){ localStorage.setItem('zealift_timer_default', String(s)); }
 
-let _timerAudioCtx = null;
-function playTimerSound(){
-  const key = getTimerSound();
+// Encodes a mono Float32 PCM buffer into a WAV Blob (16-bit PCM).
+function pcmToWavBlob(samples, sampleRate){
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const writeStr = (offset, str) => { for (let i=0;i<str.length;i++) view.setUint8(offset+i, str.charCodeAt(i)); };
+  writeStr(0, 'RIFF'); view.setUint32(4, 36 + samples.length*2, true); writeStr(8, 'WAVE');
+  writeStr(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true); view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate*2, true);
+  view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  writeStr(36, 'data'); view.setUint32(40, samples.length*2, true);
+  let off = 44;
+  for (let i=0;i<samples.length;i++, off+=2){
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(off, s < 0 ? s*0x8000 : s*0x7FFF, true);
+  }
+  return new Blob([buffer], { type:'audio/wav' });
+}
+
+let _timerBlobCache = {};
+async function renderTimerSoundBlob(key){
+  if (_timerBlobCache[key]) return _timerBlobCache[key];
   const snd = TIMER_SOUNDS[key];
+  if (!snd || !snd.pattern.length) return null;
+  const sampleRate = 44100;
+  const totalDur = snd.pattern.reduce((sum,[,dur]) => sum + dur + 0.06, 0) + 0.05;
+  const OfflineCtx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  const ctx = new OfflineCtx(1, Math.ceil(sampleRate*totalDur), sampleRate);
+  let t = 0;
+  snd.pattern.forEach(([freq, dur]) => {
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.connect(g); g.connect(ctx.destination);
+    o.type = snd.type; o.frequency.value = freq;
+    g.gain.setValueAtTime(0.001, t);
+    g.gain.exponentialRampToValueAtTime(0.35, t+0.02);
+    g.gain.exponentialRampToValueAtTime(0.001, t+dur);
+    o.start(t); o.stop(t+dur+0.02);
+    t += dur + 0.06;
+  });
+  const rendered = await ctx.startRendering();
+  const blob = pcmToWavBlob(rendered.getChannelData(0), sampleRate);
+  const url = URL.createObjectURL(blob);
+  _timerBlobCache[key] = url;
+  return url;
+}
+
+let _timerAlertEl = null;
+async function playTimerSound(){
+  const key = getTimerSound();
   if (navigator.vibrate && key !== 'mute') navigator.vibrate([200,100,200]);
-  if (!snd || !snd.pattern.length) return;
+  if (key === 'mute') return;
   try {
-    if (!_timerAudioCtx) _timerAudioCtx = new (window.AudioContext||window.webkitAudioContext)();
-    const ctx = _timerAudioCtx;
-    const startPattern = () => {
-      let t = ctx.currentTime;
-      snd.pattern.forEach(([freq, dur]) => {
-        const o = ctx.createOscillator(), g = ctx.createGain();
-        o.connect(g); g.connect(ctx.destination);
-        o.type = snd.type; o.frequency.value = freq;
-        g.gain.setValueAtTime(0.001, t);
-        g.gain.exponentialRampToValueAtTime(0.35, t+0.02);
-        g.gain.exponentialRampToValueAtTime(0.001, t+dur);
-        o.start(t); o.stop(t+dur+0.02);
-        t += dur + 0.06;
-      });
-    };
-    // iOS/Safari suspend a freshly-created (or backgrounded) context until resumed
-    // inside a user gesture — resume before playing or the sound silently fails.
-    if (ctx.state === 'suspended'){ ctx.resume().then(startPattern); } else { startPattern(); }
+    const url = await renderTimerSoundBlob(key);
+    if (!url) return;
+    // A real <audio> element, not a live AudioContext oscillator - documented to be
+    // far less likely to interrupt/duck background music or other apps' audio on iOS,
+    // since Web Audio API playback and <audio>/<video> element playback are treated
+    // differently by the OS audio session. Not a guaranteed fix (Apple doesn't expose
+    // a real "mix with others" flag to web content), but the best-known mitigation.
+    if (!_timerAlertEl){ _timerAlertEl = new Audio(); }
+    _timerAlertEl.src = url;
+    _timerAlertEl.play().catch(() => {});
   } catch(e){}
 }
 
@@ -2104,7 +2140,7 @@ function openTimer(){
   overlay.innerHTML = `
     <div class="form-header"><button id="closeTimer">✕</button><h1>Timer</h1><div style="width:18px;"></div></div>
     <div class="overlay-scroll" style="display:flex; flex-direction:column; align-items:center;">
-      <div id="timerDisplay" style="font-family:'JetBrains Mono',monospace; font-size:64px; font-weight:600; margin:24px 0 8px 0; letter-spacing:1px;">0:00</div>
+      <div id="timerDisplay" style="font-family:'JetBrains Mono',monospace; font-size:84px; font-weight:600; margin:24px 0 8px 0; letter-spacing:1px;">0:00</div>
       <div id="timerRing" style="width:230px; height:6px; background:var(--panel); border-radius:6px; overflow:hidden; margin-bottom:26px;">
         <div id="timerRingFill" style="height:100%; width:0%; background:#FF6B1A; transition:width 0.3s linear;"></div>
       </div>
