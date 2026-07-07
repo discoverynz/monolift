@@ -45,12 +45,12 @@ input:focus, button:focus{ outline:none; }
 
 /* ---------- Exercise list ---------- */
 .category{ font-family:'Bebas Neue', sans-serif; font-size:16px; font-weight:400; letter-spacing:1.5px; color:var(--flame); text-transform:uppercase; padding:16px 18px 6px 18px; }
-.exercise{ display:flex; align-items:center; justify-content:space-between; padding:14px 14px; margin:0 18px 8px 18px; background:var(--panel); border:1px solid var(--line); position:relative; overflow:hidden; }
+.exercise{ display:flex; align-items:center; justify-content:space-between; padding:14px 18px; margin:0 12px 10px 12px; background:var(--panel); border:1px solid var(--line); position:relative; overflow:hidden; }
 .ex-name{ font-size:17.5px; font-weight:500; }
 .ex-last{ font-family:'JetBrains Mono', monospace; font-size:14px; color:var(--slate); margin-top:4px; }
-.ex-last.done{ color:var(--good); font-weight:600; }
+.ex-last.done{ color:#C8F0BC; font-weight:600; }
 .chev{ color:var(--slate); font-size:21.5px; }
-.check-circle{ width:23px; height:23px; border-radius:50%; background:rgba(143,191,122,0.15); display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+.check-circle{ width:24px; height:24px; border-radius:50%; background:var(--ink); border:1.5px solid var(--good); display:flex; align-items:center; justify-content:center; flex-shrink:0; }
 
 .empty-state{ text-align:center; padding:60px 30px; color:var(--slate); font-size:15.5px; line-height:1.6; }
 .empty-state .btn-primary{ margin-top:20px; width:auto; padding:12px 24px; display:inline-block; }
@@ -93,7 +93,7 @@ input:focus, button:focus{ outline:none; }
 .badge{ font-size:11px; font-weight:600; padding:2px 6px; border-radius:5px; }
 .corner-tag{ position:absolute; top:0; right:0; font-size:9.5px; font-weight:700; padding:3px 9px 3px 11px; text-transform:uppercase; letter-spacing:0.3px; border-radius:0 0 0 10px; color:var(--ink); }
 .ex-name-row{ display:flex; align-items:center; gap:6px; }
-.ex-last.via{ color:var(--good); opacity:0.7; font-weight:500; font-style:italic; }
+.ex-last.via{ color:#C8F0BC; opacity:0.85; font-weight:500; font-style:italic; }
 .search-bar{ margin:12px 18px 14px 18px; background:var(--panel); border-radius:12px; padding:11px 14px; display:flex; align-items:center; gap:8px; font-size:15.5px; color:var(--slate); }
 .search-bar input{ flex:1; background:none; color:var(--chalk); font-size:15.5px; }
 .search-bar input::placeholder{ color:#5d5f64; }

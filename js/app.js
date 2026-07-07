@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 4.0';
+const APP_VERSION = 'Beta 4.1';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 
 // Common starter exercises shown as quick-add suggestions on an empty day, keyed by
@@ -556,10 +556,10 @@ function exerciseRow(ex){
   let subtitle, showCheck, doneStyle = '';
   if (ex.loggedToday){
     subtitle = `<div class="ex-last done">✓ Logged today — ${formatSetValue(ex.lastSet)}</div>`;
-    showCheck = true; doneStyle = 'background:rgba(143,191,122,0.1);';
+    showCheck = true; doneStyle = 'background:#2B3D2A; border-top-color:#8FBF7A; border-right-color:#8FBF7A; border-bottom-color:#8FBF7A;';
   } else if (ex.completeVia){
     subtitle = `<div class="ex-last via">↳ Complete via ${ex.completeVia}</div>`;
-    showCheck = true; doneStyle = 'background:rgba(143,191,122,0.06);';
+    showCheck = true; doneStyle = 'background:#253323; border-top-color:#8FBF7A; border-right-color:#8FBF7A; border-bottom-color:#8FBF7A;';
   } else {
     subtitle = `<div class="ex-last">${ex.lastSet ? formatSetValue(ex.lastSet) + ' · ' + ex.lastSet.logged_at : 'Not logged yet'}</div>`;
     showCheck = false;
