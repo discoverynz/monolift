@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 4.9';
+const APP_VERSION = 'Beta 4.10';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 
 // Common starter exercises shown as quick-add suggestions on an empty day, keyed by
@@ -418,7 +418,8 @@ let _exdbPromise = null;
 const EXDB_SYNONYMS = {
   'skullcrusher':'triceps extension','skullcrushers':'triceps extension',
   'bayesian':'cable','iso':'leverage','hammer strength':'leverage',
-  'meow':'wrist','farmer':'farmers walk','preacher':'preacher curl'
+  'meow':'wrist','farmer':'farmers walk','preacher':'preacher curl',
+  'fly':'flye','flys':'flye','pec deck':'butterfly'
 };
 
 function exdbNormalize(s){
@@ -482,9 +483,7 @@ function checkExerciseOverride(name){
   }
   return null;
 }
-function matchExercise(name, db){
-  const override = checkExerciseOverride(name);
-  if (override) return override;
+function fuzzyMatchExercise(name, db){
   if (!db) return null;
   const qwords = exdbNormalize(name);
   if (!qwords.size) return null;
@@ -498,6 +497,30 @@ function matchExercise(name, db){
     if (score > bestScore){ best = e; bestScore = score; }
   }
   return bestScore >= 0.34 ? best : null;
+}
+
+function matchExercise(name, db){
+  const override = checkExerciseOverride(name);
+  if (override){
+    // Overrides only ever supply correct muscle info, not photos/instructions.
+    // Separately try the real fuzzy match purely to borrow supplementary content
+    // (image, steps, equipment/level) when a decent real entry exists - the
+    // override's muscle data stays authoritative either way, since that's the
+    // whole reason it exists (fixing names the fuzzy matcher gets wrong).
+    const supplement = fuzzyMatchExercise(name, db);
+    if (supplement && (!override.images.length || !override.instructions.length)){
+      return {
+        ...override,
+        images: override.images.length ? override.images : supplement.images,
+        instructions: override.instructions.length ? override.instructions : supplement.instructions,
+        equipment: override.equipment || supplement.equipment,
+        level: override.level || supplement.level,
+        mechanic: override.mechanic || supplement.mechanic
+      };
+    }
+    return override;
+  }
+  return fuzzyMatchExercise(name, db);
 }
 
 function convertWeight(value, fromUnit, toUnit){
