@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 4.6';
+const APP_VERSION = 'Beta 4.7';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 
 // Common starter exercises shown as quick-add suggestions on an empty day, keyed by
@@ -72,6 +72,33 @@ function setGroupByPref(v){ localStorage.setItem('zealift_group_by', v); }
 // Groups a list of {name, category, ...} exercises either by their stored equipment
 // category, or by primary muscle looked up dynamically against the cached exercise DB —
 // same DB and matcher the form guide uses, so no schema change or per-exercise setup needed.
+// Pulls exercises sharing the same alt group adjacent to each other, so they're
+// not scattered apart by unrelated exercises in between. Ungrouped exercises
+// keep their original relative order untouched; a group's members land together
+// at the position where the first member of that group originally appeared.
+function clusterByAltGroup(items){
+  const buckets = new Map();
+  items.forEach(item => {
+    const gid = item.alt_group_id;
+    if (!gid) return;
+    if (!buckets.has(gid)) buckets.set(gid, []);
+    buckets.get(gid).push(item);
+  });
+  const placed = new Set();
+  const result = [];
+  items.forEach(item => {
+    const gid = item.alt_group_id;
+    if (!gid){
+      result.push(item);
+    } else if (!placed.has(gid)){
+      placed.add(gid);
+      result.push(...buckets.get(gid));
+    }
+    // else: this exercise's whole group was already inserted earlier - skip the duplicate.
+  });
+  return result;
+}
+
 async function groupExercisesByChoice(exercises, groupBy){
   const grouped = {};
   let orderedKeys;
@@ -91,6 +118,7 @@ async function groupExercisesByChoice(exercises, groupBy){
     const extraCats = Object.keys(grouped).filter(c => !knownCats.has(c) && grouped[c].length > 0);
     orderedKeys = [...CATEGORIES, ...extraCats];
   }
+  Object.keys(grouped).forEach(k => { grouped[k] = clusterByAltGroup(grouped[k]); });
   return { grouped, orderedKeys };
 }
 function removeSideIndex(){
