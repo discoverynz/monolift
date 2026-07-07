@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 4.1';
+const APP_VERSION = 'Beta 4.2';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 
 // Common starter exercises shown as quick-add suggestions on an empty day, keyed by
@@ -93,70 +93,63 @@ async function groupExercisesByChoice(exercises, groupBy){
   }
   return { grouped, orderedKeys };
 }
-function removeSideIndex(){
-  const a = document.getElementById('sideIndexEl');
-  if (a) a.remove();
-  const b = document.getElementById('sideIndexBubble');
-  if (b) b.remove();
+function removeCategoryTabs(){
+  const el = document.getElementById('catTabsRow');
+  if (el && el._scrollHandler && el._scrollTarget){
+    el._scrollTarget.removeEventListener('scroll', el._scrollHandler);
+  }
 }
 
-// Fixed-position side index (like iOS Contacts) that jumps to a section on tap,
-// and drag-scrubs through them with a floating bubble showing the full name.
-// `keys` are the section names in display order; `prefix` must match the id
-// prefix used on each section header element (e.g. 'cat-' + slug).
-function attachSideIndex(keys, prefix, bounds){
-  removeSideIndex();
-  bounds = bounds || { top: 170, bottom: 110 };
-  const idx = document.createElement('div');
-  idx.id = 'sideIndexEl';
-  idx.style = `position:fixed; right:6px; top:${bounds.top}px; bottom:${bounds.bottom}px; display:flex; flex-direction:column; justify-content:center; gap:2px; padding:4px 8px 4px 3px; z-index:15; touch-action:none;`;
-  idx.innerHTML = keys.map(cat => {
+// Sticky horizontal underline-tab row (replaces the old floating side-index,
+// which was too visually cluttered and prone to overlapping other content).
+// Tap a tab to jump; the active tab also auto-updates as you scroll manually
+// past each section (scroll-spy), so the row doubles as a position indicator.
+function categoryTabsHtml(keys, prefix){
+  const tabs = keys.map((cat, i) => {
     const slug = prefix + cat.replace(/[^a-z0-9]/gi,'');
-    const short = cat.length > 3 ? cat.slice(0,3) : cat;
-    return `<div class="side-index-item" data-target="${slug}" data-fullname="${cat}" style="font-family:'JetBrains Mono',monospace; font-size:8.5px; color:var(--slate); padding:1.5px 3px; text-align:right;">${short}</div>`;
+    return `<div class="cat-tab ${i===0?'active':''}" data-target="${slug}">${cat.toUpperCase()}</div>`;
   }).join('');
-  document.body.appendChild(idx);
+  return `<div class="cat-tabs-row" id="catTabsRow">${tabs}</div>`;
+}
 
-  const bubble = document.createElement('div');
-  bubble.id = 'sideIndexBubble';
-  bubble.style = 'position:fixed; right:34px; background:var(--flame); color:var(--ink); font-family:\'Oswald\',sans-serif; font-weight:600; font-size:16px; padding:8px 16px; border-radius:12px 12px 12px 2px; display:none; z-index:16; box-shadow:0 4px 12px rgba(0,0,0,0.4); white-space:nowrap;';
-  document.body.appendChild(bubble);
+function attachCategoryTabs(keys, prefix, scrollEl){
+  const row = document.getElementById('catTabsRow');
+  if (!row || !scrollEl) return;
+  const tabs = [...row.querySelectorAll('.cat-tab')];
+  const sections = tabs.map(t => document.getElementById(t.dataset.target)).filter(Boolean);
+  if (!sections.length) return;
 
-  const items = [...idx.querySelectorAll('.side-index-item')];
-  function jumpTo(target){
-    const el = document.getElementById(target);
-    if (el) el.scrollIntoView({ behavior:'auto', block:'start' });
+  function setActive(target){
+    tabs.forEach(t => t.classList.toggle('active', t.dataset.target === target));
+    const activeTab = tabs.find(t => t.dataset.target === target);
+    if (activeTab) activeTab.scrollIntoView({ behavior:'smooth', inline:'nearest', block:'nearest' });
   }
-  function nearestItem(clientY){
-    let best = items[0], bestDist = Infinity;
-    items.forEach(item => {
-      const r = item.getBoundingClientRect();
-      const mid = r.top + r.height/2;
-      const dist = Math.abs(clientY - mid);
-      if (dist < bestDist){ bestDist = dist; best = item; }
+  tabs.forEach(tab => {
+    tab.onclick = () => {
+      const target = document.getElementById(tab.dataset.target);
+      if (target) target.scrollIntoView({ behavior:'smooth', block:'start' });
+      setActive(tab.dataset.target);
+    };
+  });
+
+  let ticking = false;
+  function onScroll(){
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(() => {
+      const rowBottom = row.getBoundingClientRect().bottom;
+      let current = sections[0];
+      for (const sec of sections){
+        if (sec.getBoundingClientRect().top - rowBottom <= 4) current = sec;
+        else break;
+      }
+      setActive(current.id);
+      ticking = false;
     });
-    return best;
   }
-  function showBubble(item){
-    bubble.textContent = item.dataset.fullname;
-    bubble.style.top = (item.getBoundingClientRect().top - 6) + 'px';
-    bubble.style.display = 'block';
-  }
-  idx.addEventListener('pointerdown', (e) => {
-    idx.setPointerCapture(e.pointerId);
-    const item = nearestItem(e.clientY);
-    showBubble(item);
-    jumpTo(item.dataset.target);
-  });
-  idx.addEventListener('pointermove', (e) => {
-    if (bubble.style.display !== 'block') return;
-    const item = nearestItem(e.clientY);
-    showBubble(item);
-    jumpTo(item.dataset.target);
-  });
-  const endDrag = () => { bubble.style.display = 'none'; };
-  idx.addEventListener('pointerup', endDrag);
-  idx.addEventListener('pointercancel', endDrag);
+  scrollEl.addEventListener('scroll', onScroll, { passive: true });
+  row._scrollHandler = onScroll;
+  row._scrollTarget = scrollEl;
 }
 
 function groupByToggleHtml(current){
@@ -238,7 +231,7 @@ function attachShellHandlers(){
     el.onclick = () => {
       const tab = el.dataset.tab;
       state.currentTab = tab;
-      removeSideIndex();
+      removeCategoryTabs();
       if (tab === 'track') renderTrack();
       else if (tab === 'scale') renderScale();
       else if (tab === 'phase') renderPhase();
@@ -1029,6 +1022,7 @@ async function renderTrack(){
           <div style="height:100%; width:${pct}%; background:var(--good); border-radius:4px;"></div>
         </div>
         ${state.exercises.length > 0 ? groupByToggleHtml(groupBy) : ''}
+        ${state.exercises.length > 0 && orderedKeys.some(k => (grouped[k]||[]).length) ? categoryTabsHtml(orderedKeys.filter(k => (grouped[k]||[]).length), 'trackcat-') : ''}
         ${listHtml}
         ${suggestionsHtml}
       </div>
@@ -1040,12 +1034,12 @@ async function renderTrack(){
   document.querySelectorAll('.groupby-chip').forEach(chip => {
     chip.onclick = () => { setGroupByPref(chip.dataset.groupby); renderTrack(); };
   });
-  if (state.exercises.length > 0 && orderedKeys.some(k => (grouped[k]||[]).length)){
-    attachSideIndex(orderedKeys.filter(k => (grouped[k]||[]).length), 'trackcat-', { top: 230, bottom: 100 });
-  } else {
-    removeSideIndex();
-  }
   const scrollEl = document.querySelector('.scroll-area');
+  if (state.exercises.length > 0 && orderedKeys.some(k => (grouped[k]||[]).length)){
+    attachCategoryTabs(orderedKeys.filter(k => (grouped[k]||[]).length), 'trackcat-', scrollEl);
+  } else {
+    removeCategoryTabs();
+  }
   requestAnimationFrame(() => { scrollEl.scrollTop = state.trackScrollY; });
   scrollEl.onscroll = () => { state.trackScrollY = scrollEl.scrollTop; };
   document.querySelectorAll('.day').forEach(el => {
@@ -1089,7 +1083,7 @@ async function renderTrack(){
 }
 
 function showExerciseActionsMenu(exerciseId, exerciseName){
-  removeSideIndex();
+  removeCategoryTabs();
   const overlay = document.createElement('div');
   overlay.style = 'position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:20; display:flex; align-items:center; justify-content:center;';
   overlay.innerHTML = `
@@ -1272,7 +1266,7 @@ async function openPicker(initialTab){
     </div>
     <div class="overlay-scroll" id="pickerBody"></div>`;
   document.body.appendChild(overlay);
-  overlay.querySelector('#closePicker').onclick = () => { removeSideIndex(); overlay.remove(); };
+  overlay.querySelector('#closePicker').onclick = () => { removeCategoryTabs(); overlay.remove(); };
 
   const result = await withTimeout(
     supabaseClient.from('exercises').select('id, name, category, weekday, alt_group_id').eq('active', true),
@@ -1281,12 +1275,13 @@ async function openPicker(initialTab){
   const all = result.__timeout || result.error ? [] : (result.data || []);
 
   function renderMineTab(){
-    removeSideIndex();
+    removeCategoryTabs();
     const body = overlay.querySelector('#pickerBody');
     body.innerHTML = `
       <div class="search-bar">🔍 <input id="pickerSearch" placeholder="Search your exercises…"></div>
       <div class="pick-row" id="createNewRow" style="border-bottom:1px solid var(--line);"><div class="ex-name" style="color:var(--flame);">+ Create New Exercise</div></div>
       <div id="pickerGroupToggle"></div>
+      <div id="pickerCatTabs"></div>
       <div id="pickerList"><div class="empty-state">Loading…</div></div>`;
     body.querySelector('#createNewRow').onclick = () => { overlay.remove(); openNewExerciseForm(); };
 
@@ -1315,9 +1310,11 @@ async function openPicker(initialTab){
       });
       body.querySelector('#pickerList').innerHTML = html || '<div class="empty-state">No matches.</div>';
       if (presentKeys.length > 0){
-        attachSideIndex(presentKeys, 'mine-', { top: 220, bottom: 110 });
+        body.querySelector('#pickerCatTabs').innerHTML = categoryTabsHtml(presentKeys, 'mine-');
+        attachCategoryTabs(presentKeys, 'mine-', body);
       } else {
-        removeSideIndex();
+        body.querySelector('#pickerCatTabs').innerHTML = '';
+        removeCategoryTabs();
       }
       body.querySelectorAll('.pick-row[data-id]').forEach(el => {
         el.onclick = async () => {
@@ -1359,7 +1356,8 @@ async function openPicker(initialTab){
       <div class="search-bar">🔍 <input id="dbSearch" placeholder="Search ${db.length} exercises…"></div>
       <div id="starterBlock"></div>
       <div id="dbGroupToggle"></div>
-      <div id="dbList" style="padding-right:26px;"></div>`;
+      <div id="dbCatTabs"></div>
+      <div id="dbList"></div>`;
 
     const starterNames = ['Chest Press','Shoulder Press','Lat Pulldown','Tricep Pushdown','Bicep Curl','Leg Press','Seated Row','Plank'];
     const starterMatches = starterNames.map(n => matchExercise(n, db)).filter(Boolean);
@@ -1373,7 +1371,7 @@ async function openPicker(initialTab){
           </div>
         </div>`;
       body.querySelectorAll('.db-starter-chip').forEach(chip => {
-        chip.onclick = () => { removeSideIndex(); overlay.remove(); openSuggestionPreview(chip.dataset.name, EQUIPMENT_TO_CATEGORY[chip.dataset.equip] || 'Other'); };
+        chip.onclick = () => { removeCategoryTabs(); overlay.remove(); openSuggestionPreview(chip.dataset.name, EQUIPMENT_TO_CATEGORY[chip.dataset.equip] || 'Other'); };
       });
     }
 
@@ -1396,12 +1394,18 @@ async function openPicker(initialTab){
       });
       body.querySelector('#dbList').innerHTML = html || '<div class="empty-state">No matches.</div>';
 
-      // Fixed side index over the whole screen, drag-scrub with a name bubble.
-      attachSideIndex(presentKeys, 'cat-', { top: 170, bottom: 110 });
+      // Sticky tab row: tap to jump, auto-highlights as you scroll manually.
+      if (presentKeys.length > 0){
+        body.querySelector('#dbCatTabs').innerHTML = categoryTabsHtml(presentKeys, 'cat-');
+        attachCategoryTabs(presentKeys, 'cat-', body);
+      } else {
+        body.querySelector('#dbCatTabs').innerHTML = '';
+        removeCategoryTabs();
+      }
 
       body.querySelectorAll('.db-pick').forEach(el => {
         el.onclick = () => {
-          removeSideIndex();
+          removeCategoryTabs();
           overlay.remove();
           openSuggestionPreview(el.dataset.name, EQUIPMENT_TO_CATEGORY[el.dataset.equip] || 'Other');
         };
@@ -1759,7 +1763,7 @@ function renderLastTimePlates(overlay, exerciseName, lastEntry){
 }
 
 function openLogForm(exerciseId, exerciseName){
-  removeSideIndex();
+  removeCategoryTabs();
   let unit = 'kg';
   let weightType = 'total';
   let lastEntry = null;
