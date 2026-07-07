@@ -1,6 +1,6 @@
 :root{
-  --ink:#1B1C1F; --panel:#24262A; --chalk:#EDEAE2; --slate:#8C8E94;
-  --flame:#FF5630; --brass:#C9A227; --line:#34363B; --good:#3FCB7E;
+  --ink:#17181A; --panel:#1C1D1F; --chalk:#EDEAE2; --slate:#8C8E94;
+  --flame:#FF6B1A; --brass:#C9A227; --line:#2B2C2E; --good:#8FBF7A;
 }
 *{ box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent; }
 html,body,#app{ height:100%; height:100dvh; }
@@ -30,41 +30,41 @@ input:focus, button:focus{ outline:none; }
 /* ---------- Brand / header ---------- */
 .brandbar{ display:flex; align-items:center; gap:7px; padding:calc(14px + env(safe-area-inset-top, 0px)) 18px 0 18px; }
 .brandbar img{ width:28px; height:28px; }
-.brandbar .name{ font-family:'Oswald', sans-serif; font-size:16px; letter-spacing:2.5px; color:var(--chalk); font-weight:600; }
+.brandbar .name{ font-family:'Bebas Neue', sans-serif; font-size:19px; letter-spacing:3px; color:var(--flame); font-weight:400; }
 
 .day-strip{ display:flex; justify-content:space-between; padding:10px 18px 10px 18px; border-bottom:1px solid var(--line); }
-.day{ font-family:'JetBrains Mono', monospace; font-size:12.5px; color:var(--slate); text-align:center; padding:6px 0; width:13%; border-radius:8px; }
-.day.active{ color:var(--ink); background:var(--chalk); font-weight:600; }
+.day{ font-family:'JetBrains Mono', monospace; font-size:12px; color:var(--slate); text-align:center; padding:6px 0; width:13%; border:1px solid var(--line); border-radius:2px; }
+.day.active{ color:var(--ink); background:var(--flame); font-weight:600; border-color:var(--flame); }
 .day.today-marker::after{ content:""; display:block; width:4px; height:4px; border-radius:50%; background:var(--flame); margin:3px auto 0 auto; }
 .day.active.today-marker::after{ background:var(--ink); }
 
 .header{ padding:14px 18px 0 18px; }
-.eyebrow{ font-family:'JetBrains Mono', monospace; font-size:12.5px; color:var(--brass); letter-spacing:1.5px; margin-bottom:4px; }
-.header h1{ font-family:'Oswald', sans-serif; font-size:26.5px; font-weight:600; letter-spacing:0.5px; text-transform:uppercase; }
-.quote{ font-size:13px; color:var(--slate); font-style:italic; margin-top:6px; }
+.eyebrow{ font-family:'JetBrains Mono', monospace; font-size:11px; color:var(--slate); letter-spacing:2px; margin-bottom:4px; }
+.header h1{ font-family:'Bebas Neue', sans-serif; font-size:25px; font-weight:400; letter-spacing:1px; text-transform:uppercase; }
+.quote{ font-size:11px; color:var(--slate); font-style:italic; margin-top:6px; line-height:1.4; }
 
 /* ---------- Exercise list ---------- */
-.category{ font-family:'Oswald', sans-serif; font-size:17px; font-weight:600; letter-spacing:1.5px; color:var(--brass); text-transform:uppercase; padding:18px 18px 8px 18px; }
-.exercise{ display:flex; align-items:center; justify-content:space-between; padding:12px 18px; border-bottom:1px solid var(--line); position:relative; overflow:hidden; }
+.category{ font-family:'Bebas Neue', sans-serif; font-size:16px; font-weight:400; letter-spacing:1.5px; color:var(--flame); text-transform:uppercase; padding:16px 18px 6px 18px; }
+.exercise{ display:flex; align-items:center; justify-content:space-between; padding:14px 14px; margin:0 18px 8px 18px; background:var(--panel); border:1px solid var(--line); position:relative; overflow:hidden; }
 .ex-name{ font-size:17.5px; font-weight:500; }
 .ex-last{ font-family:'JetBrains Mono', monospace; font-size:14px; color:var(--slate); margin-top:4px; }
 .ex-last.done{ color:var(--good); font-weight:600; }
 .chev{ color:var(--slate); font-size:21.5px; }
-.check-circle{ width:23px; height:23px; border-radius:50%; background:rgba(63,203,126,0.15); display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+.check-circle{ width:23px; height:23px; border-radius:50%; background:rgba(143,191,122,0.15); display:flex; align-items:center; justify-content:center; flex-shrink:0; }
 
 .empty-state{ text-align:center; padding:60px 30px; color:var(--slate); font-size:15.5px; line-height:1.6; }
 .empty-state .btn-primary{ margin-top:20px; width:auto; padding:12px 24px; display:inline-block; }
 
 /* ---------- Tab bar ---------- */
 .tabbar{ flex-shrink:0; height:calc(80px + env(safe-area-inset-bottom, 0px)); background:rgba(36,38,42,0.94); backdrop-filter:blur(8px);
-  border-top:1px solid var(--line); display:flex; align-items:flex-start; justify-content:space-between; padding:10px 10px env(safe-area-inset-bottom, 0px) 10px; z-index:6; }
+  border-top:2px solid var(--line); display:flex; align-items:flex-start; justify-content:space-between; padding:10px 10px env(safe-area-inset-bottom, 0px) 10px; z-index:6; }
 .tab-item{ display:flex; flex-direction:column; align-items:center; gap:4px; color:var(--slate); flex:1; background:none; }
-.tab-item.active{ color:var(--chalk); }
-.tab-item span{ font-size:11.5px; font-weight:500; }
+.tab-item.active{ color:var(--flame); }
+.tab-item span{ font-family:'Bebas Neue', sans-serif; font-size:12px; font-weight:400; letter-spacing:0.5px; }
 .tab-icon{ width:21px; height:21px; }
 .fab-wrap{ flex:1; display:flex; justify-content:center; }
 .fab{ width:50px; height:50px; border-radius:50%; background:var(--flame); display:flex; align-items:center; justify-content:center;
-  margin-top:-24px; box-shadow:0 8px 20px rgba(255,86,48,0.45); border:4px solid var(--ink); }
+  margin-top:-24px; box-shadow:0 8px 20px rgba(255,107,26,0.45); border:4px solid var(--ink); }
 
 /* ---------- Picker / forms (slide-in screens) ---------- */
 .overlay-screen{ position:fixed; inset:0; max-width:480px; margin:0 auto; background:var(--ink); z-index:10; display:flex; flex-direction:column; }
@@ -119,7 +119,7 @@ input:focus, button:focus{ outline:none; }
 .phase-card .name{ font-family:'Oswald', sans-serif; font-size:26.5px; text-transform:uppercase; }
 .phase-card.active .name{ color:var(--flame); } .phase-card.upcoming .name{ color:var(--slate); }
 .phase-card .status{ font-family:'JetBrains Mono', monospace; font-size:11.5px; padding:3px 8px; border-radius:20px; }
-.phase-card.active .status{ background:rgba(255,86,48,0.15); color:var(--flame); } .phase-card.upcoming .status{ background:rgba(140,142,148,0.12); color:var(--slate); }
+.phase-card.active .status{ background:rgba(255,107,26,0.15); color:var(--flame); } .phase-card.upcoming .status{ background:rgba(140,142,148,0.12); color:var(--slate); }
 .phase-card .dates{ font-family:'JetBrains Mono', monospace; font-size:13px; color:var(--slate); margin-top:6px; }
 .progress-track{ height:7px; background:var(--ink); border-radius:6px; margin:14px 0 6px 0; overflow:hidden; }
 .progress-fill{ height:100%; background:var(--flame); border-radius:6px; }

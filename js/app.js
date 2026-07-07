@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 3.3';
+const APP_VERSION = 'Beta 4.0';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 
 // Common starter exercises shown as quick-add suggestions on an empty day, keyed by
@@ -161,67 +161,37 @@ function attachSideIndex(keys, prefix, bounds){
 
 function groupByToggleHtml(current){
   return `<div style="padding:10px 18px 10px 18px;">
-    <div style="display:flex; background:var(--panel); border-radius:10px; padding:3px;">
+    <div style="display:flex; border:1px solid var(--line);">
       <div class="groupby-chip ${current==='equipment'?'active':''}" data-groupby="equipment"
-        style="flex:1; text-align:center; padding:7px 0; font-size:11px; font-weight:600; border-radius:8px; color:${current==='equipment'?'var(--chalk)':'var(--slate)'}; background:${current==='equipment'?'var(--ink)':'transparent'}; ${current==='equipment'?'box-shadow:0 1px 4px rgba(0,0,0,0.3);':''}">Equipment</div>
+        style="flex:1; text-align:center; padding:7px 0; font-family:'Bebas Neue',sans-serif; font-size:13px; letter-spacing:1px; color:${current==='equipment'?'var(--ink)':'var(--slate)'}; background:${current==='equipment'?'var(--flame)':'transparent'};">EQUIPMENT</div>
       <div class="groupby-chip ${current==='muscle'?'active':''}" data-groupby="muscle"
-        style="flex:1; text-align:center; padding:7px 0; font-size:11px; font-weight:600; border-radius:8px; color:${current==='muscle'?'var(--chalk)':'var(--slate)'}; background:${current==='muscle'?'var(--ink)':'transparent'}; ${current==='muscle'?'box-shadow:0 1px 4px rgba(0,0,0,0.3);':''}">Muscle</div>
+        style="flex:1; text-align:center; padding:7px 0; font-family:'Bebas Neue',sans-serif; font-size:13px; letter-spacing:1px; color:${current==='muscle'?'var(--ink)':'var(--slate)'}; background:${current==='muscle'?'var(--flame)':'transparent'};">MUSCLE</div>
     </div>
   </div>`;
 }
 const ALT_COLORS = ["#2DD4BF","#9B7EDE","#E8A33D","#6FA8DC","#E8718D","#7FD17A"];
 
 const QUOTES = [
-  {t:"The impediment to action advances action.", a:"Marcus Aurelius"},
-  {t:"We suffer more in imagination than in reality.", a:"Seneca"},
-  {t:"What does not kill me makes me stronger.", a:"Nietzsche"},
-  {t:"Be like water making its way through cracks.", a:"Bruce Lee"},
-  {t:"Knowing yourself is the beginning of all wisdom.", a:"Aristotle"},
-  {t:"Patience is bitter, but its fruit is sweet.", a:"Rousseau"},
-  {t:"A journey of a thousand miles begins with a single step.", a:"Lao Tzu"},
-  {t:"It does not matter how slowly you go, as long as you do not stop.", a:"Confucius"},
+  {t:"You have power over your mind — not outside events. Realize this, and you will find strength.", a:"Marcus Aurelius"},
+  {t:"The impediment to action advances action. What stands in the way becomes the way.", a:"Marcus Aurelius"},
+  {t:"Waste no more time arguing about what a good man should be. Be one.", a:"Marcus Aurelius"},
+  {t:"If it is not right, do not do it; if it is not true, do not say it.", a:"Marcus Aurelius"},
   {t:"Difficulties strengthen the mind, as labor does the body.", a:"Seneca"},
-  {t:"The cave you fear to enter holds the treasure you seek.", a:"Joseph Campbell"},
-  {t:"Discipline is the bridge between goals and accomplishment.", a:"Jim Rohn"},
-  {t:"You must do the things you think you cannot do.", a:"Eleanor Roosevelt"},
-  {t:"Strength does not come from winning. Your struggles develop your strengths.", a:"Arnold Schwarzenegger"},
-  {t:"The mind is the limit — what it can conceive, you can achieve.", a:"Arnold Schwarzenegger"},
-  {t:"Everybody wants to be a bodybuilder, but nobody wants to lift heavy weights.", a:"Ronnie Coleman"},
-  {t:"Pain is just weakness leaving the body.", a:"Gym proverb"},
-  {t:"The iron never lies to you.", a:"Henry Rollins"},
-  {t:"You don't have to be extreme, just consistent.", a:"Gym proverb"},
-  {t:"The last few reps are what make the muscle grow.", a:"Ronnie Coleman"},
-  {t:"Suffer the pain of discipline, or suffer the pain of regret.", a:"Jim Rohn"},
-  {t:"Strength grows in the moments you think you can't go on.", a:"Gym proverb"},
-  {t:"What hurts today makes you stronger tomorrow.", a:"Jay Cutler"},
-  {t:"The body achieves what the mind believes.", a:"Gym proverb"},
-  {t:"Fall in love with the process; the results will come.", a:"Gym proverb"},
-  {t:"Champions keep playing until they get it right.", a:"Billie Jean King"},
-  {t:"Whether you think you can, or you think you can't, you're right.", a:"Henry Ford"},
-  {t:"Out of suffering have emerged the strongest souls.", a:"Khalil Gibran"},
-  {t:"He who has a why to live can bear almost any how.", a:"Nietzsche"},
-  {t:"The obstacle is the way.", a:"Stoic proverb"},
-  {t:"We are what we repeatedly do.", a:"Aristotle"},
-  {t:"Make the best use of what is in your power.", a:"Epictetus"},
-  {t:"Endurance is patience concentrated.", a:"Thomas Carlyle"},
-  {t:"Small steps, every single day.", a:"Gym proverb"},
-  {t:"Form follows discipline.", a:"Gym proverb"},
-  {t:"Strong people are harder to kill, and more useful in general.", a:"Mark Rippetoe"},
-  {t:"Weak is a choice.", a:"Gym proverb"},
-  {t:"You don't find willpower — you build it, one rep at a time.", a:"Gym proverb"},
-  {t:"The only bad workout is the one that didn't happen.", a:"Gym proverb"},
-  {t:"Lift heavy, recover hard, repeat.", a:"Gym proverb"},
-  {t:"Comfort is the enemy of progress.", a:"Gym proverb"},
-  {t:"He who conquers himself is the mightiest warrior.", a:"Confucius"},
-  {t:"It's not the mountain we conquer, but ourselves.", a:"Edmund Hillary"},
-  {t:"Move a little every day, even when it's hard.", a:"Gym proverb"},
-  {t:"The pain you feel today is the strength you feel tomorrow.", a:"Gym proverb"},
-  {t:"He who is not satisfied with a little is satisfied with nothing.", a:"Epicurus"},
-  {t:"Man is troubled not by real problems but by imagined anxieties.", a:"Epictetus"},
-  {t:"The successful warrior is the average man, with laser-like focus.", a:"Bruce Lee"},
-  {t:"The wound is the place where the light enters you.", a:"Rumi"},
-  {t:"Amor fati — love your fate, for it is what you have.", a:"Stoic maxim"},
-  {t:"Sweat is just fat, crying.", a:"Gym proverb"}
+  {t:"We suffer more in imagination than in reality.", a:"Seneca"},
+  {t:"It is not that we have a short time to live, but that we waste a lot of it.", a:"Seneca"},
+  {t:"He who is brave is free.", a:"Seneca"},
+  {t:"Men are disturbed not by things, but by the views they take of them.", a:"Epictetus"},
+  {t:"Make the best use of what is in your power, and take the rest as it happens.", a:"Epictetus"},
+  {t:"First say to yourself what you would be; and then do what you have to do.", a:"Epictetus"},
+  {t:"No man is free who is not master of himself.", a:"Epictetus"},
+  {t:"That which does not kill us makes us stronger.", a:"Friedrich Nietzsche"},
+  {t:"He who has a why to live can bear almost any how.", a:"Friedrich Nietzsche"},
+  {t:"Victorious warriors win first, and then go to war.", a:"Sun Tzu"},
+  {t:"The supreme art of war is to subdue the enemy without fighting.", a:"Sun Tzu"},
+  {t:"Opportunities multiply as they are seized.", a:"Sun Tzu"},
+  {t:"In the midst of chaos, there is also opportunity.", a:"Sun Tzu"},
+  {t:"He will win who knows when to fight and when not to fight.", a:"Sun Tzu"},
+  {t:"Far better it is to dare mighty things than to rank with those poor spirits who neither enjoy nor suffer much.", a:"Theodore Roosevelt"}
 ];
 
 function todayQuote(){
@@ -251,13 +221,13 @@ const ICON_TRACK = `<svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke
 const ICON_SCALE = `<svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="4" width="18" height="17" rx="3"/><circle cx="12" cy="12.5" r="5"/><line x1="12" y1="12.5" x2="15" y2="10"/></svg>`;
 const ICON_PHASE = `<svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 3h16 M4 21h16 M5 3c0 6 7 7 7 9s-7 3-7 9 M19 3c0 6-7 7-7 9s7 3 7 9"/></svg>`;
 const ICON_ME = `<svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="7.5" r="4"/><path d="M3 21c0-5 4-8 9-8s9 3 9 8"/></svg>`;
-const ICON_CHECK = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#3FCB7E" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
+const ICON_CHECK = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8FBF7A" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
 
 function renderTabbar(){
   return `<div class="tabbar">
     <button class="tab-item ${state.currentTab==='track'?'active':''}" data-tab="track">${ICON_TRACK}<span>Track</span></button>
     <button class="tab-item ${state.currentTab==='scale'?'active':''}" data-tab="scale">${ICON_SCALE}<span>Scale</span></button>
-    <div class="fab-wrap"><button class="fab" id="fabBtn">${`<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#1B1C1F" stroke-width="2.4" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`}</button></div>
+    <div class="fab-wrap"><button class="fab" id="fabBtn">${`<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#17181A" stroke-width="2.4" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`}</button></div>
     <button class="tab-item ${state.currentTab==='phase'?'active':''}" data-tab="phase">${ICON_PHASE}<span>Phase</span></button>
     <button class="tab-item ${state.currentTab==='me'?'active':''}" data-tab="me">${ICON_ME}<span>Me</span></button>
   </div>`;
@@ -580,16 +550,16 @@ function exerciseRow(ex){
   const cornerTag = groupName
     ? `<div class="corner-tag alt-badge-tap" data-group-id="${ex.alt_group_id}" data-group-name="${groupName}" style="background:${groupColor};">${groupName}</div>`
     : '';
-  const borderStyle = groupColor ? `border-left:3px solid ${groupColor};` : '';
+  const borderStyle = groupColor ? `border-left:4px solid ${groupColor};` : '';
   const topPad = groupName ? 'padding-top:5px;' : '';
 
   let subtitle, showCheck, doneStyle = '';
   if (ex.loggedToday){
     subtitle = `<div class="ex-last done">✓ Logged today — ${formatSetValue(ex.lastSet)}</div>`;
-    showCheck = true; doneStyle = 'background:rgba(63,203,126,0.1);';
+    showCheck = true; doneStyle = 'background:rgba(143,191,122,0.1);';
   } else if (ex.completeVia){
     subtitle = `<div class="ex-last via">↳ Complete via ${ex.completeVia}</div>`;
-    showCheck = true; doneStyle = 'background:rgba(63,203,126,0.06);';
+    showCheck = true; doneStyle = 'background:rgba(143,191,122,0.06);';
   } else {
     subtitle = `<div class="ex-last">${ex.lastSet ? formatSetValue(ex.lastSet) + ' · ' + ex.lastSet.logged_at : 'Not logged yet'}</div>`;
     showCheck = false;
@@ -665,7 +635,7 @@ const ONBOARD_VISUALS = {
       <div style="color:var(--flame); font-size:11px;">✎ tap to rename</div>
     </div>`,
   logging: `<div style="display:flex; flex-direction:column; gap:6px;">
-      <div class="exercise" style="background:rgba(63,203,126,0.1); border-radius:10px;">
+      <div class="exercise" style="background:rgba(143,191,122,0.1); border-radius:10px;">
         <div><div class="ex-name-row"><div class="ex-name">Incline Press</div><div class="badge" style="background:#2DD4BF26; color:#2DD4BF;">Press Alt</div></div><div class="ex-last done">✓ Logged today</div></div>
         <div class="check-circle">✓</div>
       </div>
@@ -1589,8 +1559,8 @@ function renderMuscleFigure(regions, primarySet, secondarySet){
   let parts = MUSCLE_SKELETON.map(s => muscleShapeSvg(s, '#2A2C31', 1));
   for (const muscle in regions){
     let fill = null, op = 1;
-    if (primarySet.has(muscle)){ fill = '#FF5630'; op = 1; }
-    else if (secondarySet.has(muscle)){ fill = '#FF5630'; op = 0.4; }
+    if (primarySet.has(muscle)){ fill = '#FF6B1A'; op = 1; }
+    else if (secondarySet.has(muscle)){ fill = '#FF6B1A'; op = 0.4; }
     if (!fill) continue;
     regions[muscle].forEach(s => parts.push(muscleShapeSvg(s, fill, op)));
   }
@@ -1628,8 +1598,8 @@ function renderGuideContent(match){
   const muscleChips = [...(match.primaryMuscles||[]), ...(match.secondaryMuscles||[])].map(m => {
     const isPrimary = primarySet.has(m);
     return `<span style="display:inline-block; font-size:10px; padding:3px 8px; border-radius:20px; margin:2px 3px 2px 0;
-      background:${isPrimary ? 'rgba(255,86,48,0.16)' : 'var(--panel)'};
-      color:${isPrimary ? '#FF5630' : 'var(--slate)'};">${cap(m)}</span>`;
+      background:${isPrimary ? 'rgba(255,107,26,0.16)' : 'var(--panel)'};
+      color:${isPrimary ? '#FF6B1A' : 'var(--slate)'};">${cap(m)}</span>`;
   }).join('');
   const description = synthesizeDescription(match);
   const img = (match.images && match.images.length)
@@ -1637,7 +1607,7 @@ function renderGuideContent(match){
     : '';
   const steps = (match.instructions||[]).map((s,i) =>
     `<div style="display:flex; gap:8px; margin-bottom:7px;">
-       <span style="color:#FF5630; font-weight:600; font-size:12px; flex-shrink:0;">${i+1}</span>
+       <span style="color:#FF6B1A; font-weight:600; font-size:12px; flex-shrink:0;">${i+1}</span>
        <span style="font-size:12.5px; color:var(--chalk); line-height:1.45;">${s}</span>
      </div>`).join('');
   const meta = [match.equipment, match.level, match.mechanic].filter(Boolean).map(cap).join(' · ');
@@ -1691,7 +1661,7 @@ function celebratePR(exerciseName, weight, unit, priorBest){
     background:rgba(0,0,0,0.55); animation:prFade 0.25s ease;`;
   // Simple confetti dots.
   let confetti = '';
-  const colors = ['#FF5630','#3FCB7E','#F0C542','#5A9BF0','#EDEAE2'];
+  const colors = ['#FF6B1A','#8FBF7A','#F0C542','#5A9BF0','#EDEAE2'];
   for (let i=0;i<28;i++){
     const left = Math.random()*100, delay = Math.random()*0.4, dur = 1.4+Math.random()*0.8;
     const c = colors[i % colors.length], size = 6+Math.random()*6;
@@ -1708,11 +1678,11 @@ function celebratePR(exerciseName, weight, unit, priorBest){
     <div style="background:var(--panel); border-radius:20px; padding:28px 26px; text-align:center; max-width:300px;
       animation:prPop 0.4s ease; box-shadow:0 20px 60px rgba(0,0,0,0.6); position:relative;">
       <div style="font-size:38px; margin-bottom:6px;">🏆</div>
-      <div style="font-family:'Oswald',sans-serif; font-size:20px; letter-spacing:1px; text-transform:uppercase; color:#FF5630; margin-bottom:6px;">New PR!</div>
+      <div style="font-family:'Oswald',sans-serif; font-size:20px; letter-spacing:1px; text-transform:uppercase; color:#FF6B1A; margin-bottom:6px;">New PR!</div>
       <div style="font-size:14px; color:var(--chalk); margin-bottom:4px;">${exerciseName}</div>
       <div style="font-family:'JetBrains Mono',monospace; font-size:22px; font-weight:600; margin-bottom:4px;">${weight}${unit}</div>
       <div class="small" style="color:var(--slate);">+${gain}${unit} over your previous best of ${Math.round(priorBest*10)/10}${unit}</div>
-      <button id="prClose" style="margin-top:18px; background:#FF5630; color:var(--ink); font-weight:600; border-radius:10px; padding:10px 24px; font-size:13px;">Nice</button>
+      <button id="prClose" style="margin-top:18px; background:#FF6B1A; color:var(--ink); font-weight:600; border-radius:10px; padding:10px 24px; font-size:13px;">Nice</button>
     </div>`;
   document.body.appendChild(overlay);
   if (navigator.vibrate) navigator.vibrate([80,40,80,40,160]);
@@ -1978,7 +1948,7 @@ function openLogForm(exerciseId, exerciseName){
       const yTicks = [yMin, (yMin + yMax) / 2, yMax];
       const gridLines = yTicks.map(t => {
         const y = yAt(t);
-        return `<line x1="${mL}" y1="${y.toFixed(1)}" x2="${W - mR}" y2="${y.toFixed(1)}" stroke="#34363B" stroke-width="1"/>
+        return `<line x1="${mL}" y1="${y.toFixed(1)}" x2="${W - mR}" y2="${y.toFixed(1)}" stroke="#2B2C2E" stroke-width="1"/>
                 <text x="${mL - 5}" y="${(y + 3).toFixed(1)}" text-anchor="end" font-family="monospace" font-size="9" fill="#8C8E94">${fmt(t)}</text>`;
       }).join('');
 
@@ -1995,7 +1965,7 @@ function openLogForm(exerciseId, exerciseName){
       const areaPts = `${mL},${(mT + plotH).toFixed(1)} ${linePts} ${(W - mR)},${(mT + plotH).toFixed(1)}`;
       const dots = chartable.map((s, i) => {
         const isLast = i === chartable.length - 1;
-        return `<circle cx="${xAt(i).toFixed(1)}" cy="${yAt(s.chartWeight).toFixed(1)}" r="${isLast ? 4 : 2.8}" fill="${isLast ? '#FF5630' : '#EDEAE2'}" stroke="#24262A" stroke-width="1.5"/>`;
+        return `<circle cx="${xAt(i).toFixed(1)}" cy="${yAt(s.chartWeight).toFixed(1)}" r="${isLast ? 4 : 2.8}" fill="${isLast ? '#FF6B1A' : '#EDEAE2'}" stroke="#1C1D1F" stroke-width="1.5"/>`;
       }).join('');
 
       chartHtml = `<div class="stat-card" style="margin:0 18px 16px 18px;">
@@ -2005,12 +1975,12 @@ function openLogForm(exerciseId, exerciseName){
         </div>
         <svg viewBox="0 0 ${W} ${H}" width="100%" height="auto">
           <defs><linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="#FF5630" stop-opacity="0.28"/>
-            <stop offset="100%" stop-color="#FF5630" stop-opacity="0"/>
+            <stop offset="0%" stop-color="#FF6B1A" stop-opacity="0.28"/>
+            <stop offset="100%" stop-color="#FF6B1A" stop-opacity="0"/>
           </linearGradient></defs>
           ${gridLines}
           <polygon points="${areaPts}" fill="url(#areaFill)"/>
-          <polyline points="${linePts}" fill="none" stroke="#FF5630" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+          <polyline points="${linePts}" fill="none" stroke="#FF6B1A" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
           ${dots}
           ${xLabels}
         </svg>
@@ -2106,11 +2076,11 @@ function openTimer(){
     <div class="overlay-scroll" style="display:flex; flex-direction:column; align-items:center;">
       <div id="timerDisplay" style="font-family:'JetBrains Mono',monospace; font-size:64px; font-weight:600; margin:24px 0 8px 0; letter-spacing:1px;">0:00</div>
       <div id="timerRing" style="width:230px; height:6px; background:var(--panel); border-radius:6px; overflow:hidden; margin-bottom:26px;">
-        <div id="timerRingFill" style="height:100%; width:0%; background:#FF5630; transition:width 0.3s linear;"></div>
+        <div id="timerRingFill" style="height:100%; width:0%; background:#FF6B1A; transition:width 0.3s linear;"></div>
       </div>
 
       <div style="display:flex; gap:10px; margin-bottom:24px;">
-        <button id="timerStartPause" style="background:#FF5630; color:var(--ink); font-weight:600; border-radius:12px; padding:14px 30px; font-size:15px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:1px;">Start</button>
+        <button id="timerStartPause" style="background:#FF6B1A; color:var(--ink); font-weight:600; border-radius:12px; padding:14px 30px; font-size:15px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:1px;">Start</button>
         <button id="timerReset" style="background:var(--panel); color:var(--chalk); border-radius:12px; padding:14px 20px; font-size:14px;">Reset</button>
       </div>
 
@@ -2146,7 +2116,7 @@ function openTimer(){
     const r = Math.max(0, _timerState.remaining);
     const m = Math.floor(r/60), s = r%60;
     disp.textContent = `${m}:${s.toString().padStart(2,'0')}`;
-    disp.style.color = r<=0 ? '#3FCB7E' : 'var(--chalk)';
+    disp.style.color = r<=0 ? '#8FBF7A' : 'var(--chalk)';
     const pct = _timerState.total>0 ? ((_timerState.total - r)/_timerState.total)*100 : 0;
     fill.style.width = `${Math.min(100,pct)}%`;
     startPauseBtn.textContent = _timerState.running ? 'Pause' : (r<=0 ? 'Start' : (r<_timerState.total ? 'Resume' : 'Start'));
@@ -2204,8 +2174,8 @@ function openTimer(){
     const cur = getTimerSound();
     overlay.querySelectorAll('.timer-sound').forEach(b => {
       const active = b.dataset.snd === cur;
-      b.style.background = active ? 'rgba(255,86,48,0.16)' : 'var(--panel)';
-      b.style.color = active ? '#FF5630' : 'var(--chalk)';
+      b.style.background = active ? 'rgba(255,107,26,0.16)' : 'var(--panel)';
+      b.style.color = active ? '#FF6B1A' : 'var(--chalk)';
     });
   };
   overlay.querySelectorAll('.timer-sound').forEach(b => {
@@ -2259,7 +2229,7 @@ async function renderScale(){
     const yTicks = [yMin, (yMin + yMax) / 2, yMax];
     const gridLines = yTicks.map(t => {
       const y = yAt(t);
-      return `<line x1="${mL}" y1="${y.toFixed(1)}" x2="${W - mR}" y2="${y.toFixed(1)}" stroke="#34363B" stroke-width="1"/>
+      return `<line x1="${mL}" y1="${y.toFixed(1)}" x2="${W - mR}" y2="${y.toFixed(1)}" stroke="#2B2C2E" stroke-width="1"/>
               <text x="${mL - 5}" y="${(y + 3).toFixed(1)}" text-anchor="end" font-family="monospace" font-size="9" fill="#8C8E94">${fmt(t)}</text>`;
     }).join('');
 
@@ -2271,7 +2241,7 @@ async function renderScale(){
     const areaPts = `${mL},${(mT + plotH).toFixed(1)} ${linePts} ${(W - mR)},${(mT + plotH).toFixed(1)}`;
     const dots = chrono.map((e, i) => {
       const isLast = i === chrono.length - 1;
-      return `<circle cx="${xAt(i).toFixed(1)}" cy="${yAt(convertWeight(e.weight, e.unit, chartUnit)).toFixed(1)}" r="${isLast ? 4 : 2.8}" fill="${isLast ? '#FF5630' : '#EDEAE2'}" stroke="#24262A" stroke-width="1.5"/>`;
+      return `<circle cx="${xAt(i).toFixed(1)}" cy="${yAt(convertWeight(e.weight, e.unit, chartUnit)).toFixed(1)}" r="${isLast ? 4 : 2.8}" fill="${isLast ? '#FF6B1A' : '#EDEAE2'}" stroke="#1C1D1F" stroke-width="1.5"/>`;
     }).join('');
 
     chartHtml = `<div class="stat-card">
@@ -2281,12 +2251,12 @@ async function renderScale(){
       </div>
       <svg viewBox="0 0 ${W} ${H}" width="100%" height="auto">
         <defs><linearGradient id="scaleAreaFill" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stop-color="#FF5630" stop-opacity="0.28"/>
-          <stop offset="100%" stop-color="#FF5630" stop-opacity="0"/>
+          <stop offset="0%" stop-color="#FF6B1A" stop-opacity="0.28"/>
+          <stop offset="100%" stop-color="#FF6B1A" stop-opacity="0"/>
         </linearGradient></defs>
         ${gridLines}
         <polygon points="${areaPts}" fill="url(#scaleAreaFill)"/>
-        <polyline points="${linePts}" fill="none" stroke="#FF5630" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+        <polyline points="${linePts}" fill="none" stroke="#FF6B1A" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
         ${dots}
         ${xLabels}
       </svg>
@@ -2543,7 +2513,7 @@ function openSwapDaysForm(){
         <div class="top-row"><div class="name" style="font-size:16px;">${DAY_LABELS[dayB]}</div></div>
         <div class="dates">${statsB.label} · ${statsB.exerciseCount} exercises · ${statsB.setCount} logged sets</div>
       </div>
-      <div class="action-row" style="border-color:rgba(63,203,126,0.3); background:rgba(63,203,126,0.06);">
+      <div class="action-row" style="border-color:rgba(143,191,122,0.3); background:rgba(143,191,122,0.06);">
         <div style="font-size:11.5px; color:var(--good); line-height:1.6;">✓ After swapping: ${DAY_LABELS[dayB]} becomes "${statsA.label}," ${DAY_LABELS[dayA]} becomes "${statsB.label}." Every exercise, alt group, and logged set moves with its day.</div>
       </div>
       <button class="save-btn" id="confirmSwapBtn">Swap These Days</button>
