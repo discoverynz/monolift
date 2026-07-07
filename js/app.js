@@ -992,9 +992,9 @@ async function renderTrack(){
     const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
     suggestionsHtml = `<div class="category" style="display:flex; align-items:center; justify-content:space-between;">
         <div>Try Something New for ${dayTypeLabel}</div>
-        <div style="display:flex; gap:6px;">
-          <button id="refreshSuggestions" style="background:none; color:var(--flame); font-size:11px; padding:4px 8px;">↻ Refresh</button>
-          <button id="seeAllSuggestions" style="background:none; color:var(--flame); font-size:11px; padding:4px 8px;">See All →</button>
+        <div style="display:flex; gap:2px;">
+          <button id="refreshSuggestions" style="background:none; width:38px; height:38px; display:flex; align-items:center; justify-content:center; border-radius:8px;"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="var(--flame)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>
+          <button id="seeAllSuggestions" style="background:none; width:38px; height:38px; display:flex; align-items:center; justify-content:center; border-radius:8px;"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="var(--flame)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
         </div>
       </div>
       <div class="small" style="padding:0 18px 8px 18px; color:var(--slate);">Not in your library yet — pulled from a public exercise database based on today's focus.</div>
