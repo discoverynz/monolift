@@ -50,7 +50,7 @@ input:focus, button:focus{ outline:none; }
 .ex-last{ font-family:'JetBrains Mono', monospace; font-size:14px; color:var(--slate); margin-top:4px; }
 .ex-last.done{ color:var(--good); font-weight:600; }
 .chev{ color:var(--slate); font-size:21.5px; }
-.check-circle{ width:24px; height:24px; border-radius:50%; background:var(--ink); border:1.5px solid var(--good); display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+.check-circle{ width:22px; height:22px; border-radius:50%; background:rgba(143,191,122,0.15); display:flex; align-items:center; justify-content:center; flex-shrink:0; }
 
 .empty-state{ text-align:center; padding:60px 30px; color:var(--slate); font-size:15.5px; line-height:1.6; }
 .empty-state .btn-primary{ margin-top:20px; width:auto; padding:12px 24px; display:inline-block; }

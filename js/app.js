@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 4.4';
+const APP_VERSION = 'Beta 4.5';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 
 // Common starter exercises shown as quick-add suggestions on an empty day, keyed by
@@ -562,10 +562,12 @@ function exerciseRow(ex){
     subtitle = `<div class="ex-last">${ex.lastSet ? formatSetValue(ex.lastSet) + ' · ' + ex.lastSet.logged_at : 'Not logged yet'}</div>`;
     showCheck = false;
   }
-  // Alt-group color always owns the left edge when present. Only when there's
-  // no alt-group does "done" get its own thin green accent there instead -
-  // the card itself stays the same neutral background either way.
-  const borderStyle = groupColor ? `border-left:4px solid ${groupColor};` : (isDone ? `border-left:3px solid var(--good);` : '');
+  // Once something's done, the thick green rail + faint wash takes priority
+  // over the alt-group's rail color - the corner tag still shows which alt
+  // group it belongs to, but "completed" is the stronger signal at that point.
+  const borderStyle = isDone
+    ? `border-left:6px solid var(--good); background:#1A201A;`
+    : (groupColor ? `border-left:4px solid ${groupColor};` : '');
 
   return `<div class="exercise" style="${borderStyle}" data-id="${ex.id}" data-name="${ex.name}">
     ${cornerTag}
