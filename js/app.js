@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 4.3';
+const APP_VERSION = 'Beta 4.4';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 
 // Common starter exercises shown as quick-add suggestions on an empty day, keyed by
@@ -122,16 +122,17 @@ function attachCategoryTabs(keys, prefix, scrollEl){
   function setActive(target){
     tabs.forEach(t => t.classList.toggle('active', t.dataset.target === target));
   }
+  let lastActive = sections[0].id;
   tabs.forEach(tab => {
     tab.onclick = () => {
       const target = document.getElementById(tab.dataset.target);
       if (target) target.scrollIntoView({ behavior:'smooth', block:'start' });
-      setActive(tab.dataset.target);
+      lastActive = tab.dataset.target;
+      setActive(lastActive);
     };
   });
 
   let ticking = false;
-  let lastActive = sections[0].id;
   function onScroll(){
     if (ticking) return;
     ticking = true;
