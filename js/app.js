@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 3.1';
+const APP_VERSION = 'Beta 3.2';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 
 // Common starter exercises shown as quick-add suggestions on an empty day, keyed by
@@ -1331,10 +1331,11 @@ async function openPicker(initialTab){
       const { grouped, orderedKeys } = await groupExercisesByChoice(deduped, groupBy);
 
       let html = '';
-      orderedKeys.forEach(cat => {
+      const presentKeys = orderedKeys.filter(k => (grouped[k]||[]).length);
+      presentKeys.forEach(cat => {
         const items = (grouped[cat] || []).slice().sort((a, b) => a.name.localeCompare(b.name));
-        if (items.length === 0) return;
-        html += `<div class="category">${cat}</div>`;
+        const slug = 'mine-' + cat.replace(/[^a-z0-9]/gi,'');
+        html += `<div class="category" id="${slug}">${cat}</div>`;
         html += items.map(ex => `<div class="pick-row" data-id="${ex.id}" data-name="${ex.name}"><div class="ex-name">${ex.name}</div><div class="chev">›</div></div>`).join('');
       });
       body.querySelector('#pickerGroupToggle').innerHTML = groupByToggleHtml(groupBy);
@@ -1342,6 +1343,11 @@ async function openPicker(initialTab){
         chip.onclick = () => { setGroupByPref(chip.dataset.groupby); renderList(body.querySelector('#pickerSearch').value); };
       });
       body.querySelector('#pickerList').innerHTML = html || '<div class="empty-state">No matches.</div>';
+      if (presentKeys.length > 0){
+        attachSideIndex(presentKeys, 'mine-', { top: 220, bottom: 110 });
+      } else {
+        removeSideIndex();
+      }
       body.querySelectorAll('.pick-row[data-id]').forEach(el => {
         el.onclick = async () => {
           const picked = all.find(ex => ex.id === el.dataset.id);
@@ -2383,9 +2389,12 @@ async function loadPhase(){
 function weeksBetween(startStr, endStr){
   if (!startStr || !endStr) return null;
   const start = new Date(startStr), end = new Date(endStr), now = new Date();
-  const totalWeeks = Math.max(1, Math.round((end - start) / (7*86400000)));
-  const elapsedWeeks = Math.min(totalWeeks, Math.max(0, Math.round((now - start) / (7*86400000))));
-  return { totalWeeks, elapsedWeeks, pct: Math.round((elapsedWeeks/totalWeeks)*100) };
+  const totalDays = Math.max(1, Math.round((end - start) / 86400000));
+  const totalWeeks = Math.max(1, Math.round(totalDays / 7));
+  const daysElapsed = Math.max(0, Math.min(totalDays, Math.floor((now - start) / 86400000)));
+  const elapsedWeeks = Math.min(totalWeeks, Math.floor(daysElapsed / 7) + 1);
+  const pct = Math.round((daysElapsed / totalDays) * 100);
+  return { totalWeeks, elapsedWeeks, pct };
 }
 
 // Determines which phase is actually active by checking today's real date against
@@ -2450,11 +2459,7 @@ function openEditPhaseForm(existing){
   overlay.innerHTML = `
     <div class="form-header"><button id="closeP">✕</button><h1>Edit Phase Dates</h1><div style="width:18px;"></div></div>
     <div class="overlay-scroll">
-      <div class="field-label">Currently Active</div>
-      <div class="chip-row">
-        <div class="chip ${(!existing || existing.current_phase==='bulk') ? 'active':''}" data-phase="bulk">Bulk</div>
-        <div class="chip ${(existing && existing.current_phase==='cut') ? 'active':''}" data-phase="cut">Cut</div>
-      </div>
+      <div class="form-sub" style="margin-top:0;">Which phase is active is worked out automatically from today's date against these ranges - no need to set it manually.</div>
       <div class="field-label">Bulk Start</div>
       <div class="field-card"><input class="field-input" id="bulkStart" type="date" style="font-size:14px;" value="${existing && existing.bulk_start ? existing.bulk_start : ''}"></div>
       <div class="field-label">Bulk End</div>
@@ -2466,16 +2471,11 @@ function openEditPhaseForm(existing){
       <button class="save-btn" id="savePBtn">Save</button>
     </div>`;
   document.body.appendChild(overlay);
-  let chosenPhase = (existing && existing.current_phase) || 'bulk';
   overlay.querySelector('#closeP').onclick = () => overlay.remove();
-  overlay.querySelectorAll('.chip[data-phase]').forEach(el => {
-    el.onclick = () => { overlay.querySelectorAll('.chip[data-phase]').forEach(c=>c.classList.remove('active')); el.classList.add('active'); chosenPhase = el.dataset.phase; };
-  });
   overlay.querySelector('#savePBtn').onclick = async () => {
     const { data: userData } = await supabaseClient.auth.getUser();
     const payload = {
       user_id: userData.user.id,
-      current_phase: chosenPhase,
       bulk_start: document.getElementById('bulkStart').value || null,
       bulk_end: document.getElementById('bulkEnd').value || null,
       cut_start: document.getElementById('cutStart').value || null,
