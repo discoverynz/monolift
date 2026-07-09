@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 4.10';
+const APP_VERSION = 'Beta 4.11';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 
 // Common starter exercises shown as quick-add suggestions on an empty day, keyed by
@@ -419,7 +419,8 @@ const EXDB_SYNONYMS = {
   'skullcrusher':'triceps extension','skullcrushers':'triceps extension',
   'bayesian':'cable','iso':'leverage','hammer strength':'leverage',
   'meow':'wrist','farmer':'farmers walk','preacher':'preacher curl',
-  'fly':'flye','flys':'flye','pec deck':'butterfly'
+  'fly':'flye','flys':'flye','pec deck':'butterfly',
+  'forearm':'wrist','forearms':'wrist'
 };
 
 function exdbNormalize(s){
@@ -472,7 +473,22 @@ const EXERCISE_OVERRIDES = [
   { keywords: ['back','extension'], primaryMuscles: ['lower back'], secondaryMuscles: ['hamstrings','glutes'] },
   { keywords: ['x','wing'], primaryMuscles: ['lats'], secondaryMuscles: ['shoulders','biceps'] },
   { keywords: ['lat','pulldown'], primaryMuscles: ['lats'], secondaryMuscles: ['biceps','shoulders'] },
-  { keywords: ['dead','hang'], primaryMuscles: ['lats'], secondaryMuscles: ['forearms','shoulders'] }
+  { keywords: ['dead','hang'], primaryMuscles: ['lats'], secondaryMuscles: ['forearms','shoulders'] },
+  // Two distinct exercises in Joel's plan with near-identical names but different
+  // muscle emphasis per his own notes - keyword substring matching (no space vs
+  // "easy bar" with a space) is what tells them apart, so order/specificity matters.
+  { keywords: ['reverse','easybar'], primaryMuscles: ['forearms'], secondaryMuscles: ['biceps'] },
+  { keywords: ['reverse','easy','bar'], primaryMuscles: ['biceps'], secondaryMuscles: ['forearms'] },
+  { keywords: ['reverse','ez'], primaryMuscles: ['forearms'], secondaryMuscles: ['biceps'] },
+  // free-exercise-db categorizes generic "Dip Machine" and "Bench Press - Powerlifting"
+  // as triceps-primary, but Joel's plan documents his specific machines as chest.
+  { keywords: ['dip','machine'], primaryMuscles: ['chest'], secondaryMuscles: ['triceps','shoulders'] },
+  { keywords: ['plate-loaded','horizontal'], primaryMuscles: ['chest'], secondaryMuscles: ['triceps','shoulders'] },
+  // Fuzzy matching was landing this on "Cable Rear Delt Fly" (shoulders) purely on
+  // word overlap - a low-to-high cable fly is an upper-chest exercise, not rear delt.
+  { keywords: ['low-to-high','fly'], primaryMuscles: ['chest'], secondaryMuscles: ['shoulders'] },
+  { keywords: ['kneeling','leg','curl'], primaryMuscles: ['hamstrings'], secondaryMuscles: [] },
+  { keywords: ['hip','abductor'], primaryMuscles: ['glutes'], secondaryMuscles: [] }
 ];
 function checkExerciseOverride(name){
   const n = (name || '').toLowerCase();
@@ -1655,9 +1671,18 @@ function renderGuideContent(match){
       color:${isPrimary ? '#FF6B1A' : 'var(--slate)'};">${cap(m)}</span>`;
   }).join('');
   const description = synthesizeDescription(match);
-  const img = (match.images && match.images.length)
-    ? `<img src="${EXDB_IMG_BASE}${match.images[0]}" alt="" style="width:100%; border-radius:12px; margin-bottom:10px; background:#fff;" loading="lazy">`
+  const imgs = (match.images || []).map(src =>
+    `<img src="${EXDB_IMG_BASE}${src}" alt="" style="width:100%; border-radius:10px; background:#fff; display:block;" loading="lazy">`
+  ).join('');
+  const imgGallery = imgs
+    ? `<div style="display:grid; grid-template-columns:${match.images.length > 1 ? '1fr 1fr' : '1fr'}; gap:6px; margin-bottom:6px;">${imgs}</div>`
     : '';
+  const googleQuery = encodeURIComponent(`${match.name} exercise form`);
+  const googleBtn = `<a href="https://www.google.com/search?tbm=isch&q=${googleQuery}" target="_blank" rel="noopener"
+    style="display:flex; align-items:center; justify-content:center; gap:6px; background:var(--panel); border-radius:8px; padding:9px; margin-bottom:12px; text-decoration:none;">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--slate)" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    <span style="font-size:11.5px; color:var(--slate); font-weight:600;">See more photos on Google Images</span>
+  </a>`;
   const steps = (match.instructions||[]).map((s,i) =>
     `<div style="display:flex; gap:8px; margin-bottom:7px;">
        <span style="color:#FF6B1A; font-weight:600; font-size:12px; flex-shrink:0;">${i+1}</span>
@@ -1668,7 +1693,8 @@ function renderGuideContent(match){
     <div style="margin-bottom:10px;">${muscleChips}</div>
     ${meta ? `<div class="small" style="color:var(--slate); margin-bottom:10px;">${meta}</div>` : ''}
     ${description ? `<div style="font-size:12.5px; color:var(--chalk); line-height:1.5; margin-bottom:12px;">${description}</div>` : ''}
-    ${img}
+    ${imgGallery}
+    ${googleBtn}
     ${steps}
     <div class="small" style="color:var(--slate); margin-top:10px; font-style:italic; opacity:0.7;">Matched to "${match.name}".</div>
   `;
