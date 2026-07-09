@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.1';
+const APP_VERSION = 'Beta 5.2';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 
 // Common starter exercises shown as quick-add suggestions on an empty day, keyed by
@@ -984,17 +984,43 @@ async function getSuggestedExercises(dayTypeLabel, existingLibraryExercises){
   return shuffled.slice(0, 6);
 }
 
-async function openSuggestionPreview(name, category){
+async function openSuggestionPreview(name, category, navList){
+  navList = navList || [];
+  const navIdx = navList.findIndex(e => e.name === name);
+  const navPrev = navIdx > 0 ? navList[navIdx - 1] : null;
+  const navNext = (navIdx !== -1 && navIdx < navList.length - 1) ? navList[navIdx + 1] : null;
+  const catFor = (item) => EQUIPMENT_TO_CATEGORY[item.equipment] || 'Other';
+
   const overlay = document.createElement('div');
   overlay.className = 'overlay-screen';
   overlay.innerHTML = `
-    <div class="form-header"><button id="closeSugPreview">✕</button><h1>${name}</h1><div style="width:18px;"></div></div>
+    <div class="form-header" style="justify-content:space-between;">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <button id="prevSugBtn" style="font-size:20px; ${navPrev ? '' : 'visibility:hidden;'}">‹</button>
+        <button id="closeSugPreview">✕</button>
+      </div>
+      <h1 style="flex:1; text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:0 6px;">${name}</h1>
+      <button id="nextSugBtn" style="font-size:20px; ${navNext ? '' : 'visibility:hidden;'}">›</button>
+    </div>
     <div class="overlay-scroll">
       <div id="sugPreviewArea" style="padding:0 18px;"><div class="small" style="color:var(--slate);">Loading…</div></div>
       <button class="save-btn" id="addSuggestionBtn" style="margin-top:6px;">+ Add to ${DAY_LABELS[state.selectedDay]}</button>
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#closeSugPreview').onclick = () => overlay.remove();
+  if (navPrev) overlay.querySelector('#prevSugBtn').onclick = () => { overlay.remove(); openSuggestionPreview(navPrev.name, catFor(navPrev), navList); };
+  if (navNext) overlay.querySelector('#nextSugBtn').onclick = () => { overlay.remove(); openSuggestionPreview(navNext.name, catFor(navNext), navList); };
+
+  let touchStartX = null;
+  overlay.addEventListener('touchstart', (e) => { touchStartX = e.touches[0].clientX; }, { passive:true });
+  overlay.addEventListener('touchend', (e) => {
+    if (touchStartX === null) return;
+    const dx = e.changedTouches[0].clientX - touchStartX;
+    touchStartX = null;
+    if (Math.abs(dx) < 70) return;
+    if (dx < 0 && navNext){ overlay.remove(); openSuggestionPreview(navNext.name, catFor(navNext), navList); }
+    else if (dx > 0 && navPrev){ overlay.remove(); openSuggestionPreview(navPrev.name, catFor(navPrev), navList); }
+  }, { passive:true });
 
   const db = await loadExerciseDB();
   const match = matchExercise(name, db) || { name, primaryMuscles: [], secondaryMuscles: [], instructions: [], images: [] };
@@ -1451,9 +1477,29 @@ async function openPicker(initialTab, jumpToMuscle){
           </div>
         </div>`;
       body.querySelectorAll('.db-starter-chip').forEach(chip => {
-        chip.onclick = () => { removeSideIndex(); overlay.remove(); openSuggestionPreview(chip.dataset.name, EQUIPMENT_TO_CATEGORY[chip.dataset.equip] || 'Other'); };
+        chip.onclick = () => { removeSideIndex(); openSuggestionPreview(chip.dataset.name, EQUIPMENT_TO_CATEGORY[chip.dataset.equip] || 'Other'); };
       });
     }
+
+    // A couple of well-known staple exercises per muscle group, starred in the
+    // list as a quick "if in doubt, start here" signal. Verified against exact
+    // real database names, not fuzzy-matched, so the star only ever lands correctly.
+    const POPULAR_EXERCISES = new Set([
+      'Barbell Bench Press - Medium Grip', 'Dumbbell Bench Press',
+      'Pullups', 'Wide-Grip Lat Pulldown',
+      'Standing Military Press', 'Dumbbell Shoulder Press',
+      'Barbell Curl', 'Dumbbell Bicep Curl',
+      'Triceps Pushdown', 'Close-Grip Barbell Bench Press',
+      'Barbell Squat', 'Leg Press',
+      'Romanian Deadlift', 'Lying Leg Curls',
+      'Barbell Hip Thrust', 'Barbell Glute Bridge',
+      'Standing Calf Raises', 'Seated Calf Raise',
+      'Plank', 'Crunches',
+      'Wrist Roller', 'Seated Palm-Up Barbell Wrist Curl',
+      'Barbell Shrug', 'Dumbbell Shrug',
+      'Bent Over Barbell Row', 'Seated Cable Rows',
+      'Barbell Deadlift', 'Hyperextensions (Back Extensions)'
+    ]);
 
     function renderDbList(filter){
       const f = (filter || '').toLowerCase();
@@ -1462,11 +1508,17 @@ async function openPicker(initialTab, jumpToMuscle){
       const { grouped, orderedKeys } = groupDatabaseExercises(filtered, groupBy);
       let html = '';
       const presentKeys = orderedKeys.filter(k => (grouped[k]||[]).length);
+      const flatOrder = []; // display order across every visible category, for swipe nav
       presentKeys.forEach(cat => {
         const items = (grouped[cat]||[]).slice().sort((a,b)=>a.name.localeCompare(b.name));
         const slug = 'cat-' + cat.replace(/[^a-z0-9]/gi,'');
         html += `<div class="category" id="${slug}">${cat}</div>`;
-        html += items.map(e => `<div class="pick-row db-pick" data-name="${e.name}" data-equip="${e.equipment||''}"><div><div class="ex-name">${e.name}</div><div class="small" style="color:var(--slate);">${[cap(e.equipment), cap(e.level)].filter(Boolean).join(' · ')}</div></div><div class="chev">›</div></div>`).join('');
+        html += items.map(e => {
+          flatOrder.push({ name: e.name, equipment: e.equipment });
+          const star = POPULAR_EXERCISES.has(e.name)
+            ? `<span title="Popular staple" style="color:#F0C542; margin-left:5px;">★</span>` : '';
+          return `<div class="pick-row db-pick" data-name="${e.name}" data-equip="${e.equipment||''}"><div><div class="ex-name">${e.name}${star}</div><div class="small" style="color:var(--slate);">${[cap(e.equipment), cap(e.level)].filter(Boolean).join(' · ')}</div></div><div class="chev">›</div></div>`;
+        }).join('');
       });
       body.querySelector('#dbGroupToggle').innerHTML = groupByToggleHtml(groupBy);
       body.querySelectorAll('.groupby-chip').forEach(chip => {
@@ -1486,8 +1538,7 @@ async function openPicker(initialTab, jumpToMuscle){
       body.querySelectorAll('.db-pick').forEach(el => {
         el.onclick = () => {
           removeSideIndex();
-          overlay.remove();
-          openSuggestionPreview(el.dataset.name, EQUIPMENT_TO_CATEGORY[el.dataset.equip] || 'Other');
+          openSuggestionPreview(el.dataset.name, EQUIPMENT_TO_CATEGORY[el.dataset.equip] || 'Other', flatOrder);
         };
       });
     }
