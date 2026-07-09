@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.3';
+const APP_VERSION = 'Beta 5.4';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 
 // Common starter exercises shown as quick-add suggestions on an empty day, keyed by
@@ -654,10 +654,13 @@ function exerciseRow(ex){
     ? `border-left:6px solid var(--good); background:#1A201A;`
     : (groupColor ? `border-left:4px solid ${groupColor};` : '');
 
+  const mech = ex.mechanicInfo;
+  const mechTag = mech ? `<span style="font-size:9px; padding:2px 5px; border-radius:4px; margin-left:5px; background:${mech.value==='compound'?'rgba(255,107,26,0.15)':'rgba(122,150,220,0.15)'}; color:${mech.value==='compound'?'#FF6B1A':'#7BA6C9'}; opacity:${mech.guessed?0.75:1};">${mech.guessed?'~':''}${mech.value==='compound'?'Compound':'Isolation'}</span>` : '';
+
   return `<div class="exercise" style="${borderStyle}" data-id="${ex.id}" data-name="${ex.name}">
     ${cornerTag}
     <div style="flex:1; min-width:0; ${topPad}">
-      <div class="ex-name">${ex.name}</div>
+      <div class="ex-name">${ex.name}${mechTag}</div>
       ${subtitle}
     </div>
     ${showCheck ? `<div class="check-circle">${ICON_CHECK}</div>` : `<div class="chev">›</div>`}
@@ -1067,7 +1070,11 @@ async function renderTrack(){
   const pct = totalSlots > 0 ? Math.round((doneSlots / totalSlots) * 100) : 0;
 
   const groupBy = getGroupByPref();
-  const { grouped, orderedKeys } = await groupExercisesByChoice(state.exercises, groupBy);
+  const [{ grouped, orderedKeys }, exdb] = await Promise.all([
+    groupExercisesByChoice(state.exercises, groupBy),
+    loadExerciseDB()
+  ]);
+  state.exercises.forEach(ex => { ex.mechanicInfo = classifyMechanic(matchExercise(ex.name, exdb)); });
 
   let suggestions = [];
   if (state.exercises.length > 0){
@@ -1363,6 +1370,29 @@ function showUndoToast(exerciseName, onUndo){
 
 // Groups raw free-exercise-db records (not the user's own exercises) either by
 // primary muscle or by their own equipment field directly.
+const MECHANIC_NA_KEYWORDS = ['stretch','-smr','smr','warm up','cardio','bicycling','elliptical','treadmill','walk','jog','pose','mobility',
+  'windmill','tibialis','drill','sprint','jumping','circle','rotation','toe touch','figure 8','straddle','pyramid',
+  'stairmaster','step mill','recumbent','skating','hang','groin','knee across','ankle on','hug knees','locust','side bridge'];
+const MECHANIC_COMPOUND_KEYWORDS = ['press','squat','row','pull-up','pullup','pull up','deadlift','dip','lunge','thrust','clean','snatch','chin-up','chin up'];
+const MECHANIC_ISOLATION_KEYWORDS = ['curl','extension','fly','flye','raise','pushdown','crunch','shrug','kickback','pullover','abduction','adduction'];
+
+// Real database mechanic field where available (~90% of entries); for the rest
+// (mostly stretches/cardio/mobility drills, plus every manual override, which
+// never sets mechanic), a keyword fallback - clearly a guess, marked as such,
+// and honest about not applying at all to stretches/cardio rather than forcing
+// a compound/isolation label onto something that isn't really either.
+function classifyMechanic(match){
+  if (!match) return null;
+  if (match.mechanic === 'compound' || match.mechanic === 'isolation'){
+    return { value: match.mechanic, guessed: false };
+  }
+  const n = (match.name || '').toLowerCase();
+  if (MECHANIC_NA_KEYWORDS.some(k => n.includes(k))) return null;
+  if (MECHANIC_COMPOUND_KEYWORDS.some(k => n.includes(k))) return { value:'compound', guessed:true };
+  if (MECHANIC_ISOLATION_KEYWORDS.some(k => n.includes(k))) return { value:'isolation', guessed:true };
+  return null;
+}
+
 function muscleSubtitle(primaryMuscles, secondaryMuscles){
   const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
   const primary = (primaryMuscles || []).map(cap);
@@ -1439,7 +1469,9 @@ async function openPicker(initialTab, jumpToMuscle){
         html += items.map(ex => {
           const match = matchExercise(ex.name, db);
           const muscles = match ? muscleSubtitle(match.primaryMuscles, match.secondaryMuscles) : '';
-          return `<div class="pick-row" data-id="${ex.id}" data-name="${ex.name}"><div><div class="ex-name">${ex.name}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}</div><div class="chev">›</div></div>`;
+          const mech = classifyMechanic(match);
+          const mechTag = mech ? `<span style="font-size:9px; padding:2px 5px; border-radius:4px; margin-left:5px; background:${mech.value==='compound'?'rgba(255,107,26,0.15)':'rgba(122,150,220,0.15)'}; color:${mech.value==='compound'?'#FF6B1A':'#7BA6C9'}; opacity:${mech.guessed?0.75:1};">${mech.guessed?'~':''}${mech.value==='compound'?'Compound':'Isolation'}</span>` : '';
+          return `<div class="pick-row" data-id="${ex.id}" data-name="${ex.name}"><div><div class="ex-name">${ex.name}${mechTag}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}</div><div class="chev">›</div></div>`;
         }).join('');
       });
       body.querySelector('#pickerGroupToggle').innerHTML = groupByToggleHtml(groupBy);
@@ -1547,8 +1579,10 @@ async function openPicker(initialTab, jumpToMuscle){
           const star = POPULAR_EXERCISES.has(e.name)
             ? `<span title="Popular staple" style="color:#F0C542; margin-left:5px;">★</span>` : '';
           const muscles = muscleSubtitle(e.primaryMuscles, e.secondaryMuscles);
+          const mech = classifyMechanic(e);
+          const mechTag = mech ? `<span style="font-size:9px; padding:2px 5px; border-radius:4px; margin-left:5px; background:${mech.value==='compound'?'rgba(255,107,26,0.15)':'rgba(122,150,220,0.15)'}; color:${mech.value==='compound'?'#FF6B1A':'#7BA6C9'}; opacity:${mech.guessed?0.75:1};">${mech.guessed?'~':''}${mech.value==='compound'?'Compound':'Isolation'}</span>` : '';
           const equipLine = [cap(e.equipment), cap(e.level)].filter(Boolean).join(' · ');
-          return `<div class="pick-row db-pick" data-name="${e.name}" data-equip="${e.equipment||''}"><div><div class="ex-name">${e.name}${star}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}${equipLine ? `<div class="small" style="color:var(--slate); opacity:0.7; font-size:10.5px;">${equipLine}</div>` : ''}</div><div class="chev">›</div></div>`;
+          return `<div class="pick-row db-pick" data-name="${e.name}" data-equip="${e.equipment||''}"><div><div class="ex-name">${e.name}${star}${mechTag}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}${equipLine ? `<div class="small" style="color:var(--slate); opacity:0.7; font-size:10.5px;">${equipLine}</div>` : ''}</div><div class="chev">›</div></div>`;
         }).join('');
       });
       body.querySelector('#dbGroupToggle').innerHTML = groupByToggleHtml(groupBy);
@@ -1847,7 +1881,9 @@ function renderGuideContent(match){
        <span style="color:#FF6B1A; font-weight:600; font-size:12px; flex-shrink:0;">${i+1}</span>
        <span style="font-size:12.5px; color:var(--chalk); line-height:1.45;">${s}</span>
      </div>`).join('');
-  const meta = [match.equipment, match.level, match.mechanic].filter(Boolean).map(cap).join(' · ');
+  const mech = classifyMechanic(match);
+  const mechLabel = mech ? (mech.guessed ? `~${cap(mech.value)}` : cap(mech.value)) : null;
+  const meta = [match.equipment, match.level, mechLabel].filter(Boolean).map(s => s.startsWith('~') ? s : cap(s)).join(' · ');
   return `
     <div style="margin-bottom:10px;">${muscleChips}</div>
     ${meta ? `<div class="small" style="color:var(--slate); margin-bottom:10px;">${meta}</div>` : ''}
@@ -2785,6 +2821,45 @@ const BALANCE_LABELS = {
 // sets per muscle group for most people building muscle.
 const BALANCE_TARGET_MIN = 10, BALANCE_TARGET_MAX = 20;
 
+// Standard Push/Pull/Legs split mapping. Abdominals doesn't cleanly fit a 3-way
+// push/pull/legs split, so it's folded into Legs (common in PPL programs that
+// run core work on leg day) rather than dropped or forced into an ambiguous bucket.
+const PPL_MAP = {
+  chest:'push', shoulders:'push', triceps:'push',
+  lats:'pull', traps:'pull', biceps:'pull', forearms:'pull', 'lower back':'pull',
+  quadriceps:'legs', hamstrings:'legs', glutes:'legs', calves:'legs', abdominals:'legs'
+};
+const PPL_LABELS = { push:'Push', pull:'Pull', legs:'Legs' };
+const PPL_COLORS = { push:'#E8492A', pull:'#3A6EA5', legs:'#8FBF7A' };
+
+function pplTallyFrom(muscleTally){
+  const totals = { push:0, pull:0, legs:0 };
+  BALANCE_MUSCLES.forEach(m => { totals[PPL_MAP[m]] += (muscleTally[m] || 0); });
+  return totals;
+}
+
+function pplBarsHtml(pplTally){
+  const grand = Object.values(pplTally).reduce((a,b) => a+b, 0);
+  return ['push','pull','legs'].map(bucket => {
+    const count = pplTally[bucket];
+    const pct = grand > 0 ? Math.round((count/grand)*100) : 0;
+    const color = PPL_COLORS[bucket];
+    // A rough even-thirds guideline (~33% each) - flags a bucket that's clearly
+    // dominating or clearly missing relative to the other two.
+    let status;
+    if (grand === 0) status = { label:'NO DATA', color:'#3A6EA5' };
+    else if (pct < 15) status = { label:'LOW SHARE', color:'#3A6EA5' };
+    else if (pct > 50) status = { label:'DOMINANT', color:'#E8492A' };
+    else status = { label:'BALANCED', color:'#8FBF7A' };
+    return `<div class="bal-row">
+      <div class="bal-toprow"><div class="bal-name">${PPL_LABELS[bucket]}</div><div class="bal-status" style="background:${status.color}26; color:${status.color};">${status.label}</div></div>
+      <div class="bal-bar-track">
+        <div class="bal-bar-fill" style="width:${pct}%; background:${color};"><span class="bal-count">${count} (${pct}%)</span></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
 async function tallyLoggedThisWeek(){
   const { data: userData } = await supabaseClient.auth.getUser();
   const since = new Date(Date.now() - 6*86400000).toISOString().slice(0,10);
@@ -2906,14 +2981,36 @@ function balanceBodySvg(tally, mode, view){
   </svg>`;
 }
 
-async function renderBalance(mode){
+async function renderBalance(mode, view){
   mode = mode || state.balanceMode || 'logged';
+  view = view || state.balanceView || 'muscle';
   state.balanceMode = mode;
+  state.balanceView = view;
   app.innerHTML = `<div class="app-shell"><div class="login-wrap"><div class="login-sub">Crunching your balance…</div></div></div>`;
   const tally = mode === 'logged' ? await tallyLoggedThisWeek() : await tallyFullPlan();
-  const barsHtml = balanceBarsHtml(tally, mode);
-  const frontSvg = balanceBodySvg(tally, mode, 'front');
-  const backSvg = balanceBodySvg(tally, mode, 'back');
+
+  let bodyContentHtml;
+  if (view === 'ppl'){
+    const pplTally = pplTallyFrom(tally);
+    bodyContentHtml = `
+      <div class="section-label">${mode === 'logged' ? 'Sets Logged, By Split' : 'Plan Coverage, By Split'}</div>
+      ${pplBarsHtml(pplTally)}
+      <div class="small" style="padding:8px 18px 0 18px; color:var(--slate);">Abdominals is folded into Legs for this split - push/pull/legs doesn't have a clean third home for core work.</div>
+    `;
+  } else {
+    const barsHtml = balanceBarsHtml(tally, mode);
+    const frontSvg = balanceBodySvg(tally, mode, 'front');
+    const backSvg = balanceBodySvg(tally, mode, 'back');
+    bodyContentHtml = `
+      <div class="section-label">${mode === 'logged' ? 'Sets Logged, By Muscle' : 'Plan Coverage, By Muscle'}</div>
+      ${barsHtml}
+      <div class="section-label" style="text-align:center;">Heat Map</div>
+      <div style="display:flex; justify-content:center; gap:20px; padding:8px 0 20px 0;">
+        <div style="text-align:center;"><div class="small" style="margin-bottom:4px;">FRONT</div>${frontSvg}</div>
+        <div style="text-align:center;"><div class="small" style="margin-bottom:4px;">BACK</div>${backSvg}</div>
+      </div>
+    `;
+  }
 
   app.innerHTML = `
     <div class="app-shell">
@@ -2924,22 +3021,23 @@ async function renderBalance(mode){
           <div class="bal-seg-chip ${mode==='logged'?'active':''}" data-mode="logged" style="flex:1; text-align:center; padding:7px 0; font-family:'Bebas Neue',sans-serif; font-size:11.5px; letter-spacing:0.5px; color:${mode==='logged'?'var(--ink)':'var(--slate)'}; background:${mode==='logged'?'var(--flame)':'transparent'};">LOGGED THIS WEEK</div>
           <div class="bal-seg-chip ${mode==='plan'?'active':''}" data-mode="plan" style="flex:1; text-align:center; padding:7px 0; font-family:'Bebas Neue',sans-serif; font-size:11.5px; letter-spacing:0.5px; color:${mode==='plan'?'var(--ink)':'var(--slate)'}; background:${mode==='plan'?'var(--flame)':'transparent'};">FULL PLAN</div>
         </div>
-        ${mode === 'plan' ? `<div class="small" style="padding:0 18px 8px 18px; color:var(--slate);">Counts exercise slots across every day, regardless of what's been logged.</div>` : `<div class="small" style="padding:0 18px 8px 18px; color:var(--slate);">Target zone is a general guideline (~${BALANCE_TARGET_MIN}-${BALANCE_TARGET_MAX} weekly sets), not personalized advice.</div>`}
-        <div class="section-label">${mode === 'logged' ? 'Sets Logged, By Muscle' : 'Plan Coverage, By Muscle'}</div>
-        ${barsHtml}
-        <div class="section-label" style="text-align:center;">Heat Map</div>
-        <div style="display:flex; justify-content:center; gap:20px; padding:8px 0 20px 0;">
-          <div style="text-align:center;"><div class="small" style="margin-bottom:4px;">FRONT</div>${frontSvg}</div>
-          <div style="text-align:center;"><div class="small" style="margin-bottom:4px;">BACK</div>${backSvg}</div>
+        <div class="seg" style="margin:0 18px 10px 18px; display:flex; border:1px solid var(--line);">
+          <div class="bal-view-chip ${view==='muscle'?'active':''}" data-view="muscle" style="flex:1; text-align:center; padding:6px 0; font-family:'Bebas Neue',sans-serif; font-size:11px; letter-spacing:0.5px; color:${view==='muscle'?'var(--ink)':'var(--slate)'}; background:${view==='muscle'?'var(--flame)':'transparent'};">MUSCLE GROUPS</div>
+          <div class="bal-view-chip ${view==='ppl'?'active':''}" data-view="ppl" style="flex:1; text-align:center; padding:6px 0; font-family:'Bebas Neue',sans-serif; font-size:11px; letter-spacing:0.5px; color:${view==='ppl'?'var(--ink)':'var(--slate)'}; background:${view==='ppl'?'var(--flame)':'transparent'};">PUSH / PULL / LEGS</div>
         </div>
+        ${mode === 'plan' ? `<div class="small" style="padding:0 18px 8px 18px; color:var(--slate);">Counts exercise slots across every day, regardless of what's been logged.</div>` : `<div class="small" style="padding:0 18px 8px 18px; color:var(--slate);">Target zone is a general guideline (~${BALANCE_TARGET_MIN}-${BALANCE_TARGET_MAX} weekly sets), not personalized advice.</div>`}
+        ${bodyContentHtml}
       </div>
       ${renderTabbar()}
     </div>`;
   attachShellHandlers();
   document.querySelectorAll('.bal-seg-chip').forEach(chip => {
-    chip.onclick = () => renderBalance(chip.dataset.mode);
+    chip.onclick = () => renderBalance(chip.dataset.mode, view);
   });
-  document.querySelectorAll('.bal-row').forEach(row => {
+  document.querySelectorAll('.bal-view-chip').forEach(chip => {
+    chip.onclick = () => renderBalance(mode, chip.dataset.view);
+  });
+  document.querySelectorAll('.bal-row[data-muscle]').forEach(row => {
     row.onclick = () => openPicker('database', row.dataset.muscle);
   });
 }
