@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.4';
+const APP_VERSION = 'Beta 5.5';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 
 // Common starter exercises shown as quick-add suggestions on an empty day, keyed by
@@ -995,8 +995,16 @@ async function getSuggestedExercises(dayTypeLabel, existingLibraryExercises){
   const existingNames = existingLibraryExercises.map(e => e.name);
   const candidates = db.filter(e => (e.primaryMuscles || []).some(m => targets.includes(m)));
   const fresh = candidates.filter(cand => !existingNames.some(name => namesAreSimilar(name, cand.name)));
-  const shuffled = fresh.slice().sort(() => Math.random() - 0.5);
-  return shuffled.slice(0, 6);
+  const starred = fresh.filter(e => POPULAR_EXERCISES.has(e.name)).sort(() => Math.random() - 0.5);
+  const unstarred = fresh.filter(e => !POPULAR_EXERCISES.has(e.name)).sort(() => Math.random() - 0.5);
+  // Prioritized, not exclusive: fill up to 4 of the 6 slots from starred exercises
+  // when available, then top up the rest from whatever's left (unstarred first,
+  // spilling into any remaining starred if the pool is thin) - so familiar staples
+  // surface more often without every suggestion always being the same handful.
+  const picked = starred.slice(0, 4);
+  const rest = unstarred.concat(starred.slice(4)).sort(() => Math.random() - 0.5);
+  picked.push(...rest.slice(0, 6 - picked.length));
+  return picked.sort(() => Math.random() - 0.5);
 }
 
 async function openSuggestionPreview(name, category, navList){
@@ -1044,12 +1052,13 @@ async function openSuggestionPreview(name, category, navList){
 
   overlay.querySelector('#addSuggestionBtn').onclick = async () => {
     const { data: userData } = await supabaseClient.auth.getUser();
-    const { data: inserted, error } = await supabaseClient.from('exercises').insert({
+    const { error } = await supabaseClient.from('exercises').insert({
       user_id: userData.user.id, name, category, weekday: state.selectedDay, alt_group_id: null
-    }).select();
+    });
     if (error){ alert(error.message); return; }
     overlay.remove();
-    if (inserted && inserted[0]) openLogForm(inserted[0].id, name);
+    state.currentTab = 'track';
+    renderTrack();
   };
 }
 
@@ -1393,6 +1402,26 @@ function classifyMechanic(match){
   return null;
 }
 
+// A couple of well-known staple exercises per muscle group - starred in the
+// Database tab, and also given priority (not exclusivity) in Track's suggestions.
+// Verified against exact real database names, not fuzzy-matched.
+const POPULAR_EXERCISES = new Set([
+  'Barbell Bench Press - Medium Grip', 'Dumbbell Bench Press', 'Incline Dumbbell Press', 'Pushups',
+  'Pullups', 'Wide-Grip Lat Pulldown', 'Bent Over Two-Dumbbell Row', 'Straight-Arm Pulldown',
+  'Standing Military Press', 'Dumbbell Shoulder Press', 'Side Lateral Raise', 'Arnold Dumbbell Press',
+  'Barbell Curl', 'Dumbbell Bicep Curl', 'Hammer Curls', 'Concentration Curls',
+  'Triceps Pushdown', 'Close-Grip Barbell Bench Press', 'Lying Triceps Press', 'Dips - Triceps Version',
+  'Barbell Squat', 'Leg Press', 'Leg Extensions', 'Barbell Lunge',
+  'Romanian Deadlift', 'Lying Leg Curls', 'Stiff-Legged Barbell Deadlift',
+  'Barbell Hip Thrust', 'Barbell Glute Bridge', 'Single Leg Glute Bridge', 'Cable Hip Adduction',
+  'Standing Calf Raises', 'Seated Calf Raise', 'Donkey Calf Raises', 'Calf Press On The Leg Press Machine',
+  'Plank', 'Crunches', 'Hanging Leg Raise',
+  'Wrist Roller', 'Seated Palm-Up Barbell Wrist Curl', 'Palms-Down Wrist Curl Over A Bench',
+  'Barbell Shrug', 'Dumbbell Shrug', 'Cable Shrugs', 'Rack Pulls',
+  'Bent Over Barbell Row', 'Seated Cable Rows', 'One-Arm Dumbbell Row', 'Lying T-Bar Row',
+  'Barbell Deadlift', 'Hyperextensions (Back Extensions)', 'Good Morning', 'Superman'
+]);
+
 function muscleSubtitle(primaryMuscles, secondaryMuscles){
   const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
   const primary = (primaryMuscles || []).map(cap);
@@ -1541,26 +1570,6 @@ async function openPicker(initialTab, jumpToMuscle){
         chip.onclick = () => { removeSideIndex(); openSuggestionPreview(chip.dataset.name, EQUIPMENT_TO_CATEGORY[chip.dataset.equip] || 'Other'); };
       });
     }
-
-    // A couple of well-known staple exercises per muscle group, starred in the
-    // list as a quick "if in doubt, start here" signal. Verified against exact
-    // real database names, not fuzzy-matched, so the star only ever lands correctly.
-    const POPULAR_EXERCISES = new Set([
-      'Barbell Bench Press - Medium Grip', 'Dumbbell Bench Press', 'Incline Dumbbell Press', 'Pushups',
-      'Pullups', 'Wide-Grip Lat Pulldown', 'Bent Over Two-Dumbbell Row', 'Straight-Arm Pulldown',
-      'Standing Military Press', 'Dumbbell Shoulder Press', 'Side Lateral Raise', 'Arnold Dumbbell Press',
-      'Barbell Curl', 'Dumbbell Bicep Curl', 'Hammer Curls', 'Concentration Curls',
-      'Triceps Pushdown', 'Close-Grip Barbell Bench Press', 'Lying Triceps Press', 'Dips - Triceps Version',
-      'Barbell Squat', 'Leg Press', 'Leg Extensions', 'Barbell Lunge',
-      'Romanian Deadlift', 'Lying Leg Curls', 'Stiff-Legged Barbell Deadlift',
-      'Barbell Hip Thrust', 'Barbell Glute Bridge', 'Single Leg Glute Bridge', 'Cable Hip Adduction',
-      'Standing Calf Raises', 'Seated Calf Raise', 'Donkey Calf Raises', 'Calf Press On The Leg Press Machine',
-      'Plank', 'Crunches', 'Hanging Leg Raise',
-      'Wrist Roller', 'Seated Palm-Up Barbell Wrist Curl', 'Palms-Down Wrist Curl Over A Bench',
-      'Barbell Shrug', 'Dumbbell Shrug', 'Cable Shrugs', 'Rack Pulls',
-      'Bent Over Barbell Row', 'Seated Cable Rows', 'One-Arm Dumbbell Row', 'Lying T-Bar Row',
-      'Barbell Deadlift', 'Hyperextensions (Back Extensions)', 'Good Morning', 'Superman'
-    ]);
 
     function renderDbList(filter){
       const f = (filter || '').toLowerCase();
@@ -1796,7 +1805,7 @@ function synthesizeDescription(match){
 // between them (every exercise has exactly 2 - start/end position).
 function openImageLightbox(images, startIndex){
   const overlay = document.createElement('div');
-  overlay.style = 'position:fixed; inset:0; background:rgba(0,0,0,0.92); z-index:60; display:flex; flex-direction:column; align-items:center; justify-content:center;';
+  overlay.style = 'position:fixed; inset:0; background:rgba(0,0,0,0.92); z-index:60; display:flex; flex-direction:column; align-items:center; justify-content:center; overflow:hidden; touch-action:none;';
   let idx = startIndex || 0;
 
   const closeBtn = document.createElement('button');
@@ -1805,44 +1814,103 @@ function openImageLightbox(images, startIndex){
   closeBtn.onclick = () => overlay.remove();
   overlay.appendChild(closeBtn);
 
+  const imgWrap = document.createElement('div');
+  imgWrap.style = 'width:92vw; height:76vh; display:flex; align-items:center; justify-content:center; overflow:hidden;';
+  overlay.appendChild(imgWrap);
+
   const img = document.createElement('img');
-  img.style = 'max-width:92vw; max-height:76vh; border-radius:10px; background:#fff;';
-  overlay.appendChild(img);
+  img.style = 'max-width:100%; max-height:100%; border-radius:10px; background:#fff; transform-origin:center center; will-change:transform;';
+  imgWrap.appendChild(img);
 
   const dots = document.createElement('div');
   dots.style = 'display:flex; gap:6px; margin-top:16px;';
   overlay.appendChild(dots);
 
-  function render(){
+  // Zoom/pan state - persists while viewing the same image, resets on navigation
+  // (lifting your pinch fingers does NOT snap back, matching what was asked for).
+  let scale = 1, tx = 0, ty = 0;
+  function applyTransform(){
+    img.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+  }
+
+  function render(resetZoom){
     img.src = EXDB_IMG_BASE + images[idx];
+    if (resetZoom){ scale = 1; tx = 0; ty = 0; applyTransform(); }
     dots.innerHTML = images.map((_, i) =>
       `<div style="width:6px; height:6px; border-radius:50%; background:${i===idx ? 'var(--flame)' : 'rgba(255,255,255,0.3)'};"></div>`
     ).join('');
   }
-  render();
+  render(true);
 
+  let navPrevFn = null, navNextFn = null;
   if (images.length > 1){
     const prevBtn = document.createElement('button');
     prevBtn.innerHTML = '‹';
     prevBtn.style = 'position:absolute; left:8px; top:50%; transform:translateY(-50%); background:none; color:#fff; font-size:34px; padding:10px 16px; z-index:2;';
-    prevBtn.onclick = () => { idx = (idx - 1 + images.length) % images.length; render(); };
     const nextBtn = document.createElement('button');
     nextBtn.innerHTML = '›';
     nextBtn.style = 'position:absolute; right:8px; top:50%; transform:translateY(-50%); background:none; color:#fff; font-size:34px; padding:10px 16px; z-index:2;';
-    nextBtn.onclick = () => { idx = (idx + 1) % images.length; render(); };
+    navPrevFn = () => { idx = (idx - 1 + images.length) % images.length; render(true); };
+    navNextFn = () => { idx = (idx + 1) % images.length; render(true); };
+    prevBtn.onclick = navPrevFn;
+    nextBtn.onclick = navNextFn;
     overlay.appendChild(prevBtn);
     overlay.appendChild(nextBtn);
-
-    let touchStartX = null;
-    overlay.addEventListener('touchstart', (e) => { touchStartX = e.touches[0].clientX; }, { passive:true });
-    overlay.addEventListener('touchend', (e) => {
-      if (touchStartX === null) return;
-      const dx = e.changedTouches[0].clientX - touchStartX;
-      touchStartX = null;
-      if (Math.abs(dx) < 40) return;
-      if (dx < 0) nextBtn.onclick(); else prevBtn.onclick();
-    }, { passive:true });
   }
+
+  // Touch handling: two fingers = pinch-zoom (and stays zoomed after release);
+  // one finger while zoomed = pan; one finger at normal zoom = swipe to navigate.
+  let mode = null; // 'pinch' | 'pan' | 'swipe' | null
+  let pinchStartDist = 0, pinchStartScale = 1;
+  let panStartX = 0, panStartY = 0, panStartTx = 0, panStartTy = 0;
+  let swipeStartX = 0;
+
+  function dist(t0, t1){
+    return Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+  }
+
+  overlay.addEventListener('touchstart', (e) => {
+    if (e.touches.length === 2){
+      mode = 'pinch';
+      pinchStartDist = dist(e.touches[0], e.touches[1]);
+      pinchStartScale = scale;
+    } else if (e.touches.length === 1){
+      if (scale > 1.05){
+        mode = 'pan';
+        panStartX = e.touches[0].clientX; panStartY = e.touches[0].clientY;
+        panStartTx = tx; panStartTy = ty;
+      } else {
+        mode = 'swipe';
+        swipeStartX = e.touches[0].clientX;
+      }
+    }
+  }, { passive: true });
+
+  overlay.addEventListener('touchmove', (e) => {
+    if (mode === 'pinch' && e.touches.length === 2){
+      const newDist = dist(e.touches[0], e.touches[1]);
+      scale = Math.max(1, Math.min(4, pinchStartScale * (newDist / pinchStartDist)));
+      applyTransform();
+    } else if (mode === 'pan' && e.touches.length === 1){
+      tx = panStartTx + (e.touches[0].clientX - panStartX);
+      ty = panStartTy + (e.touches[0].clientY - panStartY);
+      applyTransform();
+    }
+  }, { passive: true });
+
+  overlay.addEventListener('touchend', (e) => {
+    if (mode === 'swipe' && images.length > 1){
+      const dx = e.changedTouches[0].clientX - swipeStartX;
+      if (Math.abs(dx) >= 40){
+        if (dx < 0) navNextFn(); else navPrevFn();
+      }
+    } else if (mode === 'pinch' && scale <= 1.02){
+      // Snapped back to ~1x during the pinch itself - clean up any residual offset.
+      scale = 1; tx = 0; ty = 0; applyTransform();
+    }
+    // Pinch/pan otherwise intentionally leave scale/tx/ty as-is - no snap-back.
+    mode = null;
+  }, { passive: true });
   overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
   document.body.appendChild(overlay);
 }
@@ -3167,6 +3235,9 @@ async function renderMe(){
         <div class="me-item" id="swapDaysBtn"><div>Swap Days</div><div class="chev">›</div></div>
         <div class="me-item" id="replayTourBtn"><div>How Zealift Works</div><div class="chev">›</div></div>
         <div class="me-item" id="redoWeekBtn"><div>Redo Week Setup</div><div class="chev">›</div></div>
+        <div class="section-label">App</div>
+        <div class="me-item" id="refreshAppBtn"><div>Refresh App</div><div class="chev">›</div></div>
+        <div class="me-item" id="updateAppBtn"><div>Check for Updates</div><div class="chev">›</div></div>
         <div class="me-item" id="signOutBtn"><div>Sign Out</div><div class="chev">›</div></div>
         <div style="text-align:center; padding:18px 0; color:var(--slate); font-family:'JetBrains Mono',monospace; font-size:10.5px;">Zealift · ${APP_VERSION}</div>
       </div>
@@ -3176,6 +3247,22 @@ async function renderMe(){
   document.getElementById('swapDaysBtn').onclick = openSwapDaysForm;
   document.getElementById('replayTourBtn').onclick = () => showOnboarding('teach');
   document.getElementById('redoWeekBtn').onclick = () => showOnboarding('setup');
+  document.getElementById('refreshAppBtn').onclick = () => { location.reload(); };
+  document.getElementById('updateAppBtn').onclick = async () => {
+    const btn = document.getElementById('updateAppBtn');
+    btn.querySelector('div').textContent = 'Updating…';
+    try {
+      if ('serviceWorker' in navigator){
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map(r => r.unregister()));
+      }
+      if ('caches' in window){
+        const keys = await caches.keys();
+        await Promise.all(keys.map(k => caches.delete(k)));
+      }
+    } catch(e){}
+    location.reload();
+  };
   document.getElementById('signOutBtn').onclick = async () => {
     await supabaseClient.auth.signOut();
   };
