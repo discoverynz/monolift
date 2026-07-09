@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 4.12';
+const APP_VERSION = 'Beta 5.0';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 
 // Common starter exercises shown as quick-add suggestions on an empty day, keyed by
@@ -245,6 +245,7 @@ let state = { selectedDay: todayWeekday(), exercises: [], session: null, current
 const ICON_TRACK = `<svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="4" width="4" height="16" rx="1.2"/><rect x="17" y="4" width="4" height="16" rx="1.2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>`;
 const ICON_SCALE = `<svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="4" width="18" height="17" rx="3"/><circle cx="12" cy="12.5" r="5"/><line x1="12" y1="12.5" x2="15" y2="10"/></svg>`;
 const ICON_PHASE = `<svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 3h16 M4 21h16 M5 3c0 6 7 7 7 9s-7 3-7 9 M19 3c0 6-7 7-7 9s7 3 7 9"/></svg>`;
+const ICON_BALANCE = `<svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18"/></svg>`;
 const ICON_ME = `<svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="7.5" r="4"/><path d="M3 21c0-5 4-8 9-8s9 3 9 8"/></svg>`;
 const ICON_CHECK = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8FBF7A" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
 
@@ -253,7 +254,7 @@ function renderTabbar(){
     <button class="tab-item ${state.currentTab==='track'?'active':''}" data-tab="track">${ICON_TRACK}<span>Track</span></button>
     <button class="tab-item ${state.currentTab==='scale'?'active':''}" data-tab="scale">${ICON_SCALE}<span>Scale</span></button>
     <div class="fab-wrap"><button class="fab" id="fabBtn">${`<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#17181A" stroke-width="2.4" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`}</button></div>
-    <button class="tab-item ${state.currentTab==='phase'?'active':''}" data-tab="phase">${ICON_PHASE}<span>Phase</span></button>
+    <button class="tab-item ${state.currentTab==='balance'?'active':''}" data-tab="balance">${ICON_BALANCE}<span>Balance</span></button>
     <button class="tab-item ${state.currentTab==='me'?'active':''}" data-tab="me">${ICON_ME}<span>Me</span></button>
   </div>`;
 }
@@ -266,14 +267,14 @@ function attachShellHandlers(){
       removeSideIndex();
       if (tab === 'track') renderTrack();
       else if (tab === 'scale') renderScale();
-      else if (tab === 'phase') renderPhase();
+      else if (tab === 'balance') renderBalance();
       else if (tab === 'me') renderMe();
     };
   });
   const fab = document.getElementById('fabBtn');
   if (fab) fab.onclick = () => {
     if (state.currentTab === 'scale') openLogWeightForm();
-    else openPicker(); // track, phase, me all default to the set-logging picker
+    else openPicker(); // track, balance, me all default to the set-logging picker
   };
 }
 
@@ -2378,21 +2379,55 @@ async function renderScale(){
     </div>`;
   }
 
+  const phase = await loadPhase();
+  const activePhase = phase ? determineActivePhase(phase) : null;
+  let bulkHtml, cutHtml;
+  if (phase && phase.bulk_start && phase.bulk_end){
+    const isActive = activePhase === 'bulk';
+    const w = weeksBetween(phase.bulk_start, phase.bulk_end);
+    bulkHtml = `<div class="phase-card ${isActive ? 'active' : 'upcoming'}">
+      <div class="top-row"><div class="name">Bulk</div><div class="status">${isActive ? 'ACTIVE' : 'SET'}</div></div>
+      <div class="dates">${phase.bulk_start} → ${phase.bulk_end}</div>
+      ${isActive && w ? `<div class="progress-track"><div class="progress-fill" style="width:${w.pct}%;"></div></div><div class="progress-labels"><span>Week ${w.elapsedWeeks} of ${w.totalWeeks}</span><span>${w.pct}%</span></div>` : ''}
+    </div>`;
+  } else {
+    bulkHtml = `<div class="phase-card upcoming"><div class="top-row"><div class="name">Bulk</div><div class="status">NOT SET</div></div></div>`;
+  }
+  if (phase && phase.cut_start && phase.cut_end){
+    const isActive = activePhase === 'cut';
+    const w = weeksBetween(phase.cut_start, phase.cut_end);
+    cutHtml = `<div class="phase-card ${isActive ? 'active' : 'upcoming'}">
+      <div class="top-row"><div class="name">Cut</div><div class="status">${isActive ? 'ACTIVE' : 'SET'}</div></div>
+      <div class="dates">${phase.cut_start} → ${phase.cut_end}</div>
+      ${isActive && w ? `<div class="progress-track"><div class="progress-fill" style="width:${w.pct}%;"></div></div><div class="progress-labels"><span>Week ${w.elapsedWeeks} of ${w.totalWeeks}</span><span>${w.pct}%</span></div>` : ''}
+    </div>`;
+  } else {
+    cutHtml = `<div class="phase-card upcoming"><div class="top-row"><div class="name">Cut</div><div class="status">NOT SET</div></div></div>`;
+  }
+
   app.innerHTML = `
     <div class="app-shell">
       <div class="scroll-area">
         <div class="brandbar"><img src="icons/icon-inapp-32.png" alt=""><div class="name">ZEALIFT</div><button class="brandbar-timer" onclick="openTimer()" aria-label="Timer" style="margin-left:auto; background:none; color:var(--slate); padding:6px; display:flex; align-items:center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg></button></div>
-        <div class="header"><div class="eyebrow">BODY WEIGHT</div><h1>Scale</h1></div>
+        <div class="header"><div class="eyebrow">BODY</div><h1>Scale</h1></div>
         <div class="stat-card">
           ${latest ? `<div class="big">${latest.weight}${latest.unit}</div><div class="small">${latest.logged_at}</div>${deltaHtml}` : `<div class="small">No entries yet — tap + to log your weight.</div>`}
         </div>
         ${chartHtml}
         <div class="section-label">Recent Entries</div>
         ${rows || '<div class="empty-state">Nothing logged yet.</div>'}
+        <div class="section-label">Phase</div>
+        <div class="section-label" style="padding-top:0; font-size:13px; color:var(--slate);">Bulk</div>
+        ${bulkHtml}
+        <div class="section-label" style="font-size:13px; color:var(--slate);">Cut</div>
+        ${cutHtml}
+        <div style="padding:0 18px; margin-top:16px;"><a class="edit-link" id="editPhaseLink">Edit dates</a></div>
       </div>
       ${renderTabbar()}
     </div>`;
   attachShellHandlers();
+  const editPhaseLink = document.getElementById('editPhaseLink');
+  if (editPhaseLink) editPhaseLink.onclick = () => openEditPhaseForm(phase);
   document.querySelectorAll('.scroll-area .log-row[data-id]').forEach(row => {
     let pressTimer = null;
     const start = () => { pressTimer = setTimeout(() => confirmDeleteBodyWeight(row.dataset.id), 550); };
@@ -2570,9 +2605,182 @@ function openEditPhaseForm(existing){
     const { error } = await supabaseClient.from('phase_settings').upsert(payload, { onConflict: 'user_id' });
     if (error){ alert(error.message); return; }
     overlay.remove();
-    renderPhase();
+    renderScale();
   };
 }
+
+// ---------- BALANCE ----------
+// Full 13-group taxonomy matching what matchExercise/free-exercise-db actually returns,
+// each mapped to a display label and which body region(s) it should color.
+const BALANCE_MUSCLES = [
+  'chest','lats','traps','lower back','shoulders','biceps','triceps',
+  'forearms','abdominals','quadriceps','hamstrings','glutes','calves'
+];
+const BALANCE_LABELS = {
+  chest:'Chest', lats:'Lats / Back', traps:'Traps', 'lower back':'Lower Back',
+  shoulders:'Shoulders', biceps:'Biceps', triceps:'Triceps', forearms:'Forearms',
+  abdominals:'Abdominals', quadriceps:'Quadriceps', hamstrings:'Hamstrings',
+  glutes:'Glutes', calves:'Calves'
+};
+// A commonly-cited general guideline (not personalized/clinical) for weekly working
+// sets per muscle group for most people building muscle.
+const BALANCE_TARGET_MIN = 10, BALANCE_TARGET_MAX = 20;
+
+async function tallyLoggedThisWeek(){
+  const { data: userData } = await supabaseClient.auth.getUser();
+  const since = new Date(Date.now() - 6*86400000).toISOString().slice(0,10);
+  const [exResult, setResult, db] = await Promise.all([
+    withTimeout(supabaseClient.from('exercises').select('id, name').eq('user_id', userData.user.id), 15000),
+    withTimeout(supabaseClient.from('sets').select('exercise_id, num_sets, logged_at').gte('logged_at', since), 15000),
+    loadExerciseDB()
+  ]);
+  const exercises = exResult.__timeout || exResult.error ? [] : (exResult.data || []);
+  const sets = setResult.__timeout || setResult.error ? [] : (setResult.data || []);
+  const exById = {};
+  exercises.forEach(ex => { exById[ex.id] = ex.name; });
+
+  const tally = {};
+  BALANCE_MUSCLES.forEach(m => tally[m] = 0);
+  sets.forEach(s => {
+    const name = exById[s.exercise_id];
+    if (!name) return;
+    const m = matchExercise(name, db);
+    const muscle = m && m.primaryMuscles && m.primaryMuscles[0];
+    if (muscle && tally.hasOwnProperty(muscle)) tally[muscle] += (s.num_sets || 1);
+  });
+  return tally;
+}
+
+async function tallyFullPlan(){
+  const { data: userData } = await supabaseClient.auth.getUser();
+  const [exResult, db] = await Promise.all([
+    withTimeout(supabaseClient.from('exercises').select('id, name').eq('user_id', userData.user.id).eq('active', true), 15000),
+    loadExerciseDB()
+  ]);
+  const exercises = exResult.__timeout || exResult.error ? [] : (exResult.data || []);
+
+  const tally = {};
+  BALANCE_MUSCLES.forEach(m => tally[m] = 0);
+  exercises.forEach(ex => {
+    const m = matchExercise(ex.name, db);
+    const muscle = m && m.primaryMuscles && m.primaryMuscles[0];
+    if (muscle && tally.hasOwnProperty(muscle)) tally[muscle] += 1;
+  });
+  return tally;
+}
+
+function statusForLoggedCount(count){
+  if (count === 0) return { label:'NO DATA', color:'#3A6EA5' };
+  if (count < BALANCE_TARGET_MIN * 0.4) return { label:'WAY BELOW', color:'#3A6EA5' };
+  if (count < BALANCE_TARGET_MIN * 0.75) return { label:'BELOW TARGET', color:'#7BA6C9' };
+  if (count < BALANCE_TARGET_MIN) return { label:'LOW-GOOD', color:'#F0C542' };
+  if (count <= BALANCE_TARGET_MAX) return { label:'GOOD', color:'#8FBF7A' };
+  return { label:'ABOVE TARGET', color:'#E8492A' };
+}
+function statusForPlanCount(count, maxCount){
+  if (count === 0) return { label:'GAP', color:'#3A6EA5' };
+  const ratio = maxCount > 0 ? count / maxCount : 0;
+  if (ratio < 0.25) return { label:'LIGHT', color:'#7BA6C9' };
+  if (ratio < 0.75) return { label:'BALANCED', color:'#8FBF7A' };
+  return { label:'HEAVY', color:'#E8492A' };
+}
+
+function balanceBarsHtml(tally, mode){
+  const maxCount = Math.max(1, ...Object.values(tally));
+  return BALANCE_MUSCLES.map(muscle => {
+    const count = tally[muscle];
+    const status = mode === 'logged' ? statusForLoggedCount(count) : statusForPlanCount(count, maxCount);
+    const barMax = mode === 'logged' ? Math.max(maxCount, BALANCE_TARGET_MAX * 1.5) : maxCount;
+    const widthPct = Math.min(100, Math.round((count / barMax) * 100));
+    const targetZoneHtml = mode === 'logged'
+      ? `<div class="bal-target-zone" style="left:${Math.round((BALANCE_TARGET_MIN/barMax)*100)}%; width:${Math.round(((BALANCE_TARGET_MAX-BALANCE_TARGET_MIN)/barMax)*100)}%;"></div>`
+      : '';
+    const suffix = mode === 'logged' ? '' : ' ex';
+    return `<div class="bal-row">
+      <div class="bal-toprow"><div class="bal-name">${BALANCE_LABELS[muscle]}</div><div class="bal-status" style="background:${status.color}26; color:${status.color};">${status.label}</div></div>
+      <div class="bal-bar-track">
+        ${targetZoneHtml}
+        <div class="bal-bar-fill" style="width:${widthPct}%; background:${status.color};"><span class="bal-count">${count}${suffix}</span></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function balanceColorFor(tally, muscle, mode){
+  const maxCount = Math.max(1, ...Object.values(tally));
+  const status = mode === 'logged' ? statusForLoggedCount(tally[muscle]) : statusForPlanCount(tally[muscle], maxCount);
+  return status.color;
+}
+
+// Front and back schematic body diagrams, colored per-region from the same tally
+// data driving the bars above. Two static views stand in for true 3D rotation -
+// a real rotatable model would need an actual mesh and Three.js, a separate build.
+function balanceBodySvg(tally, mode, view){
+  const c = (muscle) => balanceColorFor(tally, muscle, mode);
+  const neutral = '#2A2C31';
+  if (view === 'front'){
+    return `<svg width="100" height="190" viewBox="0 0 160 320">
+      <circle cx="80" cy="22" r="16" fill="${neutral}"/><rect x="72" y="36" width="16" height="10" rx="5" fill="${neutral}"/>
+      <rect x="44" y="44" width="72" height="94" rx="26" fill="${neutral}"/>
+      <rect x="26" y="48" width="18" height="30" rx="9" fill="${c('biceps')}"/><rect x="116" y="48" width="18" height="30" rx="9" fill="${c('biceps')}"/>
+      <rect x="22" y="76" width="16" height="26" rx="8" fill="${c('forearms')}"/><rect x="122" y="76" width="16" height="26" rx="8" fill="${c('forearms')}"/>
+      <rect x="50" y="130" width="60" height="32" rx="16" fill="${neutral}"/>
+      <rect x="52" y="158" width="22" height="64" rx="11" fill="${c('quadriceps')}"/><rect x="86" y="158" width="22" height="64" rx="11" fill="${c('quadriceps')}"/>
+      <rect x="54" y="220" width="18" height="58" rx="9" fill="${c('calves')}"/><rect x="86" y="220" width="18" height="58" rx="9" fill="${c('calves')}"/>
+      <rect x="52" y="50" width="56" height="26" rx="12" fill="${c('chest')}"/>
+      <circle cx="35" cy="50" r="10" fill="${c('shoulders')}"/><circle cx="125" cy="50" r="10" fill="${c('shoulders')}"/>
+      <rect x="56" y="78" width="48" height="46" rx="10" fill="${c('abdominals')}"/>
+    </svg>`;
+  }
+  return `<svg width="100" height="190" viewBox="0 0 160 320">
+    <circle cx="80" cy="22" r="16" fill="${neutral}"/><rect x="72" y="36" width="16" height="10" rx="5" fill="${neutral}"/>
+    <path d="M56 44 L104 44 L114 70 L46 70 Z" fill="${c('traps')}"/>
+    <rect x="44" y="70" width="72" height="46" rx="14" fill="${c('lats')}"/>
+    <rect x="44" y="116" width="72" height="22" rx="10" fill="${c('lower back')}"/>
+    <rect x="26" y="48" width="18" height="30" rx="9" fill="${c('shoulders')}"/><rect x="116" y="48" width="18" height="30" rx="9" fill="${c('shoulders')}"/>
+    <rect x="22" y="76" width="16" height="26" rx="8" fill="${c('triceps')}"/><rect x="122" y="76" width="16" height="26" rx="8" fill="${c('triceps')}"/>
+    <rect x="20" y="100" width="14" height="26" rx="7" fill="${c('forearms')}"/><rect x="126" y="100" width="14" height="26" rx="7" fill="${c('forearms')}"/>
+    <rect x="48" y="130" width="64" height="34" rx="14" fill="${c('glutes')}"/>
+    <rect x="52" y="158" width="22" height="64" rx="11" fill="${c('hamstrings')}"/><rect x="86" y="158" width="22" height="64" rx="11" fill="${c('hamstrings')}"/>
+    <rect x="54" y="220" width="18" height="58" rx="9" fill="${c('calves')}"/><rect x="86" y="220" width="18" height="58" rx="9" fill="${c('calves')}"/>
+  </svg>`;
+}
+
+async function renderBalance(mode){
+  mode = mode || state.balanceMode || 'logged';
+  state.balanceMode = mode;
+  app.innerHTML = `<div class="app-shell"><div class="login-wrap"><div class="login-sub">Crunching your balance…</div></div></div>`;
+  const tally = mode === 'logged' ? await tallyLoggedThisWeek() : await tallyFullPlan();
+  const barsHtml = balanceBarsHtml(tally, mode);
+  const frontSvg = balanceBodySvg(tally, mode, 'front');
+  const backSvg = balanceBodySvg(tally, mode, 'back');
+
+  app.innerHTML = `
+    <div class="app-shell">
+      <div class="scroll-area">
+        <div class="brandbar"><img src="icons/icon-inapp-32.png" alt=""><div class="name">ZEALIFT</div></div>
+        <div class="header"><div class="eyebrow">${mode === 'logged' ? 'LAST 7 DAYS' : 'WHOLE WEEKLY PLAN'}</div><h1>Balance</h1></div>
+        <div class="seg" style="margin:10px 18px; display:flex; border:1px solid var(--line);">
+          <div class="bal-seg-chip ${mode==='logged'?'active':''}" data-mode="logged" style="flex:1; text-align:center; padding:7px 0; font-family:'Bebas Neue',sans-serif; font-size:11.5px; letter-spacing:0.5px; color:${mode==='logged'?'var(--ink)':'var(--slate)'}; background:${mode==='logged'?'var(--flame)':'transparent'};">LOGGED THIS WEEK</div>
+          <div class="bal-seg-chip ${mode==='plan'?'active':''}" data-mode="plan" style="flex:1; text-align:center; padding:7px 0; font-family:'Bebas Neue',sans-serif; font-size:11.5px; letter-spacing:0.5px; color:${mode==='plan'?'var(--ink)':'var(--slate)'}; background:${mode==='plan'?'var(--flame)':'transparent'};">FULL PLAN</div>
+        </div>
+        ${mode === 'plan' ? `<div class="small" style="padding:0 18px 8px 18px; color:var(--slate);">Counts exercise slots across every day, regardless of what's been logged.</div>` : `<div class="small" style="padding:0 18px 8px 18px; color:var(--slate);">Target zone is a general guideline (~${BALANCE_TARGET_MIN}-${BALANCE_TARGET_MAX} weekly sets), not personalized advice.</div>`}
+        <div class="section-label">${mode === 'logged' ? 'Sets Logged, By Muscle' : 'Plan Coverage, By Muscle'}</div>
+        ${barsHtml}
+        <div class="section-label" style="text-align:center;">Heat Map</div>
+        <div style="display:flex; justify-content:center; gap:20px; padding:8px 0 20px 0;">
+          <div style="text-align:center;"><div class="small" style="margin-bottom:4px;">FRONT</div>${frontSvg}</div>
+          <div style="text-align:center;"><div class="small" style="margin-bottom:4px;">BACK</div>${backSvg}</div>
+        </div>
+      </div>
+      ${renderTabbar()}
+    </div>`;
+  attachShellHandlers();
+  document.querySelectorAll('.bal-seg-chip').forEach(chip => {
+    chip.onclick = () => renderBalance(chip.dataset.mode);
+  });
+}
+
 
 // ---------- ME ----------
 async function getDayStats(weekday){

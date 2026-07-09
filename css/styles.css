@@ -114,6 +114,14 @@ input:focus, button:focus{ outline:none; }
 
 /* ---------- Phase ---------- */
 .section-label{ font-family:'Oswald', sans-serif; font-size:13px; letter-spacing:2px; color:var(--slate); text-transform:uppercase; padding:16px 18px 8px 18px; }
+.bal-row{ padding:7px 18px; }
+.bal-toprow{ display:flex; justify-content:space-between; align-items:baseline; margin-bottom:3px; }
+.bal-name{ font-size:12px; font-weight:600; }
+.bal-status{ font-family:'JetBrains Mono', monospace; font-size:8.5px; padding:2px 6px; border-radius:10px; white-space:nowrap; }
+.bal-bar-track{ position:relative; height:14px; background:var(--panel); border-radius:4px; overflow:visible; }
+.bal-target-zone{ position:absolute; top:0; bottom:0; background:rgba(255,255,255,0.06); border-left:1px dashed #444; border-right:1px dashed #444; }
+.bal-bar-fill{ position:relative; height:100%; border-radius:4px; z-index:1; min-width:2px; }
+.bal-count{ position:absolute; right:6px; top:50%; transform:translateY(-50%); font-family:'JetBrains Mono', monospace; font-size:9px; color:#fff; font-weight:700; z-index:2; }
 .phase-card{ margin:0 18px; border-radius:16px; padding:18px; }
 .phase-card.active{ background:var(--panel); } .phase-card.upcoming{ background:transparent; border:1px dashed var(--line); }
 .phase-card .top-row{ display:flex; justify-content:space-between; align-items:baseline; }
