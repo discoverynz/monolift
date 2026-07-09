@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.2';
+const APP_VERSION = 'Beta 5.3';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 
 // Common starter exercises shown as quick-add suggestions on an empty day, keyed by
@@ -129,9 +129,21 @@ function removeSideIndex(){
 // and drag-scrubs through them with a floating bubble showing the full name.
 // `keys` are the section names in display order; `prefix` must match the id
 // prefix used on each section header element (e.g. 'cat-' + slug).
+let _lastSideIndexArgs = null;
+function restoreSideIndexIfVisible(){
+  if (!_lastSideIndexArgs) return;
+  const { keys, prefix, bounds } = _lastSideIndexArgs;
+  // Only restore if at least the first target section is actually still on screen -
+  // otherwise we'd be re-attaching an index pointing at a screen that's gone.
+  const firstSlug = prefix + (keys[0] || '').replace(/[^a-z0-9]/gi,'');
+  if (keys.length && document.getElementById(firstSlug)){
+    attachSideIndex(keys, prefix, bounds);
+  }
+}
 function attachSideIndex(keys, prefix, bounds){
   removeSideIndex();
   bounds = bounds || { top: 170, bottom: 110 };
+  _lastSideIndexArgs = { keys, prefix, bounds };
   const idx = document.createElement('div');
   idx.id = 'sideIndexEl';
   idx.style = `position:fixed; right:6px; top:${bounds.top}px; bottom:${bounds.bottom}px; display:flex; flex-direction:column; justify-content:center; gap:2px; padding:4px 8px 4px 3px; z-index:15; touch-action:none;`;
@@ -1007,7 +1019,7 @@ async function openSuggestionPreview(name, category, navList){
       <button class="save-btn" id="addSuggestionBtn" style="margin-top:6px;">+ Add to ${DAY_LABELS[state.selectedDay]}</button>
     </div>`;
   document.body.appendChild(overlay);
-  overlay.querySelector('#closeSugPreview').onclick = () => overlay.remove();
+  overlay.querySelector('#closeSugPreview').onclick = () => { overlay.remove(); restoreSideIndexIfVisible(); };
   if (navPrev) overlay.querySelector('#prevSugBtn').onclick = () => { overlay.remove(); openSuggestionPreview(navPrev.name, catFor(navPrev), navList); };
   if (navNext) overlay.querySelector('#nextSugBtn').onclick = () => { overlay.remove(); openSuggestionPreview(navNext.name, catFor(navNext), navList); };
 
@@ -1351,6 +1363,16 @@ function showUndoToast(exerciseName, onUndo){
 
 // Groups raw free-exercise-db records (not the user's own exercises) either by
 // primary muscle or by their own equipment field directly.
+function muscleSubtitle(primaryMuscles, secondaryMuscles){
+  const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
+  const primary = (primaryMuscles || []).map(cap);
+  const secondary = (secondaryMuscles || []).map(cap);
+  if (!primary.length && !secondary.length) return '';
+  let out = primary.join(', ');
+  if (secondary.length) out += (out ? ' · ' : '') + secondary.join(', ');
+  return out;
+}
+
 function groupDatabaseExercises(list, groupBy){
   const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
   const grouped = {};
@@ -1403,7 +1425,10 @@ async function openPicker(initialTab, jumpToMuscle){
       });
       const deduped = Object.values(byName).filter(ex => ex.name.toLowerCase().includes(f));
       const groupBy = getGroupByPref();
-      const { grouped, orderedKeys } = await groupExercisesByChoice(deduped, groupBy);
+      const [{ grouped, orderedKeys }, db] = await Promise.all([
+        groupExercisesByChoice(deduped, groupBy),
+        loadExerciseDB()
+      ]);
 
       let html = '';
       const presentKeys = orderedKeys.filter(k => (grouped[k]||[]).length);
@@ -1411,7 +1436,11 @@ async function openPicker(initialTab, jumpToMuscle){
         const items = (grouped[cat] || []).slice().sort((a, b) => a.name.localeCompare(b.name));
         const slug = 'mine-' + cat.replace(/[^a-z0-9]/gi,'');
         html += `<div class="category" id="${slug}">${cat}</div>`;
-        html += items.map(ex => `<div class="pick-row" data-id="${ex.id}" data-name="${ex.name}"><div class="ex-name">${ex.name}</div><div class="chev">›</div></div>`).join('');
+        html += items.map(ex => {
+          const match = matchExercise(ex.name, db);
+          const muscles = match ? muscleSubtitle(match.primaryMuscles, match.secondaryMuscles) : '';
+          return `<div class="pick-row" data-id="${ex.id}" data-name="${ex.name}"><div><div class="ex-name">${ex.name}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}</div><div class="chev">›</div></div>`;
+        }).join('');
       });
       body.querySelector('#pickerGroupToggle').innerHTML = groupByToggleHtml(groupBy);
       body.querySelectorAll('.groupby-chip').forEach(chip => {
@@ -1485,20 +1514,20 @@ async function openPicker(initialTab, jumpToMuscle){
     // list as a quick "if in doubt, start here" signal. Verified against exact
     // real database names, not fuzzy-matched, so the star only ever lands correctly.
     const POPULAR_EXERCISES = new Set([
-      'Barbell Bench Press - Medium Grip', 'Dumbbell Bench Press',
-      'Pullups', 'Wide-Grip Lat Pulldown',
-      'Standing Military Press', 'Dumbbell Shoulder Press',
-      'Barbell Curl', 'Dumbbell Bicep Curl',
-      'Triceps Pushdown', 'Close-Grip Barbell Bench Press',
-      'Barbell Squat', 'Leg Press',
-      'Romanian Deadlift', 'Lying Leg Curls',
-      'Barbell Hip Thrust', 'Barbell Glute Bridge',
-      'Standing Calf Raises', 'Seated Calf Raise',
-      'Plank', 'Crunches',
-      'Wrist Roller', 'Seated Palm-Up Barbell Wrist Curl',
-      'Barbell Shrug', 'Dumbbell Shrug',
-      'Bent Over Barbell Row', 'Seated Cable Rows',
-      'Barbell Deadlift', 'Hyperextensions (Back Extensions)'
+      'Barbell Bench Press - Medium Grip', 'Dumbbell Bench Press', 'Incline Dumbbell Press', 'Pushups',
+      'Pullups', 'Wide-Grip Lat Pulldown', 'Bent Over Two-Dumbbell Row', 'Straight-Arm Pulldown',
+      'Standing Military Press', 'Dumbbell Shoulder Press', 'Side Lateral Raise', 'Arnold Dumbbell Press',
+      'Barbell Curl', 'Dumbbell Bicep Curl', 'Hammer Curls', 'Concentration Curls',
+      'Triceps Pushdown', 'Close-Grip Barbell Bench Press', 'Lying Triceps Press', 'Dips - Triceps Version',
+      'Barbell Squat', 'Leg Press', 'Leg Extensions', 'Barbell Lunge',
+      'Romanian Deadlift', 'Lying Leg Curls', 'Stiff-Legged Barbell Deadlift',
+      'Barbell Hip Thrust', 'Barbell Glute Bridge', 'Single Leg Glute Bridge', 'Cable Hip Adduction',
+      'Standing Calf Raises', 'Seated Calf Raise', 'Donkey Calf Raises', 'Calf Press On The Leg Press Machine',
+      'Plank', 'Crunches', 'Hanging Leg Raise',
+      'Wrist Roller', 'Seated Palm-Up Barbell Wrist Curl', 'Palms-Down Wrist Curl Over A Bench',
+      'Barbell Shrug', 'Dumbbell Shrug', 'Cable Shrugs', 'Rack Pulls',
+      'Bent Over Barbell Row', 'Seated Cable Rows', 'One-Arm Dumbbell Row', 'Lying T-Bar Row',
+      'Barbell Deadlift', 'Hyperextensions (Back Extensions)', 'Good Morning', 'Superman'
     ]);
 
     function renderDbList(filter){
@@ -1517,7 +1546,9 @@ async function openPicker(initialTab, jumpToMuscle){
           flatOrder.push({ name: e.name, equipment: e.equipment });
           const star = POPULAR_EXERCISES.has(e.name)
             ? `<span title="Popular staple" style="color:#F0C542; margin-left:5px;">★</span>` : '';
-          return `<div class="pick-row db-pick" data-name="${e.name}" data-equip="${e.equipment||''}"><div><div class="ex-name">${e.name}${star}</div><div class="small" style="color:var(--slate);">${[cap(e.equipment), cap(e.level)].filter(Boolean).join(' · ')}</div></div><div class="chev">›</div></div>`;
+          const muscles = muscleSubtitle(e.primaryMuscles, e.secondaryMuscles);
+          const equipLine = [cap(e.equipment), cap(e.level)].filter(Boolean).join(' · ');
+          return `<div class="pick-row db-pick" data-name="${e.name}" data-equip="${e.equipment||''}"><div><div class="ex-name">${e.name}${star}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}${equipLine ? `<div class="small" style="color:var(--slate); opacity:0.7; font-size:10.5px;">${equipLine}</div>` : ''}</div><div class="chev">›</div></div>`;
         }).join('');
       });
       body.querySelector('#dbGroupToggle').innerHTML = groupByToggleHtml(groupBy);
