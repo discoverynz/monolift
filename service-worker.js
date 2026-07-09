@@ -1,4 +1,4 @@
-const CACHE_NAME = 'zealift-v3';
+const CACHE_NAME = 'zealift-v51';
 const SHELL = ['./', './index.html', './css/styles.css?v=51', './js/app.js?v=51', './js/supabase-client.js?v=51', './manifest.json'];
 
 self.addEventListener('install', (event) => {
