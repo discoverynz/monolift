@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.0';
+const APP_VERSION = 'Beta 5.1';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 
 // Common starter exercises shown as quick-add suggestions on an empty day, keyed by
@@ -377,16 +377,23 @@ async function loadExercises(){
   const { data: exercises, error } = result;
   if (error){ console.error(error); state.exercises = []; return; }
 
-  const withLogs = await Promise.all((exercises || []).map(async (ex) => {
-    const setResult = await withTimeout(
-      supabaseClient.from('sets').select('weight, weight_unit, weight_type, reps, num_sets, logged_at')
-        .eq('exercise_id', ex.id).order('logged_at', { ascending: false }).limit(1),
+  const exerciseIds = (exercises || []).map(ex => ex.id);
+  let lastSetByExercise = {};
+  if (exerciseIds.length){
+    const setsResult = await withTimeout(
+      supabaseClient.from('sets').select('exercise_id, weight, weight_unit, weight_type, reps, num_sets, logged_at')
+        .in('exercise_id', exerciseIds).order('logged_at', { ascending: false }),
       15000
     );
-    const lastSet = setResult.__timeout ? null : (setResult.data && setResult.data[0]);
+    const allSets = setsResult.__timeout || setsResult.error ? [] : (setsResult.data || []);
+    // Results are ordered newest-first, so the first time we see an exercise_id is its most recent set.
+    allSets.forEach(s => { if (!lastSetByExercise[s.exercise_id]) lastSetByExercise[s.exercise_id] = s; });
+  }
+  const withLogs = (exercises || []).map(ex => {
+    const lastSet = lastSetByExercise[ex.id] || null;
     const loggedToday = lastSet && lastSet.logged_at === todayStr();
     return { ...ex, lastSet, loggedToday };
-  }));
+  });
 
   // Resolve alt-group "complete via" logic: if any member of a group was logged today,
   // the whole group counts as done; the one actually logged shows real data, siblings show "via".
@@ -992,6 +999,7 @@ async function openSuggestionPreview(name, category){
   const db = await loadExerciseDB();
   const match = matchExercise(name, db) || { name, primaryMuscles: [], secondaryMuscles: [], instructions: [], images: [] };
   overlay.querySelector('#sugPreviewArea').innerHTML = renderGuideContent(match);
+  attachGuideImageLightbox(overlay.querySelector('#sugPreviewArea'), match.images);
 
   overlay.querySelector('#addSuggestionBtn').onclick = async () => {
     const { data: userData } = await supabaseClient.auth.getUser();
@@ -1006,8 +1014,7 @@ async function openSuggestionPreview(name, category){
 
 async function renderTrack(){
   app.innerHTML = `<div class="app-shell"><div class="login-wrap"><div class="login-sub">Loading your exercises…</div></div></div>`;
-  await loadExercises();
-  const dayTypeLabel = await loadDayType(state.selectedDay);
+  const [, dayTypeLabel] = await Promise.all([loadExercises(), loadDayType(state.selectedDay)]);
 
   // slot-based progress: exercises sharing an alt_group_id count once
   const seenGroups = new Set();
@@ -1331,7 +1338,8 @@ function groupDatabaseExercises(list, groupBy){
   return { grouped, orderedKeys };
 }
 
-async function openPicker(initialTab){
+async function openPicker(initialTab, jumpToMuscle){
+  if (jumpToMuscle) setGroupByPref('muscle');
   const overlay = document.createElement('div');
   overlay.className = 'overlay-screen';
   overlay.innerHTML = `
@@ -1468,6 +1476,12 @@ async function openPicker(initialTab){
 
       // Fixed side index over the whole screen, drag-scrub with a name bubble.
       attachSideIndex(presentKeys, 'cat-', { top: 170, bottom: 110 });
+
+      if (jumpToMuscle && !filter){
+        const slug = 'cat-' + jumpToMuscle.replace(/[^a-z0-9]/gi,'');
+        const target = document.getElementById(slug);
+        if (target) requestAnimationFrame(() => target.scrollIntoView({ behavior:'auto', block:'start' }));
+      }
 
       body.querySelectorAll('.db-pick').forEach(el => {
         el.onclick = () => {
@@ -1662,6 +1676,68 @@ function synthesizeDescription(match){
   return '';
 }
 
+// Full-screen enlarged view of a guide's images, with swipe/arrow navigation
+// between them (every exercise has exactly 2 - start/end position).
+function openImageLightbox(images, startIndex){
+  const overlay = document.createElement('div');
+  overlay.style = 'position:fixed; inset:0; background:rgba(0,0,0,0.92); z-index:60; display:flex; flex-direction:column; align-items:center; justify-content:center;';
+  let idx = startIndex || 0;
+
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '✕';
+  closeBtn.style = 'position:absolute; top:calc(18px + env(safe-area-inset-top, 0px)); right:18px; background:none; color:#fff; font-size:20px; z-index:2;';
+  closeBtn.onclick = () => overlay.remove();
+  overlay.appendChild(closeBtn);
+
+  const img = document.createElement('img');
+  img.style = 'max-width:92vw; max-height:76vh; border-radius:10px; background:#fff;';
+  overlay.appendChild(img);
+
+  const dots = document.createElement('div');
+  dots.style = 'display:flex; gap:6px; margin-top:16px;';
+  overlay.appendChild(dots);
+
+  function render(){
+    img.src = EXDB_IMG_BASE + images[idx];
+    dots.innerHTML = images.map((_, i) =>
+      `<div style="width:6px; height:6px; border-radius:50%; background:${i===idx ? 'var(--flame)' : 'rgba(255,255,255,0.3)'};"></div>`
+    ).join('');
+  }
+  render();
+
+  if (images.length > 1){
+    const prevBtn = document.createElement('button');
+    prevBtn.innerHTML = '‹';
+    prevBtn.style = 'position:absolute; left:8px; top:50%; transform:translateY(-50%); background:none; color:#fff; font-size:34px; padding:10px 16px; z-index:2;';
+    prevBtn.onclick = () => { idx = (idx - 1 + images.length) % images.length; render(); };
+    const nextBtn = document.createElement('button');
+    nextBtn.innerHTML = '›';
+    nextBtn.style = 'position:absolute; right:8px; top:50%; transform:translateY(-50%); background:none; color:#fff; font-size:34px; padding:10px 16px; z-index:2;';
+    nextBtn.onclick = () => { idx = (idx + 1) % images.length; render(); };
+    overlay.appendChild(prevBtn);
+    overlay.appendChild(nextBtn);
+
+    let touchStartX = null;
+    overlay.addEventListener('touchstart', (e) => { touchStartX = e.touches[0].clientX; }, { passive:true });
+    overlay.addEventListener('touchend', (e) => {
+      if (touchStartX === null) return;
+      const dx = e.changedTouches[0].clientX - touchStartX;
+      touchStartX = null;
+      if (Math.abs(dx) < 40) return;
+      if (dx < 0) nextBtn.onclick(); else prevBtn.onclick();
+    }, { passive:true });
+  }
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  document.body.appendChild(overlay);
+}
+
+function attachGuideImageLightbox(container, images){
+  if (!images || !images.length) return;
+  container.querySelectorAll('.guide-thumb').forEach(thumb => {
+    thumb.onclick = () => openImageLightbox(images, parseInt(thumb.dataset.idx, 10) || 0);
+  });
+}
+
 function renderGuideContent(match){
   const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
   const primarySet = new Set(match.primaryMuscles || []);
@@ -1672,8 +1748,8 @@ function renderGuideContent(match){
       color:${isPrimary ? '#FF6B1A' : 'var(--slate)'};">${cap(m)}</span>`;
   }).join('');
   const description = synthesizeDescription(match);
-  const imgs = (match.images || []).map(src =>
-    `<img src="${EXDB_IMG_BASE}${src}" alt="" style="width:100%; border-radius:10px; background:#fff; display:block;" loading="lazy">`
+  const imgs = (match.images || []).map((src, i) =>
+    `<img src="${EXDB_IMG_BASE}${src}" alt="" class="guide-thumb" data-idx="${i}" style="width:100%; border-radius:10px; background:#fff; display:block; cursor:pointer;" loading="lazy">`
   ).join('');
   const imgGallery = imgs
     ? `<div style="display:grid; grid-template-columns:${match.images.length > 1 ? '1fr 1fr' : '1fr'}; gap:6px; margin-bottom:6px;">${imgs}</div>`
@@ -1726,6 +1802,7 @@ async function loadExerciseGuide(overlay, exerciseName){
   const toggle = area.querySelector('#guideToggle');
   const body = area.querySelector('#guideBody');
   const chev = area.querySelector('#guideChev');
+  attachGuideImageLightbox(body, match.images);
   toggle.onclick = () => {
     const open = body.style.display !== 'none';
     body.style.display = open ? 'none' : 'block';
@@ -2686,6 +2763,7 @@ function statusForPlanCount(count, maxCount){
 }
 
 function balanceBarsHtml(tally, mode){
+  const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
   const maxCount = Math.max(1, ...Object.values(tally));
   return BALANCE_MUSCLES.map(muscle => {
     const count = tally[muscle];
@@ -2696,7 +2774,7 @@ function balanceBarsHtml(tally, mode){
       ? `<div class="bal-target-zone" style="left:${Math.round((BALANCE_TARGET_MIN/barMax)*100)}%; width:${Math.round(((BALANCE_TARGET_MAX-BALANCE_TARGET_MIN)/barMax)*100)}%;"></div>`
       : '';
     const suffix = mode === 'logged' ? '' : ' ex';
-    return `<div class="bal-row">
+    return `<div class="bal-row" data-muscle="${cap(muscle)}" style="cursor:pointer;">
       <div class="bal-toprow"><div class="bal-name">${BALANCE_LABELS[muscle]}</div><div class="bal-status" style="background:${status.color}26; color:${status.color};">${status.label}</div></div>
       <div class="bal-bar-track">
         ${targetZoneHtml}
@@ -2778,6 +2856,9 @@ async function renderBalance(mode){
   attachShellHandlers();
   document.querySelectorAll('.bal-seg-chip').forEach(chip => {
     chip.onclick = () => renderBalance(chip.dataset.mode);
+  });
+  document.querySelectorAll('.bal-row').forEach(row => {
+    row.onclick = () => openPicker('database', row.dataset.muscle);
   });
 }
 
