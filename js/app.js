@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.5';
+const APP_VERSION = 'Beta 5.6';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 
 // Common starter exercises shown as quick-add suggestions on an empty day, keyed by
@@ -1139,8 +1139,10 @@ async function renderTrack(){
       ${suggestions.map(s => {
         const cat = EQUIPMENT_TO_CATEGORY[s.equipment] || 'Other';
         const muscleLabel = s.primaryMuscles && s.primaryMuscles[0] ? cap(s.primaryMuscles[0]) : '';
+        const star = POPULAR_EXERCISES.has(s.name)
+          ? `<span title="Popular staple" style="color:#F0C542; margin-left:5px;">★</span>` : '';
         return `<div class="pick-row suggestion-add" data-name="${s.name}" data-cat="${cat}">
-          <div><div class="ex-name">${s.name}</div><div class="small" style="color:var(--slate);">${muscleLabel}</div></div>
+          <div><div class="ex-name">${s.name}${star}</div><div class="small" style="color:var(--slate);">${muscleLabel}</div></div>
           <div class="chev" style="color:var(--flame); font-size:20px;">+</div>
         </div>`;
       }).join('')}`;
