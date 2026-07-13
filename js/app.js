@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.8';
+const APP_VERSION = 'Beta 5.9';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -298,6 +298,18 @@ function todayStr(){
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const dd = String(d.getDate()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd}`;
+}
+
+const SHORT_DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+const SHORT_MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+// Parses a plain YYYY-MM-DD string as a local calendar date rather than through
+// the Date constructor directly, which would otherwise interpret it as UTC
+// midnight and can shift the displayed day by one depending on timezone.
+function formatLoggedDate(dateStr){
+  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr;
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  return `${SHORT_DAY_NAMES[dt.getDay()]}, ${SHORT_MONTH_NAMES[dt.getMonth()]} ${d}`;
 }
 
 const app = document.getElementById('app');
@@ -712,7 +724,7 @@ function exerciseRow(ex){
     subtitle = `<div class="ex-last via">↳ Complete via ${ex.completeVia}</div>`;
     showCheck = true; isDone = true;
   } else {
-    subtitle = `<div class="ex-last">${ex.lastSet ? formatSetValue(ex.lastSet) + ' · ' + ex.lastSet.logged_at : 'Not logged yet'}</div>`;
+    subtitle = `<div class="ex-last">${ex.lastSet ? formatSetValue(ex.lastSet) + ' · ' + formatLoggedDate(ex.lastSet.logged_at) : 'Not logged yet'}</div>`;
     showCheck = false;
   }
   // Once something's done, the thick green rail + faint wash takes priority
@@ -725,7 +737,7 @@ function exerciseRow(ex){
   const mech = ex.mechanicInfo;
   const mechTag = mech ? `<span style="font-size:9px; padding:2px 5px; border-radius:4px; margin-left:5px; background:${mech.value==='compound'?'rgba(255,107,26,0.15)':'rgba(122,150,220,0.15)'}; color:${mech.value==='compound'?'#FF6B1A':'#7BA6C9'}; opacity:${mech.guessed?0.75:1};">${mech.guessed?'~':''}${mech.value==='compound'?'Compound':'Isolation'}</span>` : '';
   const prLine = ex.showPr
-    ? `<div class="ex-last" style="color:#F0C542; margin-top:2px; font-weight:700;">🏆 PR ${formatSetValue(ex.maxSet)} · ${ex.maxSet.logged_at}</div>`
+    ? `<div class="ex-last" style="color:#F0C542; margin-top:2px; font-weight:700;">🏆 PR ${formatSetValue(ex.maxSet)} · ${formatLoggedDate(ex.maxSet.logged_at)}</div>`
     : '';
 
   return `<div class="exercise" style="${borderStyle}" data-id="${ex.id}" data-name="${ex.name}">
@@ -2444,7 +2456,7 @@ function openLogForm(exerciseId, exerciseName){
 
     list.innerHTML = sets.map(s =>
       `<div class="log-row" data-id="${s.id}" style="flex-direction:column; align-items:flex-start; gap:3px;">
-        <div style="display:flex; justify-content:space-between; width:100%;"><div class="log-date">${s.logged_at}</div><div class="log-weight">${formatSetValue(s, true)}</div></div>
+        <div style="display:flex; justify-content:space-between; width:100%;"><div class="log-date">${formatLoggedDate(s.logged_at)}</div><div class="log-weight">${formatSetValue(s, true)}</div></div>
         ${s.notes ? `<div style="font-size:11px; color:var(--slate); font-style:italic;">${s.notes}</div>` : ''}
       </div>`
     ).join('');
@@ -2696,7 +2708,7 @@ async function renderScale(){
     deltaHtml = `<div class="delta">${arrow} ${Math.abs(diff)}${latest.unit} since last entry</div>`;
   }
   const rows = entries.map(e => `<div class="log-row" data-id="${e.id}" style="flex-direction:column; align-items:flex-start; gap:3px;">
-    <div style="display:flex; justify-content:space-between; width:100%;"><div class="log-date">${e.logged_at}</div><div class="log-weight">${e.weight}${e.unit}</div></div>
+    <div style="display:flex; justify-content:space-between; width:100%;"><div class="log-date">${formatLoggedDate(e.logged_at)}</div><div class="log-weight">${e.weight}${e.unit}</div></div>
     ${e.notes ? `<div style="font-size:11px; color:var(--slate); font-style:italic;">${e.notes}</div>` : ''}
   </div>`).join('');
 
