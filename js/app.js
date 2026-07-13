@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.7';
+const APP_VERSION = 'Beta 5.8';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -440,6 +440,7 @@ async function loadExercises(){
 
   const exerciseIds = (exercises || []).map(ex => ex.id);
   let lastSetByExercise = {};
+  let maxSetByExercise = {};
   if (exerciseIds.length){
     const setsResult = await withTimeout(
       supabaseClient.from('sets').select('exercise_id, weight, weight_unit, weight_type, reps, num_sets, logged_at')
@@ -449,11 +450,29 @@ async function loadExercises(){
     const allSets = setsResult.__timeout || setsResult.error ? [] : (setsResult.data || []);
     // Results are ordered newest-first, so the first time we see an exercise_id is its most recent set.
     allSets.forEach(s => { if (!lastSetByExercise[s.exercise_id]) lastSetByExercise[s.exercise_id] = s; });
+    // Track the all-time best set per exercise, on ANY day - not just today's session.
+    // Only weight-based units (kg/lb) are comparable across entries via conversion;
+    // other unit types (pin/level/sec/etc) are compared as raw values, assuming a
+    // given exercise stays on one consistent unit type in practice.
+    allSets.forEach(s => {
+      if (s.weight === null || s.weight === undefined) return;
+      const current = maxSetByExercise[s.exercise_id];
+      if (!current){ maxSetByExercise[s.exercise_id] = s; return; }
+      const sVal = (s.weight_unit === 'kg' || s.weight_unit === 'lb') ? convertWeight(s.weight, s.weight_unit, 'kg') : s.weight;
+      const curVal = (current.weight_unit === 'kg' || current.weight_unit === 'lb') ? convertWeight(current.weight, current.weight_unit, 'kg') : current.weight;
+      if (s.weight_unit === current.weight_unit || ((s.weight_unit==='kg'||s.weight_unit==='lb') && (current.weight_unit==='kg'||current.weight_unit==='lb'))){
+        if (sVal > curVal) maxSetByExercise[s.exercise_id] = s;
+      }
+    });
   }
   const withLogs = (exercises || []).map(ex => {
     const lastSet = lastSetByExercise[ex.id] || null;
     const loggedToday = lastSet && lastSet.logged_at === todayStr();
-    return { ...ex, lastSet, loggedToday };
+    const maxSet = maxSetByExercise[ex.id] || null;
+    // Only worth showing as a distinct "PR" line if it's a genuinely different
+    // set than the last one shown (otherwise it's just repeating the same info).
+    const showPr = maxSet && lastSet && maxSet.logged_at !== lastSet.logged_at;
+    return { ...ex, lastSet, loggedToday, maxSet, showPr };
   });
 
   // Resolve alt-group "complete via" logic: if any member of a group was logged today,
@@ -705,12 +724,16 @@ function exerciseRow(ex){
 
   const mech = ex.mechanicInfo;
   const mechTag = mech ? `<span style="font-size:9px; padding:2px 5px; border-radius:4px; margin-left:5px; background:${mech.value==='compound'?'rgba(255,107,26,0.15)':'rgba(122,150,220,0.15)'}; color:${mech.value==='compound'?'#FF6B1A':'#7BA6C9'}; opacity:${mech.guessed?0.75:1};">${mech.guessed?'~':''}${mech.value==='compound'?'Compound':'Isolation'}</span>` : '';
+  const prLine = ex.showPr
+    ? `<div class="ex-last" style="color:#F0C542; margin-top:2px; font-weight:700;">🏆 PR ${formatSetValue(ex.maxSet)} · ${ex.maxSet.logged_at}</div>`
+    : '';
 
   return `<div class="exercise" style="${borderStyle}" data-id="${ex.id}" data-name="${ex.name}">
     ${cornerTag}
     <div style="flex:1; min-width:0; ${topPad}">
       <div class="ex-name">${ex.name}${mechTag}</div>
       ${subtitle}
+      ${prLine}
     </div>
     ${showCheck ? `<div class="check-circle">${ICON_CHECK}</div>` : `<div class="chev">›</div>`}
   </div>`;
