@@ -3,8 +3,57 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.6';
+const APP_VERSION = 'Beta 5.7';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
+const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
+function getCustomCategories(){
+  try { return JSON.parse(localStorage.getItem(CUSTOM_CATEGORIES_KEY) || '[]'); } catch(e){ return []; }
+}
+function addCustomCategory(name){
+  const list = getCustomCategories();
+  if (!list.includes(name)) list.push(name);
+  localStorage.setItem(CUSTOM_CATEGORIES_KEY, JSON.stringify(list));
+}
+// Merges the fixed defaults with any custom categories saved locally, plus any
+// category actually in use on the user's own exercises (catches categories
+// created on another device that this one hasn't cached yet).
+async function getAllCategories(){
+  const { data: userData } = await supabaseClient.auth.getUser();
+  const result = await withTimeout(
+    supabaseClient.from('exercises').select('category').eq('user_id', userData.user.id),
+    15000
+  );
+  const inUse = result.__timeout || result.error ? [] : (result.data || []).map(r => r.category).filter(Boolean);
+  const merged = [...CATEGORIES, ...getCustomCategories(), ...inUse];
+  return [...new Set(merged)];
+}
+
+// A small reusable text-input modal, used for naming a new category or renaming
+// an existing one, instead of the browser's native prompt() which looks jarring.
+function promptText({ title, placeholder, initialValue, onConfirm }){
+  const overlay = document.createElement('div');
+  overlay.style = 'position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:70; display:flex; align-items:flex-end;';
+  overlay.innerHTML = `
+    <div style="width:100%; background:var(--panel); border-radius:18px 18px 0 0; padding:20px 18px calc(20px + env(safe-area-inset-bottom, 0px)) 18px;">
+      <div class="field-label" style="padding:0 0 8px 0;">${title}</div>
+      <div class="field-card" style="margin-bottom:14px;"><input class="field-input" id="promptTextInput" placeholder="${placeholder||''}" value="${initialValue||''}" style="font-size:14px; font-weight:400;"></div>
+      <div style="display:flex; gap:10px;">
+        <button id="promptCancelBtn" style="flex:1; background:var(--ink); color:var(--slate); padding:12px; border-radius:10px; font-weight:600;">Cancel</button>
+        <button id="promptOkBtn" style="flex:1; background:var(--flame); color:var(--ink); padding:12px; border-radius:10px; font-weight:600;">Save</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const input = overlay.querySelector('#promptTextInput');
+  input.focus();
+  overlay.querySelector('#promptCancelBtn').onclick = () => overlay.remove();
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.querySelector('#promptOkBtn').onclick = () => {
+    const val = input.value.trim();
+    if (!val) return;
+    overlay.remove();
+    onConfirm(val);
+  };
+}
 
 // Common starter exercises shown as quick-add suggestions on an empty day, keyed by
 // day-type label. Falls back to a generic set for custom/renamed day types.
@@ -1115,7 +1164,10 @@ async function renderTrack(){
     const items = grouped[cat] || [];
     if (items.length === 0) return;
     const slug = 'trackcat-' + cat.replace(/[^a-z0-9]/gi,'');
-    listHtml += `<div class="category" id="${slug}">${cat}</div>` + items.map(exerciseRow).join('');
+    const editIcon = groupBy === 'equipment'
+      ? `<span class="cat-rename-btn" data-cat="${cat}" style="float:right; color:var(--slate); font-size:12px; cursor:pointer; padding:2px 6px;">✎</span>`
+      : '';
+    listHtml += `<div class="category" id="${slug}">${cat}${editIcon}</div>` + items.map(exerciseRow).join('');
     state.trackFlatOrder.push(...items.map(ex => ({ id: ex.id, name: ex.name })));
   });
   if (state.exercises.length === 0){
@@ -1170,6 +1222,24 @@ async function renderTrack(){
 
   attachShellHandlers();
   document.getElementById('dayTypeHeader').onclick = () => openEditDayTypeForm(state.selectedDay, dayTypeLabel);
+  document.querySelectorAll('.cat-rename-btn').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const oldName = btn.dataset.cat;
+      promptText({
+        title: `Rename "${oldName}"`, placeholder: 'New category name', initialValue: oldName,
+        onConfirm: async (newName) => {
+          if (newName === oldName) return;
+          const { data: userData } = await supabaseClient.auth.getUser();
+          const { error } = await supabaseClient.from('exercises')
+            .update({ category: newName }).eq('user_id', userData.user.id).eq('category', oldName);
+          if (error){ alert(error.message); return; }
+          addCustomCategory(newName);
+          renderTrack();
+        }
+      });
+    };
+  });
   document.querySelectorAll('.groupby-chip').forEach(chip => {
     chip.onclick = () => { setGroupByPref(chip.dataset.groupby); renderTrack(); };
   });
@@ -1672,7 +1742,7 @@ async function pickAltGroup(container, onPicked){
 }
 
 // ---------- NEW EXERCISE FORM ----------
-function openNewExerciseForm(){
+async function openNewExerciseForm(){
   let selectedCategory = CATEGORIES[0];
   let selectedDay = state.selectedDay;
   let pickedAltGroup = null;
@@ -1684,7 +1754,7 @@ function openNewExerciseForm(){
       <div class="field-label">Name</div>
       <div class="field-card"><input class="field-input" id="exNameInput" placeholder="e.g. Incline Dumbbell Press" style="font-size:14px; font-weight:400;"></div>
       <div class="field-label">Category</div>
-      <div class="chip-row">${CATEGORIES.map((c,i) => `<div class="chip ${i===0?'active':''}" data-cat="${c}">${c}</div>`).join('')}</div>
+      <div class="chip-row" id="categoryChipRow"><div class="small" style="color:var(--slate); padding:8px 0;">Loading…</div></div>
       <div class="field-label">Day</div>
       <div class="chip-row">${DAY_NAMES.map((d,i) => `<div class="chip ${i===state.selectedDay?'active':''}" data-day="${i}">${d}</div>`).join('')}</div>
       <div class="field-label">Alt Group <span class="opt">(optional)</span></div>
@@ -1693,9 +1763,25 @@ function openNewExerciseForm(){
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#closeForm').onclick = () => overlay.remove();
-  overlay.querySelectorAll('.chip[data-cat]').forEach(el => {
-    el.onclick = () => { overlay.querySelectorAll('.chip[data-cat]').forEach(c=>c.classList.remove('active')); el.classList.add('active'); selectedCategory = el.dataset.cat; };
-  });
+
+  async function renderCategoryChips(){
+    const cats = await getAllCategories();
+    const row = overlay.querySelector('#categoryChipRow');
+    if (!cats.includes(selectedCategory)) selectedCategory = cats[0];
+    row.innerHTML = cats.map(c => `<div class="chip ${c===selectedCategory?'active':''}" data-cat="${c}">${c}</div>`).join('')
+      + `<div class="chip" id="newCategoryChip" style="color:var(--flame); border-color:var(--flame);">+ New</div>`;
+    row.querySelectorAll('.chip[data-cat]').forEach(el => {
+      el.onclick = () => { row.querySelectorAll('.chip[data-cat]').forEach(c=>c.classList.remove('active')); el.classList.add('active'); selectedCategory = el.dataset.cat; };
+    });
+    row.querySelector('#newCategoryChip').onclick = () => {
+      promptText({
+        title: 'New Category Name', placeholder: 'e.g. Bodyweight',
+        onConfirm: (name) => { addCustomCategory(name); selectedCategory = name; renderCategoryChips(); }
+      });
+    };
+  }
+  await renderCategoryChips();
+
   overlay.querySelectorAll('.chip[data-day]').forEach(el => {
     el.onclick = () => { overlay.querySelectorAll('.chip[data-day]').forEach(c=>c.classList.remove('active')); el.classList.add('active'); selectedDay = parseInt(el.dataset.day,10); };
   });
