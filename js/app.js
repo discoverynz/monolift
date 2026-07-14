@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.10';
+const APP_VERSION = 'Beta 5.11';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -724,7 +724,10 @@ function exerciseRow(ex){
     subtitle = `<div class="ex-last via">↳ Complete via ${ex.completeVia}</div>`;
     showCheck = true; isDone = true;
   } else {
-    subtitle = `<div class="ex-last">${ex.lastSet ? formatSetValue(ex.lastSet) + ' · ' + formatLoggedDate(ex.lastSet.logged_at) : 'Not logged yet'}</div>`;
+    // Shows the best set ever recorded (any day), not just the most recent one -
+    // one line, whichever number is actually the most useful to see.
+    const best = ex.maxSet || ex.lastSet;
+    subtitle = `<div class="ex-last">${best ? formatSetValue(best) + ' · ' + formatLoggedDate(best.logged_at) : 'Not logged yet'}</div>`;
     showCheck = false;
   }
   // Once something's done, the thick green rail + faint wash takes priority
@@ -736,16 +739,12 @@ function exerciseRow(ex){
 
   const mech = ex.mechanicInfo;
   const mechTag = mech ? `<span style="font-size:9px; padding:2px 5px; border-radius:4px; margin-left:5px; background:${mech.value==='compound'?'rgba(255,107,26,0.15)':'rgba(122,150,220,0.15)'}; color:${mech.value==='compound'?'#FF6B1A':'#7BA6C9'}; opacity:${mech.guessed?0.75:1};">${mech.guessed?'~':''}${mech.value==='compound'?'Compound':'Isolation'}</span>` : '';
-  const prLine = ex.showPr
-    ? `<div class="ex-last">${formatSetValue(ex.maxSet)} · ${formatLoggedDate(ex.maxSet.logged_at)}</div>`
-    : '';
 
   return `<div class="exercise" style="${borderStyle}" data-id="${ex.id}" data-name="${ex.name}">
     ${cornerTag}
     <div style="flex:1; min-width:0; ${topPad}">
       <div class="ex-name">${ex.name}${mechTag}</div>
       ${subtitle}
-      ${prLine}
     </div>
     ${showCheck ? `<div class="check-circle">${ICON_CHECK}</div>` : `<div class="chev">›</div>`}
   </div>`;
