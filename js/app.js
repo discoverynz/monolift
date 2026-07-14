@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.9';
+const APP_VERSION = 'Beta 5.10';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -737,7 +737,7 @@ function exerciseRow(ex){
   const mech = ex.mechanicInfo;
   const mechTag = mech ? `<span style="font-size:9px; padding:2px 5px; border-radius:4px; margin-left:5px; background:${mech.value==='compound'?'rgba(255,107,26,0.15)':'rgba(122,150,220,0.15)'}; color:${mech.value==='compound'?'#FF6B1A':'#7BA6C9'}; opacity:${mech.guessed?0.75:1};">${mech.guessed?'~':''}${mech.value==='compound'?'Compound':'Isolation'}</span>` : '';
   const prLine = ex.showPr
-    ? `<div class="ex-last" style="color:#F0C542; margin-top:2px; font-weight:700;">🏆 PR ${formatSetValue(ex.maxSet)} · ${formatLoggedDate(ex.maxSet.logged_at)}</div>`
+    ? `<div class="ex-last">${formatSetValue(ex.maxSet)} · ${formatLoggedDate(ex.maxSet.logged_at)}</div>`
     : '';
 
   return `<div class="exercise" style="${borderStyle}" data-id="${ex.id}" data-name="${ex.name}">
