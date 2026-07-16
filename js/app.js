@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.13';
+const APP_VERSION = 'Beta 5.14';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -256,6 +256,48 @@ function groupByToggleHtml(current){
   </div>`;
 }
 const ALT_COLORS = ["#2DD4BF","#9B7EDE","#E8A33D","#6FA8DC","#E8718D","#7FD17A"];
+
+// Movement-pattern keywords used to cluster exercises that are plausible
+// alternates of each other - same primary muscle AND same basic movement,
+// matching the organizing principle already visible in existing alt groups
+// (Press Alt, Row Alt, Curl Alt) rather than just "same muscle" alone, which
+// would wrongly lump presses and flyes together just because both hit chest.
+const MOVEMENT_PATTERNS = ['press','curl','row','raise','extension','fly','flye','pulldown','pushdown','squat','lunge','deadlift','crunch','dip','shrug','thrust'];
+function movementPatternOf(name){
+  const n = name.toLowerCase();
+  return MOVEMENT_PATTERNS.find(p => n.includes(p)) || null;
+}
+
+// Groups a day's ungrouped exercises into proposed alt-group clusters (2+
+// members sharing the same primary muscle and movement pattern). Returns
+// proposals only - nothing is created or assigned until the user confirms
+// each one individually in the review screen.
+async function proposeAltGroups(dayExercises){
+  const db = await loadExerciseDB();
+  const ungrouped = dayExercises.filter(ex => !ex.alt_group_id);
+  const buckets = {};
+  ungrouped.forEach(ex => {
+    const pattern = movementPatternOf(ex.name);
+    if (!pattern) return;
+    const match = matchExercise(ex.name, db);
+    const muscle = match && match.primaryMuscles && match.primaryMuscles[0];
+    if (!muscle) return;
+    const key = muscle + '|' + pattern;
+    (buckets[key] = buckets[key] || []).push(ex);
+  });
+  const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
+  return Object.entries(buckets)
+    .filter(([, members]) => members.length >= 2)
+    .map(([key, members], i) => {
+      const [muscle, pattern] = key.split('|');
+      return {
+        suggestedName: `${cap(pattern)} Alt`,
+        muscle: cap(muscle),
+        color: ALT_COLORS[i % ALT_COLORS.length],
+        members
+      };
+    });
+}
 
 const QUOTES = [
   {t:"You have power over your mind — not outside events. Realize this, and you will find strength.", a:"Marcus Aurelius"},
@@ -1274,6 +1316,7 @@ async function renderTrack(){
           <div style="height:100%; width:${pct}%; background:var(--good); border-radius:4px;"></div>
         </div>
         ${state.exercises.length > 0 ? groupByToggleHtml(groupBy) : ''}
+        ${state.exercises.some(ex => !ex.alt_group_id) ? `<div style="padding:0 18px 10px 18px; text-align:right;"><button id="autoGroupBtn" style="background:none; color:var(--flame); font-size:11px; font-weight:600; padding:6px 8px;">✨ Auto-Group Alts</button></div>` : ''}
         ${listHtml}
         ${suggestionsHtml}
       </div>
@@ -1282,6 +1325,8 @@ async function renderTrack(){
 
   attachShellHandlers();
   document.getElementById('dayTypeHeader').onclick = () => openEditDayTypeForm(state.selectedDay, dayTypeLabel);
+  const autoGroupBtn = document.getElementById('autoGroupBtn');
+  if (autoGroupBtn) autoGroupBtn.onclick = () => openAutoAltReview();
   document.querySelectorAll('.cat-rename-btn').forEach(btn => {
     btn.onclick = (e) => {
       e.stopPropagation();
@@ -1768,7 +1813,76 @@ async function openPicker(initialTab, jumpToMuscle){
   if (initialTab === 'database') renderDatabaseTab(); else renderMineTab();
 }
 
-// ---------- ALT GROUP PICKER (inline, used inside the new-exercise form) ----------
+// ---------- AUTO ALT GROUP REVIEW ----------
+async function openAutoAltReview(){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeAutoAlt">✕</button><h1>Auto-Group Alts</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll" id="autoAltBody"><div class="small" style="padding:20px 18px; color:var(--slate);">Scanning today's exercises…</div></div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeAutoAlt').onclick = () => overlay.remove();
+
+  const proposals = await proposeAltGroups(state.exercises);
+  const body = overlay.querySelector('#autoAltBody');
+  if (!proposals.length){
+    body.innerHTML = `<div class="empty-state" style="padding:30px 18px;">No obvious groupings found among today's ungrouped exercises. This works best when a few exercises share both a muscle and a movement pattern (e.g. two different presses for chest).</div>`;
+    return;
+  }
+
+  proposals.forEach((p, i) => { p.included = true; p.id = 'proposal-' + i; });
+
+  function render(){
+    body.innerHTML = `
+      <div class="small" style="padding:12px 18px; color:var(--slate);">Review each group before confirming - nothing is applied yet. Rename, remove members, or skip a group entirely.</div>
+      ${proposals.map(p => `
+        <div class="proposal-card" data-pid="${p.id}" style="margin:0 18px 14px 18px; background:var(--panel); border:1px solid var(--line); border-left:4px solid ${p.color}; border-radius:10px; padding:12px 14px; opacity:${p.included ? 1 : 0.45};">
+          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+            <input class="proposal-name-input" data-pid="${p.id}" value="${p.suggestedName}" style="background:none; border:none; color:var(--chalk); font-family:'Oswald',sans-serif; font-size:14px; font-weight:600; flex:1;">
+            <button class="proposal-toggle" data-pid="${p.id}" style="background:none; color:${p.included ? 'var(--good)' : 'var(--slate)'}; font-size:11px; font-weight:600; padding:4px 8px;">${p.included ? 'INCLUDED' : 'SKIPPED'}</button>
+          </div>
+          <div class="small" style="color:var(--slate); margin-bottom:8px;">${p.muscle}</div>
+          ${p.members.map(m => `<div style="display:flex; justify-content:space-between; align-items:center; padding:5px 0;"><div class="ex-name" style="font-size:13px;">${m.name}</div><span class="proposal-remove-member" data-pid="${p.id}" data-mid="${m.id}" style="color:var(--slate); font-size:12px; padding:2px 6px;">✕</span></div>`).join('')}
+        </div>
+      `).join('')}
+      <button class="save-btn" id="confirmAutoAltBtn" style="margin:0 18px 20px 18px;">Apply Groups</button>
+    `;
+    body.querySelectorAll('.proposal-name-input').forEach(input => {
+      input.oninput = () => { proposals.find(p => p.id === input.dataset.pid).suggestedName = input.value; };
+    });
+    body.querySelectorAll('.proposal-toggle').forEach(btn => {
+      btn.onclick = () => { const p = proposals.find(p => p.id === btn.dataset.pid); p.included = !p.included; render(); };
+    });
+    body.querySelectorAll('.proposal-remove-member').forEach(btn => {
+      btn.onclick = () => {
+        const p = proposals.find(p => p.id === btn.dataset.pid);
+        p.members = p.members.filter(m => m.id !== btn.dataset.mid);
+        render();
+      };
+    });
+    body.querySelector('#confirmAutoAltBtn').onclick = async () => {
+      const toApply = proposals.filter(p => p.included && p.members.length >= 2);
+      if (!toApply.length){ overlay.remove(); return; }
+      const { data: userData } = await supabaseClient.auth.getUser();
+      for (const p of toApply){
+        const insertResult = await withTimeout(
+          supabaseClient.from('alt_groups').insert({ user_id: userData.user.id, name: p.suggestedName, color: p.color }).select(),
+          15000
+        );
+        const groupId = insertResult.__timeout || !insertResult.data ? null : insertResult.data[0].id;
+        if (!groupId) continue;
+        for (const m of p.members){
+          await supabaseClient.from('exercises').update({ alt_group_id: groupId }).eq('id', m.id);
+        }
+      }
+      overlay.remove();
+      renderTrack();
+    };
+  }
+  render();
+}
+
+
 async function pickAltGroup(container, onPicked){
   container.innerHTML = `<div class="action-row" id="clearAltRow" style="border-color:var(--line);"><div class="ex-name" style="color:var(--slate); font-size:13px;">✕ No Alt Group</div></div><div class="search-bar">🔍 <input id="altSearch" placeholder="Search or create alt group…"></div><div id="altList"></div>`;
   container.querySelector('#clearAltRow').onclick = () => onPicked(null);
