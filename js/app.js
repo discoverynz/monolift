@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.11';
+const APP_VERSION = 'Beta 5.12';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -454,33 +454,59 @@ async function loadExercises(){
   let lastSetByExercise = {};
   let maxSetByExercise = {};
   if (exerciseIds.length){
+    const { data: userData } = await supabaseClient.auth.getUser();
+    // The same exercise name can exist as separate records on other days, each
+    // with its own isolated set history. Find every sibling record sharing each
+    // exercise's name so the PR reflects the true all-time best, not just what
+    // happens to be logged against today's specific copy of the exercise.
+    const namesResult = await withTimeout(
+      supabaseClient.from('exercises').select('id, name').eq('user_id', userData.user.id),
+      15000
+    );
+    const allUserExercises = namesResult.__timeout || namesResult.error ? [] : (namesResult.data || []);
+    const idsByLowerName = {};
+    allUserExercises.forEach(ex => {
+      const key = (ex.name || '').toLowerCase();
+      (idsByLowerName[key] = idsByLowerName[key] || []).push(ex.id);
+    });
+    const prQueryIds = new Set(exerciseIds);
+    exercises.forEach(ex => {
+      const siblings = idsByLowerName[(ex.name || '').toLowerCase()] || [];
+      siblings.forEach(id => prQueryIds.add(id));
+    });
+
     const setsResult = await withTimeout(
       supabaseClient.from('sets').select('exercise_id, weight, weight_unit, weight_type, reps, num_sets, logged_at')
-        .in('exercise_id', exerciseIds).order('logged_at', { ascending: false }),
+        .in('exercise_id', [...prQueryIds]).order('logged_at', { ascending: false }),
       15000
     );
     const allSets = setsResult.__timeout || setsResult.error ? [] : (setsResult.data || []);
+    const idToLowerName = {};
+    allUserExercises.forEach(ex => { idToLowerName[ex.id] = (ex.name || '').toLowerCase(); });
     // Results are ordered newest-first, so the first time we see an exercise_id is its most recent set.
     allSets.forEach(s => { if (!lastSetByExercise[s.exercise_id]) lastSetByExercise[s.exercise_id] = s; });
-    // Track the all-time best set per exercise, on ANY day - not just today's session.
-    // Only weight-based units (kg/lb) are comparable across entries via conversion;
-    // other unit types (pin/level/sec/etc) are compared as raw values, assuming a
-    // given exercise stays on one consistent unit type in practice.
+    // Track the all-time best set per exercise NAME (spanning every sibling record
+    // across every day), on ANY day - not just today's session. Only weight-based
+    // units (kg/lb) are comparable across entries via conversion; other unit types
+    // (pin/level/sec/etc) are compared as raw values, assuming a given exercise
+    // stays on one consistent unit type in practice.
     allSets.forEach(s => {
       if (s.weight === null || s.weight === undefined) return;
-      const current = maxSetByExercise[s.exercise_id];
-      if (!current){ maxSetByExercise[s.exercise_id] = s; return; }
+      const key = idToLowerName[s.exercise_id];
+      if (!key) return;
+      const current = maxSetByExercise[key];
+      if (!current){ maxSetByExercise[key] = s; return; }
       const sVal = (s.weight_unit === 'kg' || s.weight_unit === 'lb') ? convertWeight(s.weight, s.weight_unit, 'kg') : s.weight;
       const curVal = (current.weight_unit === 'kg' || current.weight_unit === 'lb') ? convertWeight(current.weight, current.weight_unit, 'kg') : current.weight;
       if (s.weight_unit === current.weight_unit || ((s.weight_unit==='kg'||s.weight_unit==='lb') && (current.weight_unit==='kg'||current.weight_unit==='lb'))){
-        if (sVal > curVal) maxSetByExercise[s.exercise_id] = s;
+        if (sVal > curVal) maxSetByExercise[key] = s;
       }
     });
   }
   const withLogs = (exercises || []).map(ex => {
     const lastSet = lastSetByExercise[ex.id] || null;
     const loggedToday = lastSet && lastSet.logged_at === todayStr();
-    const maxSet = maxSetByExercise[ex.id] || null;
+    const maxSet = maxSetByExercise[(ex.name || '').toLowerCase()] || null;
     // Only worth showing as a distinct "PR" line if it's a genuinely different
     // set than the last one shown (otherwise it's just repeating the same info).
     const showPr = maxSet && lastSet && maxSet.logged_at !== lastSet.logged_at;
@@ -2349,9 +2375,24 @@ function openLogForm(exerciseId, exerciseName){
   }
 
   async function loadHistory(){
+    // The same exercise name can exist as multiple separate records (one per day
+    // it's been added to), each with its own isolated set history. Look up every
+    // record sharing this name for this user, and merge all of their sets together
+    // - otherwise history only ever reflects whichever single day's record you
+    // happened to open, silently missing everything logged against the others.
+    const { data: userData } = await supabaseClient.auth.getUser();
+    const sameNameResult = await withTimeout(
+      supabaseClient.from('exercises').select('id').eq('user_id', userData.user.id).ilike('name', exerciseName),
+      15000
+    );
+    const allIds = (sameNameResult.__timeout || sameNameResult.error)
+      ? [exerciseId]
+      : (sameNameResult.data || []).map(r => r.id);
+    const idsToQuery = allIds.length ? allIds : [exerciseId];
+
     const result = await withTimeout(
       supabaseClient.from('sets').select('id, weight, weight_unit, weight_type, reps, num_sets, notes, logged_at')
-        .eq('exercise_id', exerciseId).order('logged_at', { ascending: false }).limit(30),
+        .in('exercise_id', idsToQuery).order('logged_at', { ascending: false }).limit(30),
       15000
     );
     const list = overlay.querySelector('#historyList');
