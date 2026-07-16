@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.15';
+const APP_VERSION = 'Beta 5.16';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -155,7 +155,7 @@ async function groupExercisesByChoice(exercises, groupBy){
       const label = (m && m.primaryMuscles && m.primaryMuscles[0]) ? fineMuscleCategory(m.primaryMuscles[0], ex.name) : 'Other';
       (grouped[label] = grouped[label] || []).push(ex);
     });
-    orderedKeys = Object.keys(grouped).sort((a,b) => a === 'Other' ? 1 : b === 'Other' ? -1 : a.localeCompare(b));
+    orderedKeys = Object.keys(grouped).sort((a,b) => a === 'Other' ? 1 : b === 'Other' ? -1 : muscleSortKey(a).localeCompare(muscleSortKey(b)));
   } else {
     CATEGORIES.forEach(c => grouped[c] = []);
     exercises.forEach(ex => { (grouped[ex.category] || (grouped[ex.category] = [])).push(ex); });
@@ -1639,6 +1639,23 @@ function fineMuscleCategory(broadMuscle, exerciseName){
   return cap(broadMuscle);
 }
 
+// Groups related subcategories together when sorting Muscle mode, so e.g. Lower
+// Back and Middle Back sort adjacent to each other instead of being scattered
+// apart by whatever else happens to fall alphabetically between them (Mid Chest
+// would otherwise land between Lower Back and Middle Back in a pure A-Z sort).
+const MUSCLE_SORT_REGION = {
+  'Upper Chest':'Chest', 'Mid Chest':'Chest', 'Lower Chest':'Chest', 'Chest':'Chest',
+  'Front Delts':'Shoulders', 'Side Delts':'Shoulders', 'Rear Delts':'Shoulders', 'Shoulders':'Shoulders',
+  'Lats':'Back', 'Upper Back':'Back', 'Middle back':'Back', 'Lower back':'Back', 'Traps':'Back',
+  'Biceps':'Arms', 'Triceps':'Arms', 'Forearms':'Arms',
+  'Quadriceps':'Legs', 'Hamstrings':'Legs', 'Glutes':'Legs', 'Calves':'Legs', 'Adductors':'Legs', 'Abductors':'Legs',
+  'Abdominals':'Core', 'Neck':'Neck'
+};
+function muscleSortKey(label){
+  const region = MUSCLE_SORT_REGION[label] || label;
+  return region + '|' + label;
+}
+
 function groupDatabaseExercises(list, groupBy){
   const grouped = {};
   list.forEach(e => {
@@ -1647,7 +1664,10 @@ function groupDatabaseExercises(list, groupBy){
       : (e.equipment ? cap(e.equipment) : 'Other');
     (grouped[key] = grouped[key] || []).push(e);
   });
-  const orderedKeys = Object.keys(grouped).sort((a,b) => a==='Other'?1:b==='Other'?-1:a.localeCompare(b));
+  const sortFn = groupBy === 'muscle'
+    ? (a,b) => a==='Other'?1:b==='Other'?-1:muscleSortKey(a).localeCompare(muscleSortKey(b))
+    : (a,b) => a==='Other'?1:b==='Other'?-1:a.localeCompare(b);
+  const orderedKeys = Object.keys(grouped).sort(sortFn);
   return { grouped, orderedKeys };
 }
 
