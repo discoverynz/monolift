@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.12';
+const APP_VERSION = 'Beta 5.13';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1778,11 +1778,50 @@ async function pickAltGroup(container, onPicked){
   function renderAlt(filter){
     const f = (filter || '').toLowerCase();
     const matches = groups.filter(g => g.name.toLowerCase().includes(f));
-    let html = matches.map(g => `<div class="group-row" data-id="${g.id}" data-name="${g.name}"><div class="group-dot" style="background:${g.color};"></div><div class="ex-name">${g.name}</div></div>`).join('');
+    let html = matches.map(g => `<div class="group-row" data-id="${g.id}" data-name="${g.name}">
+      <div class="group-dot" style="background:${g.color};"></div>
+      <div class="ex-name" style="flex:1;">${g.name}</div>
+      <span class="alt-rename-btn" data-id="${g.id}" data-name="${g.name}" style="color:var(--slate); font-size:13px; padding:4px 8px;">✎</span>
+      <span class="alt-delete-btn" data-id="${g.id}" data-name="${g.name}" style="color:var(--slate); font-size:13px; padding:4px 8px;">🗑</span>
+    </div>`).join('');
     if (filter) html += `<div class="action-row" id="createAltRow"><div class="ex-name" style="color:var(--flame);">+ Create "${filter}"</div></div>`;
     container.querySelector('#altList').innerHTML = html || '<div class="empty-state" style="padding:20px;">No groups yet — type a name to create one.</div>';
-    container.querySelectorAll('.group-row[data-id]').forEach(el => {
-      el.onclick = () => onPicked({ id: el.dataset.id, name: el.dataset.name });
+    container.querySelectorAll('.group-row').forEach(el => {
+      el.onclick = (e) => {
+        if (e.target.classList.contains('alt-rename-btn') || e.target.classList.contains('alt-delete-btn')) return;
+        onPicked({ id: el.dataset.id, name: el.dataset.name });
+      };
+    });
+    container.querySelectorAll('.alt-rename-btn').forEach(btn => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        promptText({
+          title: 'Rename Alt Group', placeholder: 'Group name', initialValue: btn.dataset.name,
+          onConfirm: async (newName) => {
+            if (newName === btn.dataset.name) return;
+            const { error } = await supabaseClient.from('alt_groups').update({ name: newName }).eq('id', btn.dataset.id);
+            if (error){ alert(error.message); return; }
+            const g = groups.find(g => g.id === btn.dataset.id);
+            if (g) g.name = newName;
+            renderAlt(container.querySelector('#altSearch').value);
+          }
+        });
+      };
+    });
+    container.querySelectorAll('.alt-delete-btn').forEach(btn => {
+      btn.onclick = async (e) => {
+        e.stopPropagation();
+        if (!confirm(`Delete "${btn.dataset.name}"? Exercises in this group will keep their names but lose the alt-group link.`)) return;
+        const { data: userData } = await supabaseClient.auth.getUser();
+        // Clear the reference on every exercise pointing at this group first, so
+        // nothing is left referencing a group that no longer exists.
+        await supabaseClient.from('exercises').update({ alt_group_id: null }).eq('user_id', userData.user.id).eq('alt_group_id', btn.dataset.id);
+        const { error } = await supabaseClient.from('alt_groups').delete().eq('id', btn.dataset.id);
+        if (error){ alert(error.message); return; }
+        const idx = groups.findIndex(g => g.id === btn.dataset.id);
+        if (idx !== -1) groups.splice(idx, 1);
+        renderAlt(container.querySelector('#altSearch').value);
+      };
     });
     const createRow = container.querySelector('#createAltRow');
     if (createRow) createRow.onclick = async () => {
