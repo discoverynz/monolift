@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.14';
+const APP_VERSION = 'Beta 5.15';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -150,10 +150,9 @@ async function groupExercisesByChoice(exercises, groupBy){
   let orderedKeys;
   if (groupBy === 'muscle'){
     const db = await loadExerciseDB();
-    const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
     exercises.forEach(ex => {
       const m = matchExercise(ex.name, db);
-      const label = (m && m.primaryMuscles && m.primaryMuscles[0]) ? cap(m.primaryMuscles[0]) : 'Other';
+      const label = (m && m.primaryMuscles && m.primaryMuscles[0]) ? fineMuscleCategory(m.primaryMuscles[0], ex.name) : 'Other';
       (grouped[label] = grouped[label] || []).push(ex);
     });
     orderedKeys = Object.keys(grouped).sort((a,b) => a === 'Other' ? 1 : b === 'Other' ? -1 : a.localeCompare(b));
@@ -1609,12 +1608,42 @@ function muscleSubtitle(primaryMuscles, secondaryMuscles){
   return out;
 }
 
+function cap(s){ return s ? s.charAt(0).toUpperCase() + s.slice(1) : ''; }
+
+// Finer subdivision within a broad muscle group, inferred from exercise name
+// keywords since free-exercise-db only provides broad categories (chest,
+// shoulders, lats) with no upper/mid/lower or delt-head detail. Falls back to
+// the broad category when genuinely ambiguous (stretches, Olympic lifts,
+// unspecified raises) rather than forcing an unreliable guess.
+function fineMuscleCategory(broadMuscle, exerciseName){
+  const n = (exerciseName || '').toLowerCase();
+  const m = (broadMuscle || '').toLowerCase();
+  if (m === 'chest'){
+    if (n.includes('incline')) return 'Upper Chest';
+    if (n.includes('decline')) return 'Lower Chest';
+    return 'Mid Chest';
+  }
+  if (m === 'shoulders'){
+    if (n.includes('face pull')) return 'Rear Delts';
+    if ((n.includes('rear') || n.includes('reverse fly') || n.includes('reverse flye')) &&
+        (n.includes('raise') || n.includes('row') || n.includes('fly') || n.includes('flye') || n.includes('delt'))) return 'Rear Delts';
+    if (n.includes('lateral') || (n.includes('side') && n.includes('raise'))) return 'Side Delts';
+    if (n.includes('front') && (n.includes('raise') || n.includes('delt'))) return 'Front Delts';
+    if (n.includes('press')) return 'Front Delts';
+    return cap(broadMuscle);
+  }
+  if (m === 'lats'){
+    if (n.includes('row')) return 'Upper Back';
+    return 'Lats';
+  }
+  return cap(broadMuscle);
+}
+
 function groupDatabaseExercises(list, groupBy){
-  const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
   const grouped = {};
   list.forEach(e => {
     const key = groupBy === 'muscle'
-      ? ((e.primaryMuscles && e.primaryMuscles[0]) ? cap(e.primaryMuscles[0]) : 'Other')
+      ? ((e.primaryMuscles && e.primaryMuscles[0]) ? fineMuscleCategory(e.primaryMuscles[0], e.name) : 'Other')
       : (e.equipment ? cap(e.equipment) : 'Other');
     (grouped[key] = grouped[key] || []).push(e);
   });
