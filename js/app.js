@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.17';
+const APP_VERSION = 'Beta 5.18';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -2387,16 +2387,18 @@ function celebratePR(exerciseName, weight, unit, priorBest){
 // Gym plates: 45, 35 (rarer), 25, 10 lb. Standard barbell = 45lb / ~20kg.
 // Only makes sense for equipment you actually load plates onto — not dumbbells,
 // not pin-loaded machines. Gated by exercise name since that's what's available.
-function exerciseUsesLoadPlates(exerciseName){
+function exerciseUsesLoadPlates(exerciseName, category){
   const n = (exerciseName || '').toLowerCase();
-  // "Hammer Strength" alone is just the equipment brand - it covers both their
-  // plate-loaded (Iso-Lateral) and pin-loaded product lines, so it can't be used
-  // as a signal by itself. "Iso-Lateral" specifically identifies the plate-loaded
-  // line, matching how these are actually named in practice (e.g. "Hammer
-  // Strength Iso-Lateral Row" is plate-loaded, plain "Pec Fly - Hammer Strength
-  // Machine" is pin-loaded).
-  return ['barbell','plate-loaded','plate loaded','iso-lateral','iso lateral',
-          'leg press','hack squat','smith machine'].some(k => n.includes(k));
+  const c = (category || '').toLowerCase();
+  // Category is explicitly selected by the user when the exercise is added -
+  // the reliable signal, not a guess based on brand or model names in the
+  // exercise's own name (which can't tell a plate-loaded machine apart from a
+  // pin-loaded one from the same manufacturer).
+  if (c.includes('plate')) return true;
+  if (c.includes('pin') || c.includes('cable')) return false;
+  // Free-weight barbell exercises inherently use plates no matter how they're
+  // categorized - this is a genuinely reliable signal, unlike a brand name.
+  return n.includes('barbell') || n.includes('smith machine');
 }
 // weightType 'total' = classic barbell math (total = bar + plates on both sides).
 // weightType 'per' = the number entered IS already the per-side/per-peg load — decompose it directly.
@@ -2431,10 +2433,10 @@ function describePlates(res){
   const short = res.leftover > 0.1 ? ` <span style="color:var(--flame);">(~${res.leftover}lb short)</span>` : '';
   return `Per side: <span style="color:var(--chalk); font-weight:600;">${desc}</span> lb${short}`;
 }
-function renderPlateCalc(overlay, exerciseName){
+function renderPlateCalc(overlay, exerciseName, category){
   const area = overlay.querySelector('#plateCalcArea');
   if (!area) return;
-  if (!exerciseUsesLoadPlates(exerciseName)){ area.innerHTML = ''; return; }
+  if (!exerciseUsesLoadPlates(exerciseName, category)){ area.innerHTML = ''; return; }
   const wInput = overlay.querySelector('#weightInput');
   const activeUnit = overlay.querySelector('.unit-toggle button.active')?.dataset.u;
   const activeType = overlay.querySelector('.chip[data-wt].active')?.dataset.wt || 'total';
@@ -2446,10 +2448,10 @@ function renderPlateCalc(overlay, exerciseName){
 // Proactive hint shown immediately (before the person types anything), based on
 // their last logged weight — "what did I load last time" is the useful question,
 // not "here's a breakdown of the number I already lifted and am now recording."
-function renderLastTimePlates(overlay, exerciseName, lastEntry){
+function renderLastTimePlates(overlay, exerciseName, lastEntry, category){
   const area = overlay.querySelector('#lastTimePlatesArea');
   if (!area) return;
-  if (!lastEntry || !exerciseUsesLoadPlates(exerciseName) ||
+  if (!lastEntry || !exerciseUsesLoadPlates(exerciseName, category) ||
       lastEntry.weight === null || (lastEntry.weight_unit !== 'kg' && lastEntry.weight_unit !== 'lb')){
     area.innerHTML = ''; return;
   }
@@ -2462,6 +2464,7 @@ function openLogForm(exerciseId, exerciseName){
   let unit = 'kg';
   let weightType = 'total';
   let lastEntry = null;
+  let exerciseCategory = null;
 
   // Prev/next navigation only makes sense if this exercise is part of today's
   // currently-displayed Track order (won't apply if opened from the picker/
@@ -2531,12 +2534,12 @@ function openLogForm(exerciseId, exerciseName){
     else if (dx > 0 && navPrev){ overlay.remove(); openLogForm(navPrev.id, navPrev.name); }
   }, { passive: true });
 
-  overlay.querySelector('#weightInput').addEventListener('input', () => renderPlateCalc(overlay, exerciseName));
+  overlay.querySelector('#weightInput').addEventListener('input', () => renderPlateCalc(overlay, exerciseName, exerciseCategory));
   overlay.querySelectorAll('.unit-toggle button').forEach(b => {
-    b.onclick = () => { overlay.querySelectorAll('.unit-toggle button').forEach(x=>x.classList.remove('active')); b.classList.add('active'); unit = b.dataset.u; renderPlateCalc(overlay, exerciseName); };
+    b.onclick = () => { overlay.querySelectorAll('.unit-toggle button').forEach(x=>x.classList.remove('active')); b.classList.add('active'); unit = b.dataset.u; renderPlateCalc(overlay, exerciseName, exerciseCategory); };
   });
   overlay.querySelectorAll('.chip[data-wt]').forEach(b => {
-    b.onclick = () => { overlay.querySelectorAll('.chip[data-wt]').forEach(x=>x.classList.remove('active')); b.classList.add('active'); weightType = b.dataset.wt; renderPlateCalc(overlay, exerciseName); };
+    b.onclick = () => { overlay.querySelectorAll('.chip[data-wt]').forEach(x=>x.classList.remove('active')); b.classList.add('active'); weightType = b.dataset.wt; renderPlateCalc(overlay, exerciseName, exerciseCategory); };
   });
 
 
@@ -2624,7 +2627,7 @@ function openLogForm(exerciseId, exerciseName){
     overlay.querySelector('#sameAsLastArea').innerHTML =
       `<div class="action-row" id="sameAsLastBtn"><div class="ex-name" style="color:var(--flame); font-size:13px;">↻ Same as last time — ${formatSetValue(lastEntry)}</div></div>`;
     overlay.querySelector('#sameAsLastBtn').onclick = applySameAsLast;
-    renderLastTimePlates(overlay, exerciseName, lastEntry);
+    renderLastTimePlates(overlay, exerciseName, lastEntry, exerciseCategory);
 
     // Chart in one standard unit so mixed kg/lb entries plot coherently:
     // lb for Plate-Loaded (most common there), kg for everything else.
@@ -2720,6 +2723,17 @@ function openLogForm(exerciseId, exerciseName){
   }
   loadHistory();
   loadExerciseGuide(overlay, exerciseName);
+  (async () => {
+    const result = await withTimeout(
+      supabaseClient.from('exercises').select('category').eq('id', exerciseId).maybeSingle(),
+      15000
+    );
+    exerciseCategory = result.__timeout || result.error || !result.data ? null : result.data.category;
+    // Re-render now that the category is known - the plate calc initially rendered
+    // with no category available and would have shown nothing.
+    renderPlateCalc(overlay, exerciseName, exerciseCategory);
+    renderLastTimePlates(overlay, exerciseName, lastEntry, exerciseCategory);
+  })();
 
   overlay.querySelector('#saveSetBtn').onclick = async () => {
     const weightRaw = document.getElementById('weightInput').value;
