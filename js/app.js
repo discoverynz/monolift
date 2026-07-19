@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.16';
+const APP_VERSION = 'Beta 5.17';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -2389,7 +2389,13 @@ function celebratePR(exerciseName, weight, unit, priorBest){
 // not pin-loaded machines. Gated by exercise name since that's what's available.
 function exerciseUsesLoadPlates(exerciseName){
   const n = (exerciseName || '').toLowerCase();
-  return ['barbell','plate-loaded','plate loaded','hammer strength','iso-lateral','iso lateral',
+  // "Hammer Strength" alone is just the equipment brand - it covers both their
+  // plate-loaded (Iso-Lateral) and pin-loaded product lines, so it can't be used
+  // as a signal by itself. "Iso-Lateral" specifically identifies the plate-loaded
+  // line, matching how these are actually named in practice (e.g. "Hammer
+  // Strength Iso-Lateral Row" is plate-loaded, plain "Pec Fly - Hammer Strength
+  // Machine" is pin-loaded).
+  return ['barbell','plate-loaded','plate loaded','iso-lateral','iso lateral',
           'leg press','hack squat','smith machine'].some(k => n.includes(k));
 }
 // weightType 'total' = classic barbell math (total = bar + plates on both sides).
