@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.36';
+const APP_VERSION = 'Beta 5.37';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -950,16 +950,28 @@ function openLocationPicker(locations, currentId){
       <div class="field-label" style="padding:0 0 8px 0;">Switch Location</div>
       <div class="pick-row" data-loc="" style="${!currentId ? 'color:var(--flame);' : ''}"><div class="ex-name">Anywhere <span class="small" style="color:var(--slate);">(no filter)</span></div>${!currentId ? '<span>✓</span>' : ''}</div>
       ${locations.map(l => `<div class="pick-row" data-loc="${l.id}" style="${l.id===currentId ? 'color:var(--flame);' : ''}"><div class="ex-name">${l.name}</div>${l.id===currentId ? '<span>✓</span>' : ''}</div>`).join('')}
+      <div class="pick-row" id="newLocRow"><div class="ex-name" style="color:var(--flame);">+ New Location</div></div>
     </div>`;
   document.body.appendChild(overlay);
   overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
-  overlay.querySelectorAll('.pick-row').forEach(row => {
+  overlay.querySelectorAll('.pick-row[data-loc]').forEach(row => {
     row.onclick = () => {
       setCurrentLocationId(row.dataset.loc || null);
       overlay.remove();
       renderTrack();
     };
   });
+  overlay.querySelector('#newLocRow').onclick = () => {
+    promptText({
+      title: 'New Location Name', placeholder: 'e.g. Home Gym',
+      onConfirm: async (name) => {
+        const loc = await createLocation(name);
+        overlay.remove();
+        if (loc) setCurrentLocationId(loc.id);
+        renderTrack();
+      }
+    });
+  };
 }
 
 function openEditDayTypeForm(weekday, currentLabel){
@@ -3662,84 +3674,11 @@ function celebratePR(exerciseName, weight, unit, priorBest){
 // Gym plates: 45, 35 (rarer), 25, 10 lb. Standard barbell = 45lb / ~20kg.
 // Only makes sense for equipment you actually load plates onto — not dumbbells,
 // not pin-loaded machines. Gated by exercise name since that's what's available.
-function exerciseUsesLoadPlates(exerciseName, category){
-  const n = (exerciseName || '').toLowerCase();
-  const c = (category || '').toLowerCase();
-  // Category is explicitly selected by the user when the exercise is added -
-  // the reliable signal, not a guess based on brand or model names in the
-  // exercise's own name (which can't tell a plate-loaded machine apart from a
-  // pin-loaded one from the same manufacturer).
-  if (c.includes('plate')) return true;
-  if (c.includes('pin') || c.includes('cable')) return false;
-  // Free-weight barbell exercises inherently use plates no matter how they're
-  // categorized - this is a genuinely reliable signal, unlike a brand name.
-  return n.includes('barbell') || n.includes('smith machine');
-}
-// weightType 'total' = classic barbell math (total = bar + plates on both sides).
-// weightType 'per' = the number entered IS already the per-side/per-peg load — decompose it directly.
-function computePlates(weight, unit, weightType){
-  if (!weight || weight <= 0) return null;
-  const toLb = (v, u) => u === 'kg' ? v * 2.20462 : v;
-  if (weightType === 'per'){
-    const perSideLb = toLb(weight, unit);
-    return greedyPlates(perSideLb, [45,35,25,10]);
-  }
-  // 'total': subtract a standard bar, split the rest across both sides.
-  const barLb = 45;
-  const totalLb = toLb(weight, unit);
-  const perSideLb = (totalLb - barLb) / 2;
-  if (perSideLb < 0) return { belowBar: true };
-  return greedyPlates(perSideLb, [45,35,25,10]);
-}
-function greedyPlates(perSideLb, plates){
-  let remaining = perSideLb;
-  const used = [];
-  for (const p of plates){
-    const n = Math.floor(remaining / p);
-    if (n > 0){ used.push({n, p}); remaining -= n*p; }
-  }
-  return { used, leftover: Math.round(remaining*10)/10, perSide: Math.round(perSideLb*10)/10 };
-}
-function describePlates(res){
-  if (!res) return '';
-  if (res.belowBar) return `Below bar weight (45lb / 20kg bar).`;
-  if (!res.used.length) return `Just the bar${res.leftover>0.1?` (+${res.leftover}lb short per side)`:''}.`;
-  const desc = res.used.map(u => `${u.n}×${u.p}`).join(' + ');
-  const short = res.leftover > 0.1 ? ` <span style="color:var(--flame);">(~${res.leftover}lb short)</span>` : '';
-  return `Per side: <span style="color:var(--chalk); font-weight:600;">${desc}</span> lb${short}`;
-}
-function renderPlateCalc(overlay, exerciseName, category){
-  const area = overlay.querySelector('#plateCalcArea');
-  if (!area) return;
-  if (!exerciseUsesLoadPlates(exerciseName, category)){ area.innerHTML = ''; return; }
-  const wInput = overlay.querySelector('#weightInput');
-  const activeUnit = overlay.querySelector('.unit-toggle button.active')?.dataset.u;
-  const activeType = overlay.querySelector('.chip[data-wt].active')?.dataset.wt || 'total';
-  const val = parseFloat(wInput?.value);
-  if (!val || (activeUnit !== 'kg' && activeUnit !== 'lb')){ area.innerHTML = ''; return; }
-  const res = computePlates(val, activeUnit, activeType);
-  area.innerHTML = `<div class="small" style="color:var(--slate);">🏋 ${describePlates(res)}</div>`;
-}
-// Proactive hint shown immediately (before the person types anything), based on
-// their last logged weight — "what did I load last time" is the useful question,
-// not "here's a breakdown of the number I already lifted and am now recording."
-function renderLastTimePlates(overlay, exerciseName, lastEntry, category){
-  const area = overlay.querySelector('#lastTimePlatesArea');
-  if (!area) return;
-  if (!lastEntry || !exerciseUsesLoadPlates(exerciseName, category) ||
-      lastEntry.weight === null || (lastEntry.weight_unit !== 'kg' && lastEntry.weight_unit !== 'lb')){
-    area.innerHTML = ''; return;
-  }
-  const res = computePlates(lastEntry.weight, lastEntry.weight_unit, lastEntry.weight_type || 'total');
-  area.innerHTML = `<div class="small" style="color:var(--slate); margin-top:4px;">🏋 Last time (${lastEntry.weight}${lastEntry.weight_unit}): ${describePlates(res)}</div>`;
-}
-
 function openLogForm(exerciseId, exerciseName){
   removeSideIndex();
   let unit = 'kg';
   let weightType = 'total';
   let lastEntry = null;
-  let exerciseCategory = null;
 
   // Prev/next navigation only makes sense if this exercise is part of today's
   // currently-displayed Track order (won't apply if opened from the picker/
@@ -3764,7 +3703,6 @@ function openLogForm(exerciseId, exerciseName){
       <div id="tagInfoArea" style="padding:0 18px; margin-bottom:10px;"></div>
       <div id="guideArea" style="margin-bottom:18px;"></div>
       <div id="sameAsLastArea" style="margin-bottom:18px;"></div>
-      <div id="lastTimePlatesArea" style="padding:0 18px; margin-top:-14px; margin-bottom:14px;"></div>
       <div style="height:1px; background:var(--line); margin:0 18px 18px 18px;"></div>
       <div class="field-label">Weight or Time <span class="opt">(optional)</span></div>
       <div class="field-card">
@@ -3773,7 +3711,6 @@ function openLogForm(exerciseId, exerciseName){
           <button class="active" data-u="kg">kg</button><button data-u="lb">lb</button><button data-u="sec">sec</button><button data-u="pin">pin</button>
         </div>
       </div>
-      <div id="plateCalcArea" style="padding:0 18px; margin-top:-6px; margin-bottom:6px;"></div>
       <div class="field-label">Per Side or Total?</div>
       <div class="chip-row">
         <div class="chip active" data-wt="total">Total</div>
@@ -3810,12 +3747,11 @@ function openLogForm(exerciseId, exerciseName){
     else if (dx > 0 && navPrev){ overlay.remove(); openLogForm(navPrev.id, navPrev.name); }
   }, { passive: true });
 
-  overlay.querySelector('#weightInput').addEventListener('input', () => renderPlateCalc(overlay, exerciseName, exerciseCategory));
   overlay.querySelectorAll('.unit-toggle button').forEach(b => {
-    b.onclick = () => { overlay.querySelectorAll('.unit-toggle button').forEach(x=>x.classList.remove('active')); b.classList.add('active'); unit = b.dataset.u; renderPlateCalc(overlay, exerciseName, exerciseCategory); };
+    b.onclick = () => { overlay.querySelectorAll('.unit-toggle button').forEach(x=>x.classList.remove('active')); b.classList.add('active'); unit = b.dataset.u; };
   });
   overlay.querySelectorAll('.chip[data-wt]').forEach(b => {
-    b.onclick = () => { overlay.querySelectorAll('.chip[data-wt]').forEach(x=>x.classList.remove('active')); b.classList.add('active'); weightType = b.dataset.wt; renderPlateCalc(overlay, exerciseName, exerciseCategory); };
+    b.onclick = () => { overlay.querySelectorAll('.chip[data-wt]').forEach(x=>x.classList.remove('active')); b.classList.add('active'); weightType = b.dataset.wt; };
   });
 
 
@@ -3903,7 +3839,6 @@ function openLogForm(exerciseId, exerciseName){
     overlay.querySelector('#sameAsLastArea').innerHTML =
       `<div class="action-row" id="sameAsLastBtn"><div class="ex-name" style="color:var(--flame); font-size:13px;">↻ Same as last time — ${formatSetValue(lastEntry)}</div></div>`;
     overlay.querySelector('#sameAsLastBtn').onclick = applySameAsLast;
-    renderLastTimePlates(overlay, exerciseName, lastEntry, exerciseCategory);
 
     // Chart in one standard unit so mixed kg/lb entries plot coherently:
     // lb for Plate-Loaded (most common there), kg for everything else.
@@ -4008,11 +3943,6 @@ function openLogForm(exerciseId, exerciseName){
       loadLocations()
     ]);
     const data = result.__timeout || result.error || !result.data ? null : result.data;
-    exerciseCategory = data ? data.category : null;
-    // Re-render now that the category is known - the plate calc initially rendered
-    // with no category available and would have shown nothing.
-    renderPlateCalc(overlay, exerciseName, exerciseCategory);
-    renderLastTimePlates(overlay, exerciseName, lastEntry, exerciseCategory);
 
     // This was missing entirely before - push/pull, upper/lower, and locations
     // were being saved and used everywhere else (the reorganizer, the scanner,
