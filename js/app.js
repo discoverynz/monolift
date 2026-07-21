@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.30';
+const APP_VERSION = 'Beta 5.31';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -315,6 +315,25 @@ function deriveSplitCategory(ex, splitType, muscle){
   return null; // custom - no auto-derivation, fully manual
 }
 const SPLIT_CATEGORY_LABELS = { push:'Push', pull:'Pull', legs:'Legs', upper:'Upper', lower:'Lower', chestback:'Chest & Back', shouldersarms:'Shoulders & Arms', fullbody:'Full Body' };
+
+// Checks whether an exercise matches ONE SPECIFIC category, regardless of
+// "split type" - used by Custom split, where each day can be assigned any
+// category from any of the other splits (mix and match), not just the
+// categories belonging to one split. Kept consistent with the same rules
+// deriveSplitCategory uses, just checkable against an arbitrary target
+// instead of only returning one canonical category per exercise.
+function exerciseMatchesCategory(ex, muscle, category){
+  const m = (muscle || '').toLowerCase();
+  if (category === 'push') return ex.push_pull === 'push' && ex.upper_lower !== 'lower';
+  if (category === 'pull') return ex.push_pull === 'pull' && ex.upper_lower !== 'lower';
+  if (category === 'legs') return ex.upper_lower === 'lower';
+  if (category === 'upper') return ex.upper_lower === 'upper';
+  if (category === 'lower') return ex.upper_lower === 'lower';
+  if (category === 'chestback') return ['chest','lats','traps','middle back','lower back'].includes(m);
+  if (category === 'shouldersarms') return ['shoulders','biceps','triceps','forearms'].includes(m);
+  if (category === 'fullbody') return !!m;
+  return m === category; // bro-split style: category IS the muscle name directly
+}
 
 function movementPatternOf(name){
   const n = name.toLowerCase();
@@ -2640,7 +2659,7 @@ async function openPlanReorganizer(){
     overlay.querySelector('#closeReorg').onclick = () => overlay.remove();
 
     let cats = SPLIT_TYPES.find(s=>s.id===splitType).cats;
-    if (splitType === 'muscle'){
+    if (splitType === 'muscle' || splitType === 'custom'){
       const { data: userData } = await supabaseClient.auth.getUser();
       const [exResult, db] = await Promise.all([
         withTimeout(supabaseClient.from('exercises').select('name').eq('user_id', userData.user.id), 15000),
@@ -2649,15 +2668,13 @@ async function openPlanReorganizer(){
       const names = [...new Set((exResult.data||[]).map(e=>e.name))];
       const muscles = new Set();
       names.forEach(n => { const m = matchExercise(n, db); if (m && m.primaryMuscles && m.primaryMuscles[0]) muscles.add(m.primaryMuscles[0]); });
-      cats = [...muscles, 'rest'];
-    }
-    if (splitType === 'custom'){
-      // No auto-derivation possible - reorganizing by custom categories means
-      // hand-picking per day in the next step with everything available, not
-      // assigning a single tag per day.
-      dayAssignments = {};
-      renderStep3();
-      return;
+      cats = splitType === 'muscle'
+        ? [...muscles, 'rest']
+        // Custom mixes every category from every other split together, so any
+        // day can be Push, or Legs, or a specific muscle, or Chest & Back, or
+        // Full Body, or fully manual - genuine mix and match, not locked to
+        // one split's category set.
+        : ['push','pull','legs','upper','lower','chestback','shouldersarms','fullbody', ...muscles, 'rest'];
     }
 
     const body = overlay.querySelector('.overlay-scroll');
@@ -2708,18 +2725,61 @@ async function openPlanReorganizer(){
       const match = matchExercise(item.name, db);
       const muscle = match && match.primaryMuscles && match.primaryMuscles[0];
       const category = deriveSplitCategory(sample, splitType, muscle);
-      return { ...item, category };
+      return { ...item, category, muscle, altGroupId: sample.alt_group_id, push_pull: sample.push_pull, upper_lower: sample.upper_lower };
     });
 
     const body = overlay.querySelector('#reorgPreviewBody');
     const dayPlans = DAY_NAMES.map((d, i) => {
       const assignedCat = dayAssignments[i];
       const isCustom = assignedCat === 'custom';
-      const items = (assignedCat && assignedCat !== 'rest' && !isCustom)
-        ? namedList.filter(n => n.category === assignedCat)
-        : [];
+      let items = [];
+      if (assignedCat && assignedCat !== 'rest' && !isCustom){
+        items = splitType === 'custom'
+          ? namedList.filter(n => exerciseMatchesCategory(n, n.muscle, assignedCat))
+          : namedList.filter(n => n.category === assignedCat);
+      }
       const label = isCustom ? 'Custom' : (assignedCat ? (SPLIT_CATEGORY_LABELS[assignedCat] || cap(assignedCat)) : 'Not Assigned');
       return { day: d, dayIdx: i, catLabel: label, isCustom, items };
+    });
+
+    // Keep alt-group siblings together on the same day. Without this, an
+    // auto-derived split can easily scatter two exercises that are meant to
+    // be interchangeable onto different days - or worse, leave one out
+    // entirely if it has no derivable category of its own (e.g. never
+    // tagged) even though its sibling did land somewhere. Either way it
+    // quietly breaks the "complete via" convenience between them, since
+    // Track only cross-references alt-group siblings that are on the same
+    // day it's currently showing.
+    const altGroupDays = {}; // altGroupId -> { dayIdx -> count }
+    namedList.forEach(n => {
+      if (!n.altGroupId) return;
+      const home = dayPlans.find(dp => !dp.isCustom && dp.items.some(it => it.name === n.name));
+      if (!home) return;
+      altGroupDays[n.altGroupId] = altGroupDays[n.altGroupId] || {};
+      altGroupDays[n.altGroupId][home.dayIdx] = (altGroupDays[n.altGroupId][home.dayIdx] || 0) + 1;
+    });
+    let reconciledCount = 0;
+    Object.entries(altGroupDays).forEach(([groupId, counts]) => {
+      const dayIndices = Object.keys(counts).map(Number);
+      const winnerDay = dayIndices.reduce((best, d) => counts[d] > counts[best] ? d : best, dayIndices[0]);
+      const winnerPlan = dayPlans.find(d2 => d2.dayIdx === winnerDay);
+      if (!winnerPlan) return;
+      namedList.filter(n => n.altGroupId === groupId).forEach(n => {
+        // Remove from every other non-custom day it wrongly ended up on.
+        dayPlans.forEach(dp => {
+          if (dp.isCustom || dp.dayIdx === winnerDay) return;
+          const idx = dp.items.findIndex(it => it.name === n.name);
+          if (idx === -1) return;
+          dp.items.splice(idx, 1);
+          reconciledCount++;
+        });
+        // Make sure it's actually present on the winning day, even if it
+        // was never placed anywhere to begin with.
+        if (!winnerPlan.items.some(it => it.name === n.name)){
+          winnerPlan.items.push(n);
+          reconciledCount++;
+        }
+      });
     });
     // Custom days start empty - the person picks exactly what goes there from
     // everything available, rather than anything being auto-derived for them.
