@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.19';
+const APP_VERSION = 'Beta 5.20';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -262,6 +262,29 @@ const ALT_COLORS = ["#2DD4BF","#9B7EDE","#E8A33D","#6FA8DC","#E8718D","#7FD17A"]
 // (Press Alt, Row Alt, Curl Alt) rather than just "same muscle" alone, which
 // would wrongly lump presses and flyes together just because both hit chest.
 const MOVEMENT_PATTERNS = ['press','curl','row','raise','extension','fly','flye','pulldown','pushdown','squat','lunge','deadlift','crunch','dip','shrug','thrust'];
+// Push/Pull and Upper/Lower classifiers for the split scanner. Chest/shoulders/
+// triceps are push, back/biceps/forearms are pull - standard convention. Legs
+// don't map cleanly to push/pull by muscle alone, so those fall back to movement
+// pattern (squat/press = push, curl/deadlift/thrust = pull). Abs and neck are
+// left unclassified for both splits rather than forcing a guess either way.
+function classifyPushPull(muscle, exerciseName){
+  const m = (muscle || '').toLowerCase();
+  const n = (exerciseName || '').toLowerCase();
+  if (['chest','shoulders','triceps'].includes(m)) return 'push';
+  if (['lats','traps','biceps','forearms','lower back','middle back'].includes(m)) return 'pull';
+  if (['quadriceps','hamstrings','glutes','calves'].includes(m)){
+    if (n.includes('press') || n.includes('squat') || n.includes('lunge')) return 'push';
+    if (n.includes('curl') || n.includes('deadlift') || n.includes('thrust')) return 'pull';
+  }
+  return null;
+}
+function classifyUpperLower(muscle){
+  const m = (muscle || '').toLowerCase();
+  if (['quadriceps','hamstrings','glutes','calves','adductors','abductors'].includes(m)) return 'lower';
+  if (['chest','shoulders','lats','traps','biceps','triceps','forearms','lower back','middle back'].includes(m)) return 'upper';
+  return null;
+}
+
 function movementPatternOf(name){
   const n = name.toLowerCase();
   return MOVEMENT_PATTERNS.find(p => n.includes(p)) || null;
@@ -1992,6 +2015,100 @@ async function openAutoAltReview(){
   render();
 }
 
+
+// ---------- SPLIT TAG SCANNER ----------
+async function proposeSplitTags(){
+  const { data: userData } = await supabaseClient.auth.getUser();
+  const [exResult, db] = await Promise.all([
+    withTimeout(supabaseClient.from('exercises').select('id, name, push_pull, upper_lower').eq('user_id', userData.user.id), 15000),
+    loadExerciseDB()
+  ]);
+  const all = exResult.__timeout || exResult.error ? [] : (exResult.data || []);
+  // Work on distinct names - a name missing a tag on ANY of its records counts
+  // as needing review, and the fix applies to every record sharing that name.
+  const byName = {};
+  all.forEach(ex => {
+    const key = ex.name.toLowerCase();
+    if (!byName[key]) byName[key] = { name: ex.name, ids: [], hasPP: false, hasUL: false };
+    byName[key].ids.push(ex.id);
+    if (ex.push_pull) byName[key].hasPP = true;
+    if (ex.upper_lower) byName[key].hasUL = true;
+  });
+  const proposals = [];
+  Object.values(byName).forEach(item => {
+    if (item.hasPP && item.hasUL) return; // already fully tagged, nothing to propose
+    const match = matchExercise(item.name, db);
+    const muscle = match && match.primaryMuscles && match.primaryMuscles[0];
+    const pp = classifyPushPull(muscle, item.name);
+    const ul = classifyUpperLower(muscle);
+    if (!pp && !ul) return; // genuinely couldn't infer either, skip rather than show an empty row
+    proposals.push({ name: item.name, ids: item.ids, muscle: muscle ? cap(muscle) : 'Other', pushPull: pp, upperLower: ul });
+  });
+  proposals.sort((a,b) => a.muscle.localeCompare(b.muscle) || a.name.localeCompare(b.name));
+  return proposals;
+}
+
+async function openSplitTagReview(){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeSplitReview">✕</button><h1>Tag Push/Pull/Upper/Lower</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll" id="splitReviewBody"><div class="small" style="padding:20px 18px; color:var(--slate);">Scanning your exercises…</div></div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeSplitReview').onclick = () => overlay.remove();
+
+  const proposals = await proposeSplitTags();
+  const body = overlay.querySelector('#splitReviewBody');
+  if (!proposals.length){
+    body.innerHTML = `<div class="empty-state" style="padding:30px 18px;">Everything's already tagged, or nothing could be confidently inferred.</div>`;
+    return;
+  }
+  proposals.forEach((p, i) => { p.id = 'sp-' + i; p.included = true; });
+
+  function render(){
+    let lastMuscle = null;
+    body.innerHTML = `
+      <div class="small" style="padding:12px 18px; color:var(--slate);">${proposals.length} exercises can be tagged. Review and adjust before applying - nothing saves until you confirm.</div>
+      ${proposals.map(p => {
+        const header = p.muscle !== lastMuscle ? (lastMuscle = p.muscle, `<div class="category">${p.muscle}</div>`) : '';
+        return `${header}
+        <div class="proposal-card" data-pid="${p.id}" style="margin:0 18px 10px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px 14px; opacity:${p.included?1:0.45};">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <div class="ex-name" style="font-size:13px;">${p.name}</div>
+            <button class="sp-toggle" data-pid="${p.id}" style="background:none; color:${p.included?'var(--good)':'var(--slate)'}; font-size:10px; font-weight:600;">${p.included?'INCLUDED':'SKIPPED'}</button>
+          </div>
+          <div style="display:flex; gap:6px; flex-wrap:wrap;">
+            ${['push','pull'].map(v => `<span class="sp-chip" data-pid="${p.id}" data-field="pushPull" data-val="${v}" style="font-size:10.5px; padding:4px 10px; border-radius:12px; border:1px solid var(--line); background:${p.pushPull===v?'var(--flame)':'transparent'}; color:${p.pushPull===v?'var(--ink)':'var(--slate)'};">${cap(v)}</span>`).join('')}
+            ${['upper','lower'].map(v => `<span class="sp-chip" data-pid="${p.id}" data-field="upperLower" data-val="${v}" style="font-size:10.5px; padding:4px 10px; border-radius:12px; border:1px solid var(--line); background:${p.upperLower===v?'#3A6EA5':'transparent'}; color:${p.upperLower===v?'#fff':'var(--slate)'};">${cap(v)}</span>`).join('')}
+          </div>
+        </div>`;
+      }).join('')}
+      <button class="save-btn" id="confirmSplitBtn" style="margin:0 18px 20px 18px;">Apply Tags</button>
+    `;
+    body.querySelectorAll('.sp-toggle').forEach(btn => {
+      btn.onclick = () => { const p = proposals.find(p=>p.id===btn.dataset.pid); p.included = !p.included; render(); };
+    });
+    body.querySelectorAll('.sp-chip').forEach(chip => {
+      chip.onclick = () => {
+        const p = proposals.find(p=>p.id===chip.dataset.pid);
+        const field = chip.dataset.field, val = chip.dataset.val;
+        p[field] = p[field] === val ? null : val; // tap again to clear
+        render();
+      };
+    });
+    body.querySelector('#confirmSplitBtn').onclick = async () => {
+      const toApply = proposals.filter(p => p.included && (p.pushPull || p.upperLower));
+      for (const p of toApply){
+        for (const id of p.ids){
+          await supabaseClient.from('exercises').update({ push_pull: p.pushPull, upper_lower: p.upperLower }).eq('id', id);
+        }
+      }
+      overlay.remove();
+      if (state.currentTab === 'track') renderTrack();
+    };
+  }
+  render();
+}
 
 async function pickAltGroup(container, onPicked){
   container.innerHTML = `<div class="action-row" id="clearAltRow" style="border-color:var(--line);"><div class="ex-name" style="color:var(--slate); font-size:13px;">✕ No Alt Group</div></div><div class="search-bar">🔍 <input id="altSearch" placeholder="Search or create alt group…"></div><div id="altList"></div>`;
@@ -3758,6 +3875,8 @@ async function renderMe(){
         <div class="me-item" id="swapDaysBtn"><div>Swap Days</div><div class="chev">›</div></div>
         <div class="me-item" id="replayTourBtn"><div>How Zealift Works</div><div class="chev">›</div></div>
         <div class="me-item" id="redoWeekBtn"><div>Redo Week Setup</div><div class="chev">›</div></div>
+        <div class="section-label">Data</div>
+        <div class="me-item" id="scanSplitTagsBtn"><div>Tag Push/Pull/Upper/Lower</div><div class="chev">›</div></div>
         <div class="section-label">App</div>
         <div class="me-item" id="refreshAppBtn"><div>Refresh App</div><div class="chev">›</div></div>
         <div class="me-item" id="updateAppBtn"><div>Check for Updates</div><div class="chev">›</div></div>
@@ -3770,6 +3889,7 @@ async function renderMe(){
   document.getElementById('swapDaysBtn').onclick = openSwapDaysForm;
   document.getElementById('replayTourBtn').onclick = () => showOnboarding('teach');
   document.getElementById('redoWeekBtn').onclick = () => showOnboarding('setup');
+  document.getElementById('scanSplitTagsBtn').onclick = openSplitTagReview;
   document.getElementById('refreshAppBtn').onclick = () => { location.reload(); };
   document.getElementById('updateAppBtn').onclick = async () => {
     const btn = document.getElementById('updateAppBtn');
