@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.25';
+const APP_VERSION = 'Beta 5.26';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -867,11 +867,14 @@ function exerciseRow(ex){
 
   const mech = ex.mechanicInfo;
   const mechTag = mech ? `<span style="font-size:9px; padding:2px 5px; border-radius:4px; margin-left:5px; background:${mech.value==='compound'?'rgba(255,107,26,0.15)':'rgba(122,150,220,0.15)'}; color:${mech.value==='compound'?'#FF6B1A':'#7BA6C9'}; opacity:${mech.guessed?0.75:1};">${mech.guessed?'~':''}${mech.value==='compound'?'Compound':'Isolation'}</span>` : '';
+  // locationAvailable/locationSwap: items that are neither available nor
+  // swappable are filtered out before reaching this function entirely, so the
+  // only remaining case here is a real swap suggestion.
   const locSwapLine = (!ex.locationAvailable && ex.locationSwap)
     ? `<div class="small" style="color:#E8A33D; margin-top:3px;">↳ Not here — swap to ${ex.locationSwap.name}</div>`
-    : (!ex.locationAvailable ? `<div class="small" style="color:var(--slate); margin-top:3px; opacity:0.7;">Not available here</div>` : '');
+    : '';
 
-  return `<div class="exercise" style="${borderStyle} ${!ex.locationAvailable && !ex.locationSwap ? 'opacity:0.55;' : ''}" data-id="${ex.id}" data-name="${ex.name}">
+  return `<div class="exercise" style="${borderStyle}" data-id="${ex.id}" data-name="${ex.name}">
     ${cornerTag}
     <div style="flex:1; min-width:0; ${topPad}">
       <div class="ex-name">${ex.name}${mechTag}</div>
@@ -1314,8 +1317,7 @@ async function renderTrack(){
   const pct = totalSlots > 0 ? Math.round((doneSlots / totalSlots) * 100) : 0;
 
   const groupBy = getGroupByPref();
-  const [{ grouped, orderedKeys }, exdb, allLocations] = await Promise.all([
-    groupExercisesByChoice(state.exercises, groupBy),
+  const [exdb, allLocations] = await Promise.all([
     loadExerciseDB(),
     loadLocations()
   ]);
@@ -1326,6 +1328,12 @@ async function renderTrack(){
     ex.locationSwap = ex.locationAvailable ? null : findLocationSwap(ex, state.exercises, currentLocationId);
   });
   const currentLocationName = allLocations.find(l => l.id === currentLocationId)?.name || null;
+  // Only show what's actually usable at the current location - either directly
+  // available, or has a real swap suggestion. A separate list from
+  // state.exercises so progress stats above still reflect the whole day's plan,
+  // not just what's visible right now.
+  const visibleExercises = state.exercises.filter(ex => ex.locationAvailable || ex.locationSwap);
+  const { grouped, orderedKeys } = await groupExercisesByChoice(visibleExercises, groupBy);
 
   let suggestions = [];
   if (state.exercises.length > 0){
@@ -2289,26 +2297,43 @@ async function openBulkLocationAssign(){
 
     const { data: userData } = await supabaseClient.auth.getUser();
     const exResult = await withTimeout(
-      supabaseClient.from('exercises').select('id, name, location_ids').eq('user_id', userData.user.id),
+      supabaseClient.from('exercises').select('id, name, category, location_ids').eq('user_id', userData.user.id),
       15000
     );
     const all = exResult.__timeout || exResult.error ? [] : (exResult.data || []);
     const byName = {};
     all.forEach(ex => {
-      if (!byName[ex.name]) byName[ex.name] = { ids: [], alreadyHere: (ex.location_ids||[]).includes(locId) };
+      if (!byName[ex.name]) byName[ex.name] = { ids: [], category: ex.category || 'Other', alreadyHere: (ex.location_ids||[]).includes(locId) };
       byName[ex.name].ids.push(ex.id);
     });
     const names = Object.keys(byName).sort();
     const checked = new Set(names.filter(n => byName[n].alreadyHere));
+    const originallyChecked = new Set(checked); // snapshot, so confirm only touches what actually changed
+
+    // Group by equipment category (Cable, Pin-Loaded, Free Weights - Bench, etc)
+    // instead of one long flat list, with a tick-all/untick-all per category for
+    // fast bulk organization when many exercises share the same equipment.
+    const byCategory = {};
+    names.forEach(n => { (byCategory[byName[n].category] = byCategory[byName[n].category] || []).push(n); });
+    const categories = Object.keys(byCategory).sort();
 
     function render(){
       body.innerHTML = `
         <div class="form-sub" style="padding:10px 18px 4px 18px;">${locName} — tick the exercises that belong here</div>
-        ${names.map(n => `<div class="pick-row bulk-check-row" data-name="${n}" style="cursor:pointer;">
-          <div class="ex-name" style="font-size:12.5px;">${n}</div>
-          <span style="font-size:16px; color:${checked.has(n) ? 'var(--flame)' : 'var(--line)'};">${checked.has(n) ? '☑' : '☐'}</span>
-        </div>`).join('')}
-        <button class="save-btn" id="confirmBulkLocBtn" style="margin-top:10px;">Assign ${checked.size} to "${locName}"</button>
+        ${categories.map(cat => {
+          const catNames = byCategory[cat];
+          const allChecked = catNames.every(n => checked.has(n));
+          return `
+          <div class="category" style="display:flex; align-items:center; justify-content:space-between;">
+            <span>${cat}</span>
+            <span class="cat-toggle-all" data-cat="${cat}" style="font-family:'JetBrains Mono',monospace; font-size:9.5px; color:var(--flame); text-decoration:underline; cursor:pointer; text-transform:none; letter-spacing:0;">${allChecked ? 'Untick All' : 'Tick All'}</span>
+          </div>
+          ${catNames.map(n => `<div class="pick-row bulk-check-row" data-name="${n}" style="cursor:pointer;">
+            <div class="ex-name" style="font-size:12.5px;">${n}</div>
+            <span style="font-size:16px; color:${checked.has(n) ? 'var(--flame)' : 'var(--line)'};">${checked.has(n) ? '☑' : '☐'}</span>
+          </div>`).join('')}
+        `}).join('')}
+        <button class="save-btn" id="confirmBulkLocBtn" style="margin-top:10px;">Save (${checked.size} at "${locName}")</button>
       `;
       body.querySelectorAll('.bulk-check-row').forEach(row => {
         row.onclick = () => {
@@ -2317,14 +2342,29 @@ async function openBulkLocationAssign(){
           render();
         };
       });
+      body.querySelectorAll('.cat-toggle-all').forEach(btn => {
+        btn.onclick = () => {
+          const catNames = byCategory[btn.dataset.cat];
+          const allChecked = catNames.every(n => checked.has(n));
+          catNames.forEach(n => { if (allChecked) checked.delete(n); else checked.add(n); });
+          render();
+        };
+      });
       body.querySelector('#confirmBulkLocBtn').onclick = async () => {
-        for (const n of checked){
+        for (const n of names){
+          const isChecked = checked.has(n);
+          const was = originallyChecked.has(n);
+          if (isChecked === was) continue; // unchanged, nothing to write
           const item = byName[n];
           for (const id of item.ids){
             const exRow = all.find(e => e.id === id);
             const existing = (exRow && exRow.location_ids) || [];
-            const merged = [...new Set([...existing, locId])];
-            await supabaseClient.from('exercises').update({ location_ids: merged }).eq('id', id);
+            // Only ever touches this one location's membership - every other
+            // location already tagged on this exercise is left exactly as-is.
+            const updated = isChecked
+              ? [...new Set([...existing, locId])]
+              : existing.filter(id2 => id2 !== locId);
+            await supabaseClient.from('exercises').update({ location_ids: updated }).eq('id', id);
           }
         }
         overlay.remove();
@@ -4347,9 +4387,9 @@ async function renderMe(){
         <div class="me-item" id="replayTourBtn"><div>How Zealift Works</div><div class="chev">›</div></div>
         <div class="me-item" id="redoWeekBtn"><div>Redo Week Setup</div><div class="chev">›</div></div>
         <div class="section-label">Data</div>
-        <div class="me-item" id="bulkLocationBtn"><div>Assign All to a Location</div><div class="chev">›</div></div>
-        <div class="me-item" id="scanSplitTagsBtn"><div>Tag Push/Pull/Upper/Lower</div><div class="chev">›</div></div>
-        <div class="me-item" id="reorganizeWeekBtn"><div>Reorganize Week by Split</div><div class="chev">›</div></div>
+        <div class="me-item" id="bulkLocationBtn"><div>Assign Location</div><div class="chev">›</div></div>
+        <div class="me-item" id="scanSplitTagsBtn"><div>Tag Workouts</div><div class="chev">›</div></div>
+        <div class="me-item" id="reorganizeWeekBtn"><div>Change Split</div><div class="chev">›</div></div>
         ${localStorage.getItem('zealift_reorg_snapshot') ? `<div class="me-item" id="revertReorgBtn"><div style="color:#E8A33D;">Revert Last Reorganization</div><div class="chev">›</div></div>` : ''}
         <div class="section-label">App</div>
         <div class="me-item" id="refreshAppBtn"><div>Refresh App</div><div class="chev">›</div></div>
