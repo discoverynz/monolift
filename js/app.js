@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.21';
+const APP_VERSION = 'Beta 5.22';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1503,6 +1503,7 @@ function showExerciseActionsMenu(exerciseId, exerciseName){
       <div style="padding:12px 18px; font-family:'Oswald', sans-serif; font-size:14px; color:var(--slate); border-bottom:1px solid var(--line);">${exerciseName}</div>
       <div class="me-item" id="menuRename" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Rename Exercise</div><div class="chev">›</div></div>
       <div class="me-item" id="menuEditAlt" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Edit Alt Group</div><div class="chev">›</div></div>
+      <div class="me-item" id="menuEditLoc" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Edit Locations</div><div class="chev">›</div></div>
       <div class="me-item" id="menuRemove" style="border-bottom:none; cursor:pointer;"><div style="color:var(--flame);">Remove from ${DAY_LABELS[state.selectedDay]}</div><div class="chev">›</div></div>
       <div style="text-align:center; padding:12px; color:var(--slate); font-size:13px; cursor:pointer;" id="menuCancel">Cancel</div>
     </div>`;
@@ -1510,6 +1511,7 @@ function showExerciseActionsMenu(exerciseId, exerciseName){
   overlay.querySelector('#menuCancel').onclick = () => overlay.remove();
   overlay.querySelector('#menuRename').onclick = () => { overlay.remove(); openRenameExerciseForm(exerciseId, exerciseName); };
   overlay.querySelector('#menuEditAlt').onclick = () => { overlay.remove(); openEditAltGroupForm(exerciseId, exerciseName); };
+  overlay.querySelector('#menuEditLoc').onclick = () => { overlay.remove(); openEditLocationForm(exerciseId, exerciseName); };
   overlay.querySelector('#menuRemove').onclick = () => { overlay.remove(); confirmRemoveExercise(exerciseId, exerciseName); };
 }
 
@@ -1582,6 +1584,60 @@ function openEditAltGroupForm(exerciseId, exerciseName){
     overlay.remove();
     if (state.currentTab === 'track') renderTrack();
   });
+}
+
+function openEditLocationForm(exerciseId, exerciseName){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeLoc">✕</button><h1>Locations</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll">
+      <div class="field-label" style="padding-top:0;">${exerciseName}</div>
+      <div class="chip-row" id="editLocChipRow"><div class="small" style="color:var(--slate); padding:8px 0;">Loading…</div></div>
+      <div class="small" style="padding:0 18px 8px 18px; color:var(--slate);">Leave blank for available everywhere. Pick more than one if it exists at multiple locations.</div>
+      <button class="save-btn" id="saveLocBtn">Save</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeLoc').onclick = () => overlay.remove();
+
+  let selectedIds = [];
+  (async () => {
+    const [locs, exResult] = await Promise.all([
+      loadLocations(),
+      withTimeout(supabaseClient.from('exercises').select('location_ids').eq('id', exerciseId).maybeSingle(), 15000)
+    ]);
+    selectedIds = (exResult.__timeout || exResult.error || !exResult.data) ? [] : (exResult.data.location_ids || []);
+    renderChips(locs);
+  })();
+
+  function renderChips(locs){
+    const row = overlay.querySelector('#editLocChipRow');
+    row.innerHTML = locs.map(l => `<div class="chip ${selectedIds.includes(l.id)?'active':''}" data-loc="${l.id}">${l.name}</div>`).join('')
+      + `<div class="chip" id="newLocChip2" style="color:var(--flame); border-color:var(--flame);">+ New</div>`;
+    row.querySelectorAll('.chip[data-loc]').forEach(el => {
+      el.onclick = () => {
+        const id = el.dataset.loc;
+        if (selectedIds.includes(id)){ selectedIds = selectedIds.filter(x=>x!==id); el.classList.remove('active'); }
+        else { selectedIds.push(id); el.classList.add('active'); }
+      };
+    });
+    row.querySelector('#newLocChip2').onclick = () => {
+      promptText({
+        title: 'New Location Name', placeholder: 'e.g. Home Gym',
+        onConfirm: async (name) => {
+          const loc = await createLocation(name);
+          if (loc) selectedIds.push(loc.id);
+          renderChips(await loadLocations());
+        }
+      });
+    };
+  }
+
+  overlay.querySelector('#saveLocBtn').onclick = async () => {
+    await supabaseClient.from('exercises').update({ location_ids: selectedIds }).eq('id', exerciseId);
+    overlay.remove();
+    if (state.currentTab === 'track') renderTrack();
+  };
 }
 
 function confirmRemoveExercise(exerciseId, exerciseName){
@@ -2123,6 +2179,65 @@ async function openSplitTagReview(){
     };
   }
   render();
+}
+
+// ---------- BULK LOCATION ASSIGN ----------
+async function openBulkLocationAssign(){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeBulkLoc">✕</button><h1>Assign to a Location</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll">
+      <div class="field-label" style="padding-top:0;">Location Name</div>
+      <div class="field-card"><input class="field-input" id="bulkLocInput" placeholder="e.g. Functional Fitness" style="font-size:14px; font-weight:400;"></div>
+      <div class="small" style="padding:8px 18px; color:var(--slate); line-height:1.5;">Assigns every exercise that currently has no location set. Anything already tagged to a location is left alone.</div>
+      <button class="save-btn" id="findExercisesBtn">Find Exercises</button>
+      <div id="bulkLocResults"></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeBulkLoc').onclick = () => overlay.remove();
+
+  overlay.querySelector('#findExercisesBtn').onclick = async () => {
+    const name = overlay.querySelector('#bulkLocInput').value.trim();
+    if (!name) return;
+    const resultsArea = overlay.querySelector('#bulkLocResults');
+    resultsArea.innerHTML = `<div class="small" style="padding:16px 18px; color:var(--slate);">Scanning…</div>`;
+
+    const { data: userData } = await supabaseClient.auth.getUser();
+    const exResult = await withTimeout(
+      supabaseClient.from('exercises').select('id, name, location_ids').eq('user_id', userData.user.id),
+      15000
+    );
+    const all = exResult.__timeout || exResult.error ? [] : (exResult.data || []);
+    const untagged = all.filter(ex => !ex.location_ids || ex.location_ids.length === 0);
+    // Dedupe by name for display, but every matching record ID gets the update.
+    const byName = {};
+    untagged.forEach(ex => { (byName[ex.name] = byName[ex.name] || []).push(ex.id); });
+    const names = Object.keys(byName).sort();
+
+    if (!names.length){
+      resultsArea.innerHTML = `<div class="empty-state" style="padding:20px 18px;">Everything already has a location set - nothing to assign.</div>`;
+      return;
+    }
+
+    resultsArea.innerHTML = `
+      <div class="section-label">${names.length} Exercises With No Location</div>
+      ${names.map(n => `<div class="pick-row" style="cursor:default;"><div class="ex-name" style="font-size:12.5px;">${n}</div></div>`).join('')}
+      <button class="save-btn" id="confirmBulkLocBtn" style="margin-top:10px;">Assign All ${names.length} to "${name}"</button>
+    `;
+    resultsArea.querySelector('#confirmBulkLocBtn').onclick = async () => {
+      let loc = (await loadLocations()).find(l => l.name.toLowerCase() === name.toLowerCase());
+      if (!loc) loc = await createLocation(name);
+      if (!loc){ alert('Could not create or find that location.'); return; }
+      for (const ids of Object.values(byName)){
+        for (const id of ids){
+          await supabaseClient.from('exercises').update({ location_ids: [loc.id] }).eq('id', id);
+        }
+      }
+      overlay.remove();
+      if (state.currentTab === 'track') renderTrack();
+    };
+  };
 }
 
 // ---------- PLAN REORGANIZER ----------
@@ -4066,6 +4181,7 @@ async function renderMe(){
         <div class="me-item" id="replayTourBtn"><div>How Zealift Works</div><div class="chev">›</div></div>
         <div class="me-item" id="redoWeekBtn"><div>Redo Week Setup</div><div class="chev">›</div></div>
         <div class="section-label">Data</div>
+        <div class="me-item" id="bulkLocationBtn"><div>Assign All to a Location</div><div class="chev">›</div></div>
         <div class="me-item" id="scanSplitTagsBtn"><div>Tag Push/Pull/Upper/Lower</div><div class="chev">›</div></div>
         <div class="me-item" id="reorganizeWeekBtn"><div>Reorganize Week by Split</div><div class="chev">›</div></div>
         ${localStorage.getItem('zealift_reorg_snapshot') ? `<div class="me-item" id="revertReorgBtn"><div style="color:#E8A33D;">Revert Last Reorganization</div><div class="chev">›</div></div>` : ''}
@@ -4081,6 +4197,7 @@ async function renderMe(){
   document.getElementById('swapDaysBtn').onclick = openSwapDaysForm;
   document.getElementById('replayTourBtn').onclick = () => showOnboarding('teach');
   document.getElementById('redoWeekBtn').onclick = () => showOnboarding('setup');
+  document.getElementById('bulkLocationBtn').onclick = openBulkLocationAssign;
   document.getElementById('scanSplitTagsBtn').onclick = openSplitTagReview;
   document.getElementById('reorganizeWeekBtn').onclick = openPlanReorganizer;
   const revertBtn = document.getElementById('revertReorgBtn');
