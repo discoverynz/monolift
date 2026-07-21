@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.26';
+const APP_VERSION = 'Beta 5.27';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -2377,6 +2377,132 @@ async function openBulkLocationAssign(){
   renderLocationPicker();
 }
 
+// ---------- PLAN BACKUPS ----------
+async function createPlanBackup(name){
+  const { data: userData } = await supabaseClient.auth.getUser();
+  const exResult = await withTimeout(
+    supabaseClient.from('exercises').select('id, name, category, weekday, alt_group_id, push_pull, upper_lower, location_ids').eq('user_id', userData.user.id).eq('active', true),
+    15000
+  );
+  const exercises = exResult.__timeout || exResult.error ? [] : (exResult.data || []);
+  const result = await withTimeout(
+    supabaseClient.from('plan_backups').insert({ user_id: userData.user.id, name, snapshot: exercises }).select(),
+    15000
+  );
+  return result.__timeout || result.error || !result.data ? null : result.data[0];
+}
+async function loadPlanBackups(){
+  const { data: userData } = await supabaseClient.auth.getUser();
+  const result = await withTimeout(
+    supabaseClient.from('plan_backups').select('id, name, created_at, snapshot').eq('user_id', userData.user.id).order('created_at', { ascending: false }),
+    15000
+  );
+  return result.__timeout || result.error ? [] : (result.data || []);
+}
+// Restores by matching exercise ID - exercises that still exist get their
+// weekday/category/split tags/locations set back to what the backup recorded.
+// Anything deleted since the backup is skipped rather than recreated, and the
+// summary honestly reports what happened either way.
+async function restorePlanBackup(backup){
+  const { data: userData } = await supabaseClient.auth.getUser();
+  const currentResult = await withTimeout(
+    supabaseClient.from('exercises').select('id').eq('user_id', userData.user.id),
+    15000
+  );
+  const currentIds = new Set((currentResult.data || []).map(e => e.id));
+  let restored = 0, skipped = 0;
+  for (const ex of backup.snapshot){
+    if (!currentIds.has(ex.id)){ skipped++; continue; }
+    await supabaseClient.from('exercises').update({
+      category: ex.category, weekday: ex.weekday, alt_group_id: ex.alt_group_id,
+      push_pull: ex.push_pull, upper_lower: ex.upper_lower, location_ids: ex.location_ids
+    }).eq('id', ex.id);
+    restored++;
+  }
+  return { restored, skipped };
+}
+
+async function openBackupPlanScreen(){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeBackup">✕</button><h1>Backup Plan</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll">
+      <div class="small" style="padding:10px 18px; color:var(--slate); line-height:1.5;">Save your current plan as a named snapshot, so you can switch splits and come back to it later.</div>
+      <div class="action-row" id="saveBackupRow"><div class="ex-name" style="color:var(--flame);">+ Save Current Plan</div></div>
+      <div class="section-label">Saved Plans</div>
+      <div id="backupList"><div class="small" style="padding:16px 18px; color:var(--slate);">Loading…</div></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeBackup').onclick = () => overlay.remove();
+
+  overlay.querySelector('#saveBackupRow').onclick = () => {
+    promptText({
+      title: 'Name This Plan', placeholder: 'e.g. Bro Split, PPL, Upper/Lower',
+      onConfirm: async (name) => {
+        const backup = await createPlanBackup(name);
+        if (!backup){ alert('Could not save the backup.'); return; }
+        renderList();
+      }
+    });
+  };
+
+  async function renderList(){
+    const listArea = overlay.querySelector('#backupList');
+    listArea.innerHTML = `<div class="small" style="padding:16px 18px; color:var(--slate);">Loading…</div>`;
+    const backups = await loadPlanBackups();
+    if (!backups.length){
+      listArea.innerHTML = `<div class="empty-state" style="padding:20px 18px;">No saved plans yet.</div>`;
+      return;
+    }
+    listArea.innerHTML = backups.map(b => `
+      <div class="proposal-card" data-id="${b.id}" style="margin:0 18px 10px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+          <div class="ex-name" style="font-size:13.5px;">${b.name}</div>
+          <span class="small" style="color:var(--slate);">${(b.snapshot||[]).length} exercises</span>
+        </div>
+        <div class="small" style="color:var(--slate); margin-bottom:10px;">${formatLoggedDate((b.created_at||'').slice(0,10))}</div>
+        <div style="display:flex; gap:8px;">
+          <button class="backup-restore-btn" data-id="${b.id}" style="flex:1; background:var(--flame); color:var(--ink); padding:9px; border-radius:8px; font-weight:600; font-size:12px;">Restore</button>
+          <button class="backup-rename-btn" data-id="${b.id}" data-name="${b.name}" style="background:var(--ink); color:var(--slate); padding:9px 14px; border-radius:8px; font-size:12px;">Rename</button>
+          <button class="backup-delete-btn" data-id="${b.id}" style="background:var(--ink); color:#E8492A; padding:9px 14px; border-radius:8px; font-size:12px;">Delete</button>
+        </div>
+      </div>
+    `).join('');
+
+    listArea.querySelectorAll('.backup-restore-btn').forEach(btn => {
+      btn.onclick = async () => {
+        const backup = backups.find(b => b.id === btn.dataset.id);
+        if (!confirm(`Restore "${backup.name}"? Your current plan will be saved as a safety backup first, so this can be undone.`)) return;
+        await createPlanBackup(`Before restoring "${backup.name}" — ${todayStr()}`);
+        const { restored, skipped } = await restorePlanBackup(backup);
+        overlay.remove();
+        alert(`Restored ${restored} exercises.${skipped ? ' ' + skipped + ' from this backup no longer exist and were skipped.' : ''}`);
+        if (state.currentTab === 'track'){ state.selectedDay = todayWeekday(); renderTrack(); }
+      };
+    });
+    listArea.querySelectorAll('.backup-rename-btn').forEach(btn => {
+      btn.onclick = () => {
+        promptText({
+          title: 'Rename Plan', placeholder: 'Name', initialValue: btn.dataset.name,
+          onConfirm: async (newName) => {
+            await supabaseClient.from('plan_backups').update({ name: newName }).eq('id', btn.dataset.id);
+            renderList();
+          }
+        });
+      };
+    });
+    listArea.querySelectorAll('.backup-delete-btn').forEach(btn => {
+      btn.onclick = async () => {
+        if (!confirm('Delete this saved plan? This cannot be undone.')) return;
+        await supabaseClient.from('plan_backups').delete().eq('id', btn.dataset.id);
+        renderList();
+      };
+    });
+  }
+  renderList();
+}
+
 // ---------- PLAN REORGANIZER ----------
 const SPLIT_TYPES = [
   { id:'ppl', label:'Push / Pull / Legs', cats:['push','pull','legs','rest'] },
@@ -4387,6 +4513,7 @@ async function renderMe(){
         <div class="me-item" id="replayTourBtn"><div>How Zealift Works</div><div class="chev">›</div></div>
         <div class="me-item" id="redoWeekBtn"><div>Redo Week Setup</div><div class="chev">›</div></div>
         <div class="section-label">Data</div>
+        <div class="me-item" id="backupPlanBtn"><div>Backup Plan</div><div class="chev">›</div></div>
         <div class="me-item" id="bulkLocationBtn"><div>Assign Location</div><div class="chev">›</div></div>
         <div class="me-item" id="scanSplitTagsBtn"><div>Tag Workouts</div><div class="chev">›</div></div>
         <div class="me-item" id="reorganizeWeekBtn"><div>Change Split</div><div class="chev">›</div></div>
@@ -4403,6 +4530,7 @@ async function renderMe(){
   document.getElementById('swapDaysBtn').onclick = openSwapDaysForm;
   document.getElementById('replayTourBtn').onclick = () => showOnboarding('teach');
   document.getElementById('redoWeekBtn').onclick = () => showOnboarding('setup');
+  document.getElementById('backupPlanBtn').onclick = openBackupPlanScreen;
   document.getElementById('bulkLocationBtn').onclick = openBulkLocationAssign;
   document.getElementById('scanSplitTagsBtn').onclick = openSplitTagReview;
   document.getElementById('reorganizeWeekBtn').onclick = openPlanReorganizer;
