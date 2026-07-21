@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.33';
+const APP_VERSION = 'Beta 5.34';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -2643,6 +2643,151 @@ const SPLIT_TYPES = [
   { id:'custom', label:'Custom', desc:'Build it exactly your way, day by day.', cats:null }
 ];
 
+// ---------- CHANGE ONE DAY ----------
+// Lightweight alternative to the full reorganizer for changing a single day's
+// focus without needing to re-specify every other day - the full reorganizer
+// requires you to correctly reassign every day you want preserved in the same
+// session, or exercises can end up moving somewhere unintended. This only
+// ever touches the one day picked.
+async function openChangeSingleDay(){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  document.body.appendChild(overlay);
+  let targetDay = null;
+  let newCategory = null;
+
+  function renderStep1(){
+    overlay.innerHTML = `
+      <div class="form-header"><button id="closeChangeDay">✕</button><h1>Change One Day</h1><div style="width:18px;"></div></div>
+      <div class="overlay-scroll">
+        <div class="small" style="padding:8px 18px 16px 18px; color:var(--slate); line-height:1.5;">Pick a day to change. Nothing else in your week is touched.</div>
+        ${DAY_NAMES.map((d,i) => `<div class="pick-row" data-day="${i}"><div class="ex-name">${d}</div><div class="chev">›</div></div>`).join('')}
+      </div>`;
+    overlay.querySelector('#closeChangeDay').onclick = () => overlay.remove();
+    overlay.querySelectorAll('.pick-row').forEach(row => {
+      row.onclick = () => { targetDay = parseInt(row.dataset.day, 10); renderStep2(); };
+    });
+  }
+
+  async function renderStep2(){
+    overlay.innerHTML = `<div class="form-header"><button id="closeChangeDay">✕</button><h1>${DAY_NAMES[targetDay]}'s New Focus</h1><div style="width:18px;"></div></div>
+      <div class="overlay-scroll"><div class="small" style="padding:20px 18px; color:var(--slate);">Loading…</div></div>`;
+    overlay.querySelector('#closeChangeDay').onclick = () => overlay.remove();
+
+    const { data: userData } = await supabaseClient.auth.getUser();
+    const [exResult, db] = await Promise.all([
+      withTimeout(supabaseClient.from('exercises').select('name').eq('user_id', userData.user.id), 15000),
+      loadExerciseDB()
+    ]);
+    const names = [...new Set((exResult.data||[]).map(e=>e.name))];
+    const muscles = new Set();
+    names.forEach(n => { const m = matchExercise(n, db); if (m && m.primaryMuscles && m.primaryMuscles[0]) muscles.add(m.primaryMuscles[0]); });
+    const cats = ['push','pull','legs','upper','lower','chestback','shouldersarms','fullbody', ...muscles, 'rest'];
+
+    const body = overlay.querySelector('.overlay-scroll');
+    body.innerHTML = `
+      <div class="small" style="padding:0 18px 12px 18px; color:var(--slate);">What should this day focus on now?</div>
+      <div class="chip-row" style="flex-wrap:wrap;">
+        ${cats.map(c => `<div class="chip" data-cat="${c}">${SPLIT_CATEGORY_LABELS[c] || cap(c)}</div>`).join('')}
+        <div class="chip" data-cat="custom" style="color:var(--flame); border-color:var(--flame);">Manual</div>
+      </div>
+    `;
+    body.querySelectorAll('.chip').forEach(chip => {
+      chip.onclick = () => { newCategory = chip.dataset.cat; renderStep3(); };
+    });
+  }
+
+  async function renderStep3(){
+    overlay.innerHTML = `<div class="form-header"><button id="closeChangeDay">✕</button><h1>Preview</h1><div style="width:18px;"></div></div>
+      <div class="overlay-scroll" id="changeDayBody"><div class="small" style="padding:20px 18px; color:var(--slate);">Building preview…</div></div>`;
+    overlay.querySelector('#closeChangeDay').onclick = () => overlay.remove();
+
+    const { data: userData } = await supabaseClient.auth.getUser();
+    const [exResult, db] = await Promise.all([
+      withTimeout(supabaseClient.from('exercises').select('id, name, weekday, alt_group_id, push_pull, upper_lower, category').eq('user_id', userData.user.id).eq('active', true), 15000),
+      loadExerciseDB()
+    ]);
+    const allExercises = exResult.__timeout || exResult.error ? [] : (exResult.data || []);
+    const byName = {};
+    allExercises.forEach(ex => {
+      if (!byName[ex.name]) byName[ex.name] = { name: ex.name, ids: [], weekday: ex.weekday, altGroupId: ex.alt_group_id, push_pull: ex.push_pull, upper_lower: ex.upper_lower };
+      byName[ex.name].ids.push(ex.id);
+    });
+    const namedList = await Promise.all(Object.values(byName).map(async item => {
+      const match = matchExercise(item.name, db);
+      const muscle = match && match.primaryMuscles && match.primaryMuscles[0];
+      return { ...item, muscle };
+    }));
+
+    const currentlyHere = namedList.filter(n => n.weekday === targetDay);
+    const incoming = newCategory === 'custom' ? [] :
+      namedList.filter(n => n.weekday !== targetDay && exerciseMatchesCategory(n, n.muscle, newCategory));
+    const staying = newCategory === 'custom' ? currentlyHere :
+      currentlyHere.filter(n => exerciseMatchesCategory(n, n.muscle, newCategory));
+    const leaving = currentlyHere.filter(n => !staying.some(s => s.name === n.name));
+
+    const body = overlay.querySelector('#changeDayBody');
+    const included = new Set([...incoming, ...staying].map(n => n.name));
+    function render(){
+      body.innerHTML = `
+        <div class="banner" style="margin:8px 18px 16px 18px; background:#251a12; border:1px solid #4a2f16; border-radius:10px; padding:12px 14px; font-size:11.5px; color:#E8A33D; line-height:1.5;">⚠ Only ${DAY_NAMES[targetDay]} changes. Every other day stays exactly as it is. Your current setup is saved automatically first.</div>
+        <div class="category">MOVING TO ${DAY_NAMES[targetDay]}</div>
+        ${[...incoming, ...staying].map(n => `<div class="pick-row reorg-item" data-name="${n.name}" style="cursor:pointer;"><div class="ex-name">${n.name}</div><span style="color:${included.has(n.name)?'var(--flame)':'var(--slate)'};">${included.has(n.name)?'☑':'☐'}</span></div>`).join('') || `<div class="empty-state" style="padding:14px 18px;">Nothing matches this category yet.</div>`}
+        ${leaving.length ? `<div class="category" style="color:#E8492A;">NO LONGER FITS - WILL BE DEACTIVATED</div>
+          <div class="small" style="padding:0 18px 8px 18px; color:var(--slate);">Removed from your active rotation, but history is kept. Untick to keep it here anyway.</div>
+          ${leaving.map(n => `<div class="pick-row reorg-item" data-name="${n.name}" data-leaving="1" style="cursor:pointer;"><div class="ex-name">${n.name}</div><span style="color:${included.has(n.name)?'var(--flame)':'#E8492A'};">${included.has(n.name)?'☑ keep':'☐ remove'}</span></div>`).join('')}` : ''}
+        <button class="save-btn" id="confirmChangeDayBtn" style="margin:16px 18px 20px 18px;">Confirm</button>
+      `;
+      body.querySelectorAll('.reorg-item').forEach(row => {
+        row.onclick = () => {
+          const n = row.dataset.name;
+          if (included.has(n)) included.delete(n); else included.add(n);
+          render();
+        };
+      });
+      body.querySelector('#confirmChangeDayBtn').onclick = async () => {
+        const snapshot = allExercises.map(ex => ({ id: ex.id, weekday: ex.weekday }));
+        localStorage.setItem('zealift_reorg_snapshot', JSON.stringify({ snapshot, at: new Date().toISOString() }));
+
+        // Same conservative alt-group rule as the full reorganizer: if a
+        // sibling isn't also ending up on this day, clear the link rather
+        // than leave a group half-scattered.
+        const finalHere = new Set([...incoming, ...staying].filter(n => included.has(n.name)).map(n => n.name));
+        const altGroupsToClear = new Set();
+        namedList.forEach(n => {
+          if (!n.altGroupId) return;
+          const siblingsOfGroup = namedList.filter(s => s.altGroupId === n.altGroupId);
+          const allHere = siblingsOfGroup.every(s => finalHere.has(s.name) || (s.weekday === targetDay && !leaving.some(l=>l.name===s.name)));
+          if (!allHere) altGroupsToClear.add(n.altGroupId);
+        });
+
+        for (const n of incoming){
+          if (!included.has(n.name)) continue;
+          const clearAlt = n.altGroupId && altGroupsToClear.has(n.altGroupId);
+          for (const id of n.ids){
+            const payload = { weekday: targetDay };
+            if (clearAlt) payload.alt_group_id = null;
+            await supabaseClient.from('exercises').update(payload).eq('id', id);
+          }
+        }
+        for (const n of leaving){
+          if (included.has(n.name)) continue; // kept anyway, don't deactivate
+          for (const id of n.ids){
+            await supabaseClient.from('exercises').update({ active: false }).eq('id', id);
+          }
+        }
+        overlay.remove();
+        state.selectedDay = targetDay;
+        state.currentTab = 'track';
+        renderTrack();
+      };
+    }
+    render();
+  }
+
+  renderStep1();
+}
+
 async function openPlanReorganizer(){
   const overlay = document.createElement('div');
   overlay.className = 'overlay-screen';
@@ -4722,6 +4867,10 @@ async function renderMe(){
           <div><div style="color:var(--flame); font-weight:700;">✨ Change Split</div><div class="small" style="color:var(--chalk); margin-top:2px; opacity:0.85;">PPL, Arnold, Bro Split, Full Body, or your own - Zealift rebuilds your whole week automatically</div></div>
           <div class="chev" style="margin-top:2px; color:var(--flame);">›</div>
         </div>
+        <div class="me-item" id="changeSingleDayBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+          <div><div>🔁 Change One Day</div><div class="small" style="color:var(--slate); margin-top:2px;">Just swap one day's focus - everything else stays put</div></div>
+          <div class="chev" style="margin-top:2px;">›</div>
+        </div>
         ${localStorage.getItem('zealift_reorg_snapshot') ? `<div class="me-item" id="revertReorgBtn"><div style="color:#E8A33D;">Revert Last Reorganization</div><div class="chev">›</div></div>` : ''}
         <div class="section-label">App</div>
         <div class="me-item" id="refreshAppBtn"><div>Refresh App</div><div class="chev">›</div></div>
@@ -4739,6 +4888,7 @@ async function renderMe(){
   document.getElementById('bulkLocationBtn').onclick = openBulkLocationAssign;
   document.getElementById('scanSplitTagsBtn').onclick = openSplitTagReview;
   document.getElementById('reorganizeWeekBtn').onclick = openPlanReorganizer;
+  document.getElementById('changeSingleDayBtn').onclick = openChangeSingleDay;
   const revertBtn = document.getElementById('revertReorgBtn');
   if (revertBtn) revertBtn.onclick = revertLastReorganization;
   document.getElementById('refreshAppBtn').onclick = () => { location.reload(); };
