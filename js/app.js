@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.18';
+const APP_VERSION = 'Beta 5.19';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -480,7 +480,7 @@ function renderCodeEntry(email){
 async function loadExercises(){
   const result = await withTimeout(
     supabaseClient.from('exercises')
-      .select('id, name, category, alt_group_id, alt_groups(name, color)')
+      .select('id, name, category, alt_group_id, alt_groups(name, color), location_ids')
       .eq('weekday', state.selectedDay)
       .eq('active', true)
       .order('category', { ascending: true })
@@ -565,6 +565,29 @@ async function loadExercises(){
   });
 
   state.exercises = withLogs;
+}
+
+function getCurrentLocationId(){ return localStorage.getItem('zealift_current_location') || null; }
+function setCurrentLocationId(id){ if (id) localStorage.setItem('zealift_current_location', id); else localStorage.removeItem('zealift_current_location'); }
+
+// An exercise with no locations set is available everywhere (untagged = universal,
+// so introducing locations doesn't break exercises nobody's gotten around to
+// tagging yet). Otherwise it's available only where explicitly tagged.
+function isAvailableAtLocation(ex, locationId){
+  if (!locationId) return true;
+  if (!ex.location_ids || ex.location_ids.length === 0) return true;
+  return ex.location_ids.includes(locationId);
+}
+
+// For an exercise that's NOT available at the current location, look for an
+// alt-group sibling that IS - leans on the alt-group system already built
+// rather than inventing a parallel mechanism.
+function findLocationSwap(ex, allDayExercises, locationId){
+  if (!ex.alt_group_id) return null;
+  const sibling = allDayExercises.find(other =>
+    other.id !== ex.id && other.alt_group_id === ex.alt_group_id && isAvailableAtLocation(other, locationId)
+  );
+  return sibling || null;
 }
 
 function formatSetsReps(s){
@@ -806,12 +829,16 @@ function exerciseRow(ex){
 
   const mech = ex.mechanicInfo;
   const mechTag = mech ? `<span style="font-size:9px; padding:2px 5px; border-radius:4px; margin-left:5px; background:${mech.value==='compound'?'rgba(255,107,26,0.15)':'rgba(122,150,220,0.15)'}; color:${mech.value==='compound'?'#FF6B1A':'#7BA6C9'}; opacity:${mech.guessed?0.75:1};">${mech.guessed?'~':''}${mech.value==='compound'?'Compound':'Isolation'}</span>` : '';
+  const locSwapLine = (!ex.locationAvailable && ex.locationSwap)
+    ? `<div class="small" style="color:#E8A33D; margin-top:3px;">↳ Not here — swap to ${ex.locationSwap.name}</div>`
+    : (!ex.locationAvailable ? `<div class="small" style="color:var(--slate); margin-top:3px; opacity:0.7;">Not available here</div>` : '');
 
-  return `<div class="exercise" style="${borderStyle}" data-id="${ex.id}" data-name="${ex.name}">
+  return `<div class="exercise" style="${borderStyle} ${!ex.locationAvailable && !ex.locationSwap ? 'opacity:0.55;' : ''}" data-id="${ex.id}" data-name="${ex.name}">
     ${cornerTag}
     <div style="flex:1; min-width:0; ${topPad}">
       <div class="ex-name">${ex.name}${mechTag}</div>
       ${subtitle}
+      ${locSwapLine}
     </div>
     ${showCheck ? `<div class="check-circle">${ICON_CHECK}</div>` : `<div class="chev">›</div>`}
   </div>`;
@@ -826,6 +853,26 @@ async function loadDayType(weekday){
   );
   if (result.__timeout || result.error || !result.data) return DAY_TYPES[weekday];
   return result.data.label;
+}
+
+function openLocationPicker(locations, currentId){
+  const overlay = document.createElement('div');
+  overlay.style = 'position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:70; display:flex; align-items:flex-end;';
+  overlay.innerHTML = `
+    <div style="width:100%; background:var(--panel); border-radius:18px 18px 0 0; padding:20px 18px calc(20px + env(safe-area-inset-bottom, 0px)) 18px;">
+      <div class="field-label" style="padding:0 0 8px 0;">Switch Location</div>
+      <div class="pick-row" data-loc="" style="${!currentId ? 'color:var(--flame);' : ''}"><div class="ex-name">Anywhere <span class="small" style="color:var(--slate);">(no filter)</span></div>${!currentId ? '<span>✓</span>' : ''}</div>
+      ${locations.map(l => `<div class="pick-row" data-loc="${l.id}" style="${l.id===currentId ? 'color:var(--flame);' : ''}"><div class="ex-name">${l.name}</div>${l.id===currentId ? '<span>✓</span>' : ''}</div>`).join('')}
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.querySelectorAll('.pick-row').forEach(row => {
+    row.onclick = () => {
+      setCurrentLocationId(row.dataset.loc || null);
+      overlay.remove();
+      renderTrack();
+    };
+  });
 }
 
 function openEditDayTypeForm(weekday, currentLabel){
@@ -1229,11 +1276,18 @@ async function renderTrack(){
   const pct = totalSlots > 0 ? Math.round((doneSlots / totalSlots) * 100) : 0;
 
   const groupBy = getGroupByPref();
-  const [{ grouped, orderedKeys }, exdb] = await Promise.all([
+  const [{ grouped, orderedKeys }, exdb, allLocations] = await Promise.all([
     groupExercisesByChoice(state.exercises, groupBy),
-    loadExerciseDB()
+    loadExerciseDB(),
+    loadLocations()
   ]);
   state.exercises.forEach(ex => { ex.mechanicInfo = classifyMechanic(matchExercise(ex.name, exdb)); });
+  const currentLocationId = getCurrentLocationId();
+  state.exercises.forEach(ex => {
+    ex.locationAvailable = isAvailableAtLocation(ex, currentLocationId);
+    ex.locationSwap = ex.locationAvailable ? null : findLocationSwap(ex, state.exercises, currentLocationId);
+  });
+  const currentLocationName = allLocations.find(l => l.id === currentLocationId)?.name || null;
 
   let suggestions = [];
   if (state.exercises.length > 0){
@@ -1306,6 +1360,11 @@ async function renderTrack(){
       <div class="scroll-area">
         <div class="brandbar"><img src="icons/icon-inapp-32.png" alt=""><div class="name">ZEALIFT</div><button class="brandbar-timer" onclick="openTimer()" aria-label="Timer" style="margin-left:auto; background:none; color:var(--slate); padding:6px; display:flex; align-items:center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg></button></div>
         <div class="day-strip">${dayChips}</div>
+        ${allLocations.length > 0 ? `<div id="locSwitcher" style="margin:10px 18px 0 18px; display:flex; align-items:center; gap:8px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:8px 12px; cursor:pointer;">
+          <span style="font-size:11px; color:var(--slate);">📍</span>
+          <span style="font-family:'Bebas Neue',sans-serif; font-size:13px; color:var(--flame); letter-spacing:0.5px;">${currentLocationName ? currentLocationName.toUpperCase() : 'ANYWHERE'}</span>
+          <span style="margin-left:auto; font-size:10px; color:var(--slate);">tap to change</span>
+        </div>` : ''}
         <div class="header">
           <div class="eyebrow">${DAY_LABELS[state.selectedDay].toUpperCase()}</div>
           <h1 id="dayTypeHeader" style="cursor:pointer;">${dayTypeLabel}</h1>
@@ -1324,6 +1383,8 @@ async function renderTrack(){
 
   attachShellHandlers();
   document.getElementById('dayTypeHeader').onclick = () => openEditDayTypeForm(state.selectedDay, dayTypeLabel);
+  const locSwitcher = document.getElementById('locSwitcher');
+  if (locSwitcher) locSwitcher.onclick = () => openLocationPicker(allLocations, currentLocationId);
   const autoGroupBtn = document.getElementById('autoGroupBtn');
   if (autoGroupBtn) autoGroupBtn.onclick = () => openAutoAltReview();
   document.querySelectorAll('.cat-rename-btn').forEach(btn => {
@@ -2003,11 +2064,32 @@ async function pickAltGroup(container, onPicked){
   container.querySelector('#altSearch').oninput = (e) => renderAlt(e.target.value);
 }
 
+// ---------- LOCATIONS ----------
+async function loadLocations(){
+  const { data: userData } = await supabaseClient.auth.getUser();
+  const result = await withTimeout(
+    supabaseClient.from('locations').select('id, name').eq('user_id', userData.user.id).order('name'),
+    15000
+  );
+  return result.__timeout || result.error ? [] : (result.data || []);
+}
+async function createLocation(name){
+  const { data: userData } = await supabaseClient.auth.getUser();
+  const result = await withTimeout(
+    supabaseClient.from('locations').insert({ user_id: userData.user.id, name }).select(),
+    15000
+  );
+  return result.__timeout || result.error || !result.data ? null : result.data[0];
+}
+
 // ---------- NEW EXERCISE FORM ----------
 async function openNewExerciseForm(){
   let selectedCategory = CATEGORIES[0];
   let selectedDay = state.selectedDay;
   let pickedAltGroup = null;
+  let selectedPushPull = null;
+  let selectedUpperLower = null;
+  let selectedLocationIds = [];
   const overlay = document.createElement('div');
   overlay.className = 'overlay-screen';
   overlay.innerHTML = `
@@ -2019,12 +2101,67 @@ async function openNewExerciseForm(){
       <div class="chip-row" id="categoryChipRow"><div class="small" style="color:var(--slate); padding:8px 0;">Loading…</div></div>
       <div class="field-label">Day</div>
       <div class="chip-row">${DAY_NAMES.map((d,i) => `<div class="chip ${i===state.selectedDay?'active':''}" data-day="${i}">${d}</div>`).join('')}</div>
+      <div class="field-label">Push / Pull <span class="opt">(optional)</span></div>
+      <div class="chip-row" id="pushPullRow">
+        <div class="chip" data-pp="push">Push</div>
+        <div class="chip" data-pp="pull">Pull</div>
+      </div>
+      <div class="field-label">Upper / Lower <span class="opt">(optional)</span></div>
+      <div class="chip-row" id="upperLowerRow">
+        <div class="chip" data-ul="upper">Upper</div>
+        <div class="chip" data-ul="lower">Lower</div>
+      </div>
+      <div class="field-label">Locations <span class="opt">(optional, pick any that apply)</span></div>
+      <div class="chip-row" id="locationChipRow"><div class="small" style="color:var(--slate); padding:8px 0;">Loading…</div></div>
+      <div class="small" style="padding:0 18px 8px 18px; color:var(--slate);">Leave blank if it's available everywhere (dumbbells, cables, bodyweight). Pick specific locations for gym-specific machines - select more than one if it exists at both.</div>
       <div class="field-label">Alt Group <span class="opt">(optional)</span></div>
       <div id="altGroupArea" class="field-card" style="display:block;"><div class="ex-name" style="color:var(--slate); font-size:13px;" id="altGroupPickBtn">Tap to choose or create…</div></div>
       <button class="save-btn" id="saveExerciseBtn">Add Exercise</button>
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#closeForm').onclick = () => overlay.remove();
+
+  overlay.querySelectorAll('#pushPullRow .chip').forEach(el => {
+    el.onclick = () => {
+      const already = el.classList.contains('active');
+      overlay.querySelectorAll('#pushPullRow .chip').forEach(c=>c.classList.remove('active'));
+      selectedPushPull = already ? null : el.dataset.pp;
+      if (!already) el.classList.add('active');
+    };
+  });
+  overlay.querySelectorAll('#upperLowerRow .chip').forEach(el => {
+    el.onclick = () => {
+      const already = el.classList.contains('active');
+      overlay.querySelectorAll('#upperLowerRow .chip').forEach(c=>c.classList.remove('active'));
+      selectedUpperLower = already ? null : el.dataset.ul;
+      if (!already) el.classList.add('active');
+    };
+  });
+
+  async function renderLocationChips(){
+    const locs = await loadLocations();
+    const row = overlay.querySelector('#locationChipRow');
+    row.innerHTML = locs.map(l => `<div class="chip ${selectedLocationIds.includes(l.id)?'active':''}" data-loc="${l.id}">${l.name}</div>`).join('')
+      + `<div class="chip" id="newLocationChip" style="color:var(--flame); border-color:var(--flame);">+ New</div>`;
+    row.querySelectorAll('.chip[data-loc]').forEach(el => {
+      el.onclick = () => {
+        const id = el.dataset.loc;
+        if (selectedLocationIds.includes(id)){ selectedLocationIds = selectedLocationIds.filter(x=>x!==id); el.classList.remove('active'); }
+        else { selectedLocationIds.push(id); el.classList.add('active'); }
+      };
+    });
+    row.querySelector('#newLocationChip').onclick = () => {
+      promptText({
+        title: 'New Location Name', placeholder: 'e.g. Home Gym',
+        onConfirm: async (name) => {
+          const loc = await createLocation(name);
+          if (loc) selectedLocationIds.push(loc.id);
+          renderLocationChips();
+        }
+      });
+    };
+  }
+  await renderLocationChips();
 
   async function renderCategoryChips(){
     const cats = await getAllCategories();
@@ -2063,7 +2200,8 @@ async function openNewExerciseForm(){
     const { data: userData } = await supabaseClient.auth.getUser();
     const { error } = await supabaseClient.from('exercises').insert({
       user_id: userData.user.id, name, category: selectedCategory, weekday: selectedDay,
-      alt_group_id: pickedAltGroup ? pickedAltGroup.id : null
+      alt_group_id: pickedAltGroup ? pickedAltGroup.id : null,
+      push_pull: selectedPushPull, upper_lower: selectedUpperLower, location_ids: selectedLocationIds
     });
     if (error){ alert(error.message); return; }
     overlay.remove();
