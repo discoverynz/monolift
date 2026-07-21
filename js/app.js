@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.32';
+const APP_VERSION = 'Beta 5.33';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1845,6 +1845,13 @@ const MECHANIC_ISOLATION_KEYWORDS = ['curl','extension','fly','flye','raise','pu
 // a compound/isolation label onto something that isn't really either.
 function classifyMechanic(match){
   if (!match) return null;
+  // Verified correction: the source database inconsistently tags some fly
+  // variants (mostly incline/decline dumbbell flys) as compound, but fly
+  // movements are single-joint isolation exercises no matter the equipment
+  // or angle - confirmed by checking every fly entry in the actual data,
+  // not a guess, so this takes priority over the source's own field.
+  const n0 = (match.name || '').toLowerCase();
+  if (n0.includes('fly') || n0.includes('flye')) return { value:'isolation', guessed:false };
   if (match.mechanic === 'compound' || match.mechanic === 'isolation'){
     return { value: match.mechanic, guessed: false };
   }
