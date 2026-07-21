@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.27';
+const APP_VERSION = 'Beta 5.28';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -290,15 +290,31 @@ function classifyUpperLower(muscle){
 // so Legs is derived from upper_lower==='lower' first, and push_pull only
 // decides Push vs Pull for whatever's left (upper-body exercises).
 function deriveSplitCategory(ex, splitType, muscle){
+  const m = (muscle || '').toLowerCase();
   if (splitType === 'ppl'){
     if (ex.upper_lower === 'lower') return 'legs';
     return ex.push_pull || null;
   }
   if (splitType === 'upperlower') return ex.upper_lower || null;
-  if (splitType === 'muscle') return muscle ? muscle.toLowerCase() : null;
+  if (splitType === 'muscle') return m || null;
+  if (splitType === 'arnold'){
+    // Classic Arnold split: Chest+Back paired as opposing big-muscle supersets,
+    // Shoulders+Arms paired together, Legs on their own - a genuinely different
+    // grouping than Push/Pull, which separates chest and back instead of pairing them.
+    if (['quadriceps','hamstrings','glutes','calves'].includes(m)) return 'legs';
+    if (['chest','lats','traps','middle back','lower back'].includes(m)) return 'chestback';
+    if (['shoulders','biceps','triceps','forearms'].includes(m)) return 'shouldersarms';
+    return null;
+  }
+  if (splitType === 'fullbody'){
+    // Every exercise qualifies for every full-body day - this isn't a partition
+    // like the others, it's "everything, repeated." Handled specially in the
+    // reorganizer's apply step (duplicated per day rather than moved once).
+    return m ? 'fullbody' : null;
+  }
   return null; // custom - no auto-derivation, fully manual
 }
-const SPLIT_CATEGORY_LABELS = { push:'Push', pull:'Pull', legs:'Legs', upper:'Upper', lower:'Lower' };
+const SPLIT_CATEGORY_LABELS = { push:'Push', pull:'Pull', legs:'Legs', upper:'Upper', lower:'Lower', chestback:'Chest & Back', shouldersarms:'Shoulders & Arms', fullbody:'Full Body' };
 
 function movementPatternOf(name){
   const n = name.toLowerCase();
@@ -2505,10 +2521,12 @@ async function openBackupPlanScreen(){
 
 // ---------- PLAN REORGANIZER ----------
 const SPLIT_TYPES = [
-  { id:'ppl', label:'Push / Pull / Legs', cats:['push','pull','legs','rest'] },
-  { id:'upperlower', label:'Upper / Lower', cats:['upper','lower','rest'] },
-  { id:'muscle', label:'Muscle Group', cats:null }, // populated dynamically from what's actually in use
-  { id:'custom', label:'Custom (manual only)', cats:null }
+  { id:'ppl', label:'Push / Pull / Legs', desc:'The gym-bro classic. Push muscles one day, pull the next, legs when you\'re ready to suffer.', cats:['push','pull','legs','rest'] },
+  { id:'upperlower', label:'Upper / Lower', desc:'Half your body today, the other half tomorrow. Efficient, no-nonsense.', cats:['upper','lower','rest'] },
+  { id:'arnold', label:'Arnold Split', desc:'Chest+Back paired, Shoulders+Arms paired, Legs solo - the exact rotation the Austrian Oak trained on. Not for the faint of heart.', cats:['chestback','shouldersarms','legs','rest'] },
+  { id:'fullbody', label:'Full Body', desc:'Hit almost everything, every session. Old school, brutally efficient, not for people who hate long workouts.', cats:['fullbody','rest'] },
+  { id:'muscle', label:'Bro Split', desc:'One muscle, one day, all business. The most iconic split in gym history - yes it\'s basically a meme, and yes, it works.', cats:null }, // populated dynamically from what's actually in use
+  { id:'custom', label:'Custom', desc:'Build it exactly your way, day by day.', cats:null }
 ];
 
 async function openPlanReorganizer(){
@@ -2523,7 +2541,13 @@ async function openPlanReorganizer(){
       <div class="form-header"><button id="closeReorg">✕</button><h1>Reorganize Week</h1><div style="width:18px;"></div></div>
       <div class="overlay-scroll">
         <div class="small" style="padding:8px 18px 16px 18px; color:var(--slate); line-height:1.5;">Pick a split style. The next steps preview exactly what would move where before anything actually changes.</div>
-        ${SPLIT_TYPES.map(s => `<div class="pick-row" data-split="${s.id}"><div class="ex-name">${s.label}</div><div class="chev">›</div></div>`).join('')}
+        ${SPLIT_TYPES.map(s => `<div class="pick-row" data-split="${s.id}" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+          <div style="flex:1;">
+            <div class="ex-name" style="margin-bottom:3px;">${s.label}</div>
+            <div class="small" style="color:var(--slate); line-height:1.4;">${s.desc}</div>
+          </div>
+          <div class="chev" style="margin-top:2px;">›</div>
+        </div>`).join('')}
       </div>`;
     overlay.querySelector('#closeReorg').onclick = () => overlay.remove();
     overlay.querySelectorAll('.pick-row').forEach(row => {
@@ -2588,7 +2612,7 @@ async function openPlanReorganizer(){
 
     const { data: userData } = await supabaseClient.auth.getUser();
     const [exResult, db] = await Promise.all([
-      withTimeout(supabaseClient.from('exercises').select('id, name, weekday, push_pull, upper_lower').eq('user_id', userData.user.id).eq('active', true), 15000),
+      withTimeout(supabaseClient.from('exercises').select('id, name, category, weekday, alt_group_id, push_pull, upper_lower, location_ids').eq('user_id', userData.user.id).eq('active', true), 15000),
       loadExerciseDB()
     ]);
     const allExercises = exResult.__timeout || exResult.error ? [] : (exResult.data || []);
@@ -2684,6 +2708,14 @@ async function openPlanReorganizer(){
       const snapshot = allExercises.map(ex => ({ id: ex.id, weekday: ex.weekday }));
       localStorage.setItem('zealift_reorg_snapshot', JSON.stringify({ snapshot, at: new Date().toISOString() }));
 
+      // Full Body is fundamentally different from the other splits: every
+      // exercise belongs on every full-body day, not partitioned one-per-day.
+      // A single exercise record can only have one weekday, so the first
+      // full-body day moves the originals there, and every subsequent
+      // full-body day gets real duplicate records instead of silently
+      // stealing the same exercise away from the day before it.
+      let fullBodyDaysSeen = 0;
+
       for (const dp of dayPlans){
         if (dp.isCustom){
           for (const name of customSelections[dp.dayIdx]){
@@ -2695,10 +2727,23 @@ async function openPlanReorganizer(){
           }
           continue;
         }
+        const isFullBodyRepeat = splitType === 'fullbody' && dp.items.length && fullBodyDaysSeen > 0;
+        if (splitType === 'fullbody' && dp.items.length) fullBodyDaysSeen++;
+
         for (const it of dp.items){
           if (excluded.has(String(dp.dayIdx) + '|' + it.name)) continue;
-          for (const id of it.ids){
-            await supabaseClient.from('exercises').update({ weekday: dp.dayIdx }).eq('id', id);
+          if (isFullBodyRepeat){
+            const sample = allExercises.find(e => e.name === it.name);
+            if (!sample) continue;
+            await supabaseClient.from('exercises').insert({
+              user_id: userData.user.id, name: sample.name, category: sample.category,
+              weekday: dp.dayIdx, alt_group_id: sample.alt_group_id,
+              push_pull: sample.push_pull, upper_lower: sample.upper_lower, location_ids: sample.location_ids
+            });
+          } else {
+            for (const id of it.ids){
+              await supabaseClient.from('exercises').update({ weekday: dp.dayIdx }).eq('id', id);
+            }
           }
         }
       }
@@ -4513,10 +4558,22 @@ async function renderMe(){
         <div class="me-item" id="replayTourBtn"><div>How Zealift Works</div><div class="chev">›</div></div>
         <div class="me-item" id="redoWeekBtn"><div>Redo Week Setup</div><div class="chev">›</div></div>
         <div class="section-label">Data</div>
-        <div class="me-item" id="backupPlanBtn"><div>Backup Plan</div><div class="chev">›</div></div>
-        <div class="me-item" id="bulkLocationBtn"><div>Assign Location</div><div class="chev">›</div></div>
-        <div class="me-item" id="scanSplitTagsBtn"><div>Tag Workouts</div><div class="chev">›</div></div>
-        <div class="me-item" id="reorganizeWeekBtn"><div>Change Split</div><div class="chev">›</div></div>
+        <div class="me-item" id="backupPlanBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+          <div><div>📦 Backup Plan</div><div class="small" style="color:var(--slate); margin-top:2px;">Save a snapshot before you shake things up</div></div>
+          <div class="chev" style="margin-top:2px;">›</div>
+        </div>
+        <div class="me-item" id="bulkLocationBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+          <div><div>📍 Assign Location</div><div class="small" style="color:var(--slate); margin-top:2px;">Tell the app what's where, gym by gym</div></div>
+          <div class="chev" style="margin-top:2px;">›</div>
+        </div>
+        <div class="me-item" id="scanSplitTagsBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+          <div><div>🏷️ Tag Workouts</div><div class="small" style="color:var(--slate); margin-top:2px;">Push, pull, upper, lower - all figured out for you</div></div>
+          <div class="chev" style="margin-top:2px;">›</div>
+        </div>
+        <div class="me-item" id="reorganizeWeekBtn" style="align-items:flex-start; padding-top:14px; padding-bottom:14px; border:1px solid var(--flame); border-radius:10px; margin:6px 18px 8px 18px; background:rgba(255,107,26,0.06);">
+          <div><div style="color:var(--flame); font-weight:700;">✨ Change Split</div><div class="small" style="color:var(--chalk); margin-top:2px; opacity:0.85;">PPL, Arnold, Bro Split, Full Body, or your own - Zealift rebuilds your whole week automatically</div></div>
+          <div class="chev" style="margin-top:2px; color:var(--flame);">›</div>
+        </div>
         ${localStorage.getItem('zealift_reorg_snapshot') ? `<div class="me-item" id="revertReorgBtn"><div style="color:#E8A33D;">Revert Last Reorganization</div><div class="chev">›</div></div>` : ''}
         <div class="section-label">App</div>
         <div class="me-item" id="refreshAppBtn"><div>Refresh App</div><div class="chev">›</div></div>
