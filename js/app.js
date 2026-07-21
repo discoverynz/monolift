@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.29';
+const APP_VERSION = 'Beta 5.30';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -2444,6 +2444,74 @@ async function restorePlanBackup(backup){
   return { restored, skipped };
 }
 
+// Read-only look at what's actually in a saved plan, grouped by day.
+function openBackupDetailView(backup){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  const byDay = {};
+  (backup.snapshot || []).forEach(ex => { (byDay[ex.weekday] = byDay[ex.weekday] || []).push(ex); });
+  const dayBlocks = DAY_NAMES.map((d, i) => {
+    const items = (byDay[i] || []).slice().sort((a,b) => a.name.localeCompare(b.name));
+    if (!items.length) return '';
+    return `<div class="category">${d.toUpperCase()}</div>` + items.map(ex =>
+      `<div class="pick-row" style="cursor:default;"><div><div class="ex-name" style="font-size:12.5px;">${ex.name}</div><div class="small" style="color:var(--slate);">${ex.category || ''}</div></div></div>`
+    ).join('');
+  }).join('');
+
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeDetail">✕</button><h1>${backup.name}</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll">
+      <div class="small" style="padding:8px 18px 12px 18px; color:var(--slate);">Saved ${formatLoggedDate((backup.created_at||'').slice(0,10))} · ${(backup.snapshot||[]).length} exercises · view only</div>
+      ${dayBlocks || `<div class="empty-state" style="padding:20px 18px;">Nothing in this backup.</div>`}
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeDetail').onclick = () => overlay.remove();
+}
+
+// Custom confirmation screen replacing the native confirm() flow - an explicit
+// choice about whether to also back up the current setup first, not just an
+// automatic thing that happens without asking.
+function openRestoreConfirmScreen(backup, listOverlay, onDone){
+  const overlay = document.createElement('div');
+  overlay.style = 'position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:70; display:flex; align-items:flex-end;';
+  let alsoBackup = true;
+  overlay.innerHTML = `
+    <div style="width:100%; background:var(--panel); border-radius:18px 18px 0 0; padding:22px 18px calc(22px + env(safe-area-inset-bottom, 0px)) 18px;">
+      <div style="font-family:'Bebas Neue',sans-serif; font-size:19px; letter-spacing:1px; margin-bottom:6px;">Restore "${backup.name}"?</div>
+      <div class="small" style="color:var(--slate); line-height:1.5; margin-bottom:16px;">This replaces your current day/category/tag setup with what's in this backup. ${backup.snapshot.length} exercises will be affected.</div>
+      <div id="alsoBackupRow" style="display:flex; align-items:center; gap:10px; padding:12px 14px; background:var(--ink); border-radius:10px; margin-bottom:18px; cursor:pointer;">
+        <span id="alsoBackupCheck" style="font-size:18px; color:var(--flame);">☑</span>
+        <div>
+          <div style="font-size:13px; font-weight:600;">Backup my current setup first</div>
+          <div class="small" style="color:var(--slate);">Recommended - lets you undo this restore later</div>
+        </div>
+      </div>
+      <div style="display:flex; gap:10px;">
+        <button id="cancelRestoreBtn" style="flex:1; background:var(--ink); color:var(--slate); padding:13px; border-radius:10px; font-weight:600;">Cancel</button>
+        <button id="confirmRestoreBtn" style="flex:1; background:var(--flame); color:var(--ink); padding:13px; border-radius:10px; font-weight:600;">Yes, Restore</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.querySelector('#cancelRestoreBtn').onclick = () => overlay.remove();
+  overlay.querySelector('#alsoBackupRow').onclick = () => {
+    alsoBackup = !alsoBackup;
+    overlay.querySelector('#alsoBackupCheck').textContent = alsoBackup ? '☑' : '☐';
+    overlay.querySelector('#alsoBackupCheck').style.color = alsoBackup ? 'var(--flame)' : 'var(--slate)';
+  };
+  overlay.querySelector('#confirmRestoreBtn').onclick = async () => {
+    if (alsoBackup){
+      const { backup: safetyBackup, errorMessage } = await createPlanBackup(`Before restoring "${backup.name}" — ${todayStr()}`);
+      if (!safetyBackup && !confirm(`Could not save the safety backup (${errorMessage}). Restore anyway with no way back?`)) return;
+    }
+    const { restored, skipped } = await restorePlanBackup(backup);
+    overlay.remove();
+    if (listOverlay) listOverlay.remove();
+    alert(`Restored ${restored} exercises.${skipped ? ' ' + skipped + ' from this backup no longer exist and were skipped.' : ''}`);
+    if (onDone) onDone();
+  };
+}
+
 async function openBackupPlanScreen(){
   const overlay = document.createElement('div');
   overlay.className = 'overlay-screen';
@@ -2478,12 +2546,12 @@ async function openBackupPlanScreen(){
       return;
     }
     listArea.innerHTML = backups.map(b => `
-      <div class="proposal-card" data-id="${b.id}" style="margin:0 18px 10px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px;">
+      <div class="proposal-card backup-card" data-id="${b.id}" style="margin:0 18px 10px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; cursor:pointer;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
           <div class="ex-name" style="font-size:13.5px;">${b.name}</div>
           <span class="small" style="color:var(--slate);">${(b.snapshot||[]).length} exercises</span>
         </div>
-        <div class="small" style="color:var(--slate); margin-bottom:10px;">${formatLoggedDate((b.created_at||'').slice(0,10))}</div>
+        <div class="small" style="color:var(--slate); margin-bottom:10px;">${formatLoggedDate((b.created_at||'').slice(0,10))} · tap to view</div>
         <div style="display:flex; gap:8px;">
           <button class="backup-restore-btn" data-id="${b.id}" style="flex:1; background:var(--flame); color:var(--ink); padding:9px; border-radius:8px; font-weight:600; font-size:12px;">Restore</button>
           <button class="backup-rename-btn" data-id="${b.id}" data-name="${b.name}" style="background:var(--ink); color:var(--slate); padding:9px 14px; border-radius:8px; font-size:12px;">Rename</button>
@@ -2492,20 +2560,23 @@ async function openBackupPlanScreen(){
       </div>
     `).join('');
 
+    listArea.querySelectorAll('.backup-card').forEach(card => {
+      card.onclick = (e) => {
+        if (e.target.closest('button')) return; // let the action buttons handle their own clicks
+        openBackupDetailView(backups.find(b => b.id === card.dataset.id));
+      };
+    });
     listArea.querySelectorAll('.backup-restore-btn').forEach(btn => {
-      btn.onclick = async () => {
-        const backup = backups.find(b => b.id === btn.dataset.id);
-        if (!confirm(`Restore "${backup.name}"? Your current plan will be saved as a safety backup first, so this can be undone.`)) return;
-        const { backup: safetyBackup, errorMessage } = await createPlanBackup(`Before restoring "${backup.name}" — ${todayStr()}`);
-        if (!safetyBackup && !confirm(`Could not save the safety backup (${errorMessage}). Restore anyway with no way back?`)) return;
-        const { restored, skipped } = await restorePlanBackup(backup);
-        overlay.remove();
-        alert(`Restored ${restored} exercises.${skipped ? ' ' + skipped + ' from this backup no longer exist and were skipped.' : ''}`);
-        if (state.currentTab === 'track'){ state.selectedDay = todayWeekday(); renderTrack(); }
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        openRestoreConfirmScreen(backups.find(b => b.id === btn.dataset.id), overlay, () => {
+          if (state.currentTab === 'track'){ state.selectedDay = todayWeekday(); renderTrack(); }
+        });
       };
     });
     listArea.querySelectorAll('.backup-rename-btn').forEach(btn => {
-      btn.onclick = () => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
         promptText({
           title: 'Rename Plan', placeholder: 'Name', initialValue: btn.dataset.name,
           onConfirm: async (newName) => {
@@ -2516,7 +2587,8 @@ async function openBackupPlanScreen(){
       };
     });
     listArea.querySelectorAll('.backup-delete-btn').forEach(btn => {
-      btn.onclick = async () => {
+      btn.onclick = async (e) => {
+        e.stopPropagation();
         if (!confirm('Delete this saved plan? This cannot be undone.')) return;
         await supabaseClient.from('plan_backups').delete().eq('id', btn.dataset.id);
         renderList();
