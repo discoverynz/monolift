@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.24';
+const APP_VERSION = 'Beta 5.25';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -2257,21 +2257,35 @@ async function openBulkLocationAssign(){
   overlay.className = 'overlay-screen';
   overlay.innerHTML = `
     <div class="form-header"><button id="closeBulkLoc">✕</button><h1>Assign to a Location</h1><div style="width:18px;"></div></div>
-    <div class="overlay-scroll">
-      <div class="field-label" style="padding-top:0;">Location Name</div>
-      <div class="field-card"><input class="field-input" id="bulkLocInput" placeholder="e.g. Functional Fitness" style="font-size:14px; font-weight:400;"></div>
-      <div class="small" style="padding:8px 18px; color:var(--slate); line-height:1.5;">Assigns every exercise that currently has no location set. Anything already tagged to a location is left alone.</div>
-      <button class="save-btn" id="findExercisesBtn">Find Exercises</button>
-      <div id="bulkLocResults"></div>
+    <div class="overlay-scroll" id="bulkLocStep1">
+      <div class="small" style="padding:10px 18px; color:var(--slate); line-height:1.5;">Pick a location, then tick exactly which exercises belong there.</div>
+      <div id="bulkLocList"><div class="small" style="padding:16px 18px; color:var(--slate);">Loading…</div></div>
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#closeBulkLoc').onclick = () => overlay.remove();
 
-  overlay.querySelector('#findExercisesBtn').onclick = async () => {
-    const name = overlay.querySelector('#bulkLocInput').value.trim();
-    if (!name) return;
-    const resultsArea = overlay.querySelector('#bulkLocResults');
-    resultsArea.innerHTML = `<div class="small" style="padding:16px 18px; color:var(--slate);">Scanning…</div>`;
+  async function renderLocationPicker(){
+    const locs = await loadLocations();
+    const listArea = overlay.querySelector('#bulkLocList');
+    listArea.innerHTML = locs.map(l => `<div class="pick-row" data-loc-id="${l.id}" data-loc-name="${l.name}"><div class="ex-name">${l.name}</div><div class="chev">›</div></div>`).join('')
+      + `<div class="action-row" id="createLocRow"><div class="ex-name" style="color:var(--flame);">+ New Location</div></div>`;
+    listArea.querySelectorAll('.pick-row[data-loc-id]').forEach(row => {
+      row.onclick = () => renderExerciseChecklist(row.dataset.locId, row.dataset.locName);
+    });
+    listArea.querySelector('#createLocRow').onclick = () => {
+      promptText({
+        title: 'New Location Name', placeholder: 'e.g. Functional Fitness',
+        onConfirm: async (name) => {
+          const loc = await createLocation(name);
+          if (loc) renderExerciseChecklist(loc.id, loc.name);
+        }
+      });
+    };
+  }
+
+  async function renderExerciseChecklist(locId, locName){
+    const body = overlay.querySelector('#bulkLocStep1');
+    body.innerHTML = `<div class="small" style="padding:16px 18px; color:var(--slate);">Loading exercises…</div>`;
 
     const { data: userData } = await supabaseClient.auth.getUser();
     const exResult = await withTimeout(
@@ -2279,35 +2293,48 @@ async function openBulkLocationAssign(){
       15000
     );
     const all = exResult.__timeout || exResult.error ? [] : (exResult.data || []);
-    const untagged = all.filter(ex => !ex.location_ids || ex.location_ids.length === 0);
-    // Dedupe by name for display, but every matching record ID gets the update.
     const byName = {};
-    untagged.forEach(ex => { (byName[ex.name] = byName[ex.name] || []).push(ex.id); });
+    all.forEach(ex => {
+      if (!byName[ex.name]) byName[ex.name] = { ids: [], alreadyHere: (ex.location_ids||[]).includes(locId) };
+      byName[ex.name].ids.push(ex.id);
+    });
     const names = Object.keys(byName).sort();
+    const checked = new Set(names.filter(n => byName[n].alreadyHere));
 
-    if (!names.length){
-      resultsArea.innerHTML = `<div class="empty-state" style="padding:20px 18px;">Everything already has a location set - nothing to assign.</div>`;
-      return;
-    }
-
-    resultsArea.innerHTML = `
-      <div class="section-label">${names.length} Exercises With No Location</div>
-      ${names.map(n => `<div class="pick-row" style="cursor:default;"><div class="ex-name" style="font-size:12.5px;">${n}</div></div>`).join('')}
-      <button class="save-btn" id="confirmBulkLocBtn" style="margin-top:10px;">Assign All ${names.length} to "${name}"</button>
-    `;
-    resultsArea.querySelector('#confirmBulkLocBtn').onclick = async () => {
-      let loc = (await loadLocations()).find(l => l.name.toLowerCase() === name.toLowerCase());
-      if (!loc) loc = await createLocation(name);
-      if (!loc){ alert('Could not create or find that location.'); return; }
-      for (const ids of Object.values(byName)){
-        for (const id of ids){
-          await supabaseClient.from('exercises').update({ location_ids: [loc.id] }).eq('id', id);
+    function render(){
+      body.innerHTML = `
+        <div class="form-sub" style="padding:10px 18px 4px 18px;">${locName} — tick the exercises that belong here</div>
+        ${names.map(n => `<div class="pick-row bulk-check-row" data-name="${n}" style="cursor:pointer;">
+          <div class="ex-name" style="font-size:12.5px;">${n}</div>
+          <span style="font-size:16px; color:${checked.has(n) ? 'var(--flame)' : 'var(--line)'};">${checked.has(n) ? '☑' : '☐'}</span>
+        </div>`).join('')}
+        <button class="save-btn" id="confirmBulkLocBtn" style="margin-top:10px;">Assign ${checked.size} to "${locName}"</button>
+      `;
+      body.querySelectorAll('.bulk-check-row').forEach(row => {
+        row.onclick = () => {
+          const n = row.dataset.name;
+          if (checked.has(n)) checked.delete(n); else checked.add(n);
+          render();
+        };
+      });
+      body.querySelector('#confirmBulkLocBtn').onclick = async () => {
+        for (const n of checked){
+          const item = byName[n];
+          for (const id of item.ids){
+            const exRow = all.find(e => e.id === id);
+            const existing = (exRow && exRow.location_ids) || [];
+            const merged = [...new Set([...existing, locId])];
+            await supabaseClient.from('exercises').update({ location_ids: merged }).eq('id', id);
+          }
         }
-      }
-      overlay.remove();
-      if (state.currentTab === 'track') renderTrack();
-    };
-  };
+        overlay.remove();
+        if (state.currentTab === 'track') renderTrack();
+      };
+    }
+    render();
+  }
+
+  renderLocationPicker();
 }
 
 // ---------- PLAN REORGANIZER ----------
