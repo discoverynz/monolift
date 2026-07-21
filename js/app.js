@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.31';
+const APP_VERSION = 'Beta 5.32';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -344,6 +344,12 @@ function movementPatternOf(name){
 // members sharing the same primary muscle and movement pattern). Returns
 // proposals only - nothing is created or assigned until the user confirms
 // each one individually in the review screen.
+// Auto-Alt 2.0: clusters by fine muscle region (Upper/Mid/Lower Chest, Front/
+// Side/Rear Delts, Lats vs Upper Back - not just the broad muscle) AND
+// movement pattern AND compound/isolation consistency. A true substitute
+// should train the same muscle region the same way for the same purpose -
+// pairing a flat bench press with an incline press just because both are
+// "chest" is looser than what real programming calls interchangeable.
 async function proposeAltGroups(dayExercises){
   const db = await loadExerciseDB();
   const ungrouped = dayExercises.filter(ex => !ex.alt_group_id);
@@ -354,17 +360,20 @@ async function proposeAltGroups(dayExercises){
     const match = matchExercise(ex.name, db);
     const muscle = match && match.primaryMuscles && match.primaryMuscles[0];
     if (!muscle) return;
-    const key = muscle + '|' + pattern;
+    const fineMuscle = fineMuscleCategory(muscle, ex.name);
+    const mech = classifyMechanic(match);
+    const mechKey = mech ? mech.value : 'unknown';
+    const key = fineMuscle + '|' + pattern + '|' + mechKey;
     (buckets[key] = buckets[key] || []).push(ex);
   });
   const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
   return Object.entries(buckets)
     .filter(([, members]) => members.length >= 2)
     .map(([key, members], i) => {
-      const [muscle, pattern] = key.split('|');
+      const [fineMuscle, pattern] = key.split('|');
       return {
         suggestedName: `${cap(pattern)} Alt`,
-        muscle: cap(muscle),
+        muscle: fineMuscle,
         color: ALT_COLORS[i % ALT_COLORS.length],
         members
       };
@@ -2742,44 +2751,31 @@ async function openPlanReorganizer(){
       return { day: d, dayIdx: i, catLabel: label, isCustom, items };
     });
 
-    // Keep alt-group siblings together on the same day. Without this, an
-    // auto-derived split can easily scatter two exercises that are meant to
-    // be interchangeable onto different days - or worse, leave one out
-    // entirely if it has no derivable category of its own (e.g. never
-    // tagged) even though its sibling did land somewhere. Either way it
-    // quietly breaks the "complete via" convenience between them, since
-    // Track only cross-references alt-group siblings that are on the same
-    // day it's currently showing.
-    const altGroupDays = {}; // altGroupId -> { dayIdx -> count }
+    // Alt groups from the OLD structure may not make sense under the NEW
+    // split - forcing them to stay together risks pairing exercises that
+    // only happened to share a day before, not because they're actually
+    // interchangeable under this split. Conservative approach instead: if a
+    // group's members would all naturally land on the same day anyway, keep
+    // it - it's still coherent. Otherwise clear the grouping entirely rather
+    // than guessing, and let Auto-Group Alts rebuild sensible groups for the
+    // new day structure afterward.
+    const altGroupDays = {}; // altGroupId -> Set of dayIdx its members landed on
+    const altGroupAllMembers = {}; // altGroupId -> all member names (whether placed or not)
     namedList.forEach(n => {
       if (!n.altGroupId) return;
+      (altGroupAllMembers[n.altGroupId] = altGroupAllMembers[n.altGroupId] || []).push(n.name);
       const home = dayPlans.find(dp => !dp.isCustom && dp.items.some(it => it.name === n.name));
-      if (!home) return;
-      altGroupDays[n.altGroupId] = altGroupDays[n.altGroupId] || {};
-      altGroupDays[n.altGroupId][home.dayIdx] = (altGroupDays[n.altGroupId][home.dayIdx] || 0) + 1;
+      altGroupDays[n.altGroupId] = altGroupDays[n.altGroupId] || new Set();
+      if (home) altGroupDays[n.altGroupId].add(home.dayIdx);
     });
-    let reconciledCount = 0;
-    Object.entries(altGroupDays).forEach(([groupId, counts]) => {
-      const dayIndices = Object.keys(counts).map(Number);
-      const winnerDay = dayIndices.reduce((best, d) => counts[d] > counts[best] ? d : best, dayIndices[0]);
-      const winnerPlan = dayPlans.find(d2 => d2.dayIdx === winnerDay);
-      if (!winnerPlan) return;
-      namedList.filter(n => n.altGroupId === groupId).forEach(n => {
-        // Remove from every other non-custom day it wrongly ended up on.
-        dayPlans.forEach(dp => {
-          if (dp.isCustom || dp.dayIdx === winnerDay) return;
-          const idx = dp.items.findIndex(it => it.name === n.name);
-          if (idx === -1) return;
-          dp.items.splice(idx, 1);
-          reconciledCount++;
-        });
-        // Make sure it's actually present on the winning day, even if it
-        // was never placed anywhere to begin with.
-        if (!winnerPlan.items.some(it => it.name === n.name)){
-          winnerPlan.items.push(n);
-          reconciledCount++;
-        }
-      });
+    const altGroupsToClear = new Set();
+    Object.entries(altGroupAllMembers).forEach(([groupId, members]) => {
+      const days = altGroupDays[groupId] || new Set();
+      // Naturally coherent only if every member landed, and all on the same day.
+      const staysCoherent = days.size === 1 && members.every(name =>
+        dayPlans.some(dp => !dp.isCustom && dp.items.some(it => it.name === name))
+      );
+      if (!staysCoherent) altGroupsToClear.add(groupId);
     });
     // Custom days start empty - the person picks exactly what goes there from
     // everything available, rather than anything being auto-derived for them.
@@ -2787,7 +2783,7 @@ async function openPlanReorganizer(){
     dayPlans.forEach(dp => { if (dp.isCustom) customSelections[dp.dayIdx] = new Set(); });
 
     body.innerHTML = `
-      <div class="banner" style="margin:8px 18px 16px 18px; background:#251a12; border:1px solid #4a2f16; border-radius:10px; padding:12px 14px; font-size:11.5px; color:#E8A33D; line-height:1.5;">⚠ Nothing changes until you confirm below. Your current layout is saved automatically and can be restored with one tap from Me → Data if this isn't right.</div>
+      <div class="banner" style="margin:8px 18px 16px 18px; background:#251a12; border:1px solid #4a2f16; border-radius:10px; padding:12px 14px; font-size:11.5px; color:#E8A33D; line-height:1.5;">⚠ Nothing changes until you confirm below. Your current layout is saved automatically and can be restored with one tap from Me → Data if this isn't right.${altGroupsToClear.size ? ` ${altGroupsToClear.size} alt group${altGroupsToClear.size===1?'':'s'} would be scattered by this split, so ${altGroupsToClear.size===1?'it':'they'} will be cleared rather than forced together — use Auto-Group Alts afterward to rebuild ones that make sense here.` : ''}</div>
       ${dayPlans.map(dp => `
         <div class="day-card" data-day="${dp.dayIdx}" style="margin:0 18px 14px 18px; background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden;">
           <div style="padding:10px 14px; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--line);">
@@ -2860,8 +2856,11 @@ async function openPlanReorganizer(){
           for (const name of customSelections[dp.dayIdx]){
             const match = namedList.find(n => n.name === name);
             if (!match) continue;
+            const clearAlt = match.altGroupId && altGroupsToClear.has(match.altGroupId);
             for (const id of match.ids){
-              await supabaseClient.from('exercises').update({ weekday: dp.dayIdx }).eq('id', id);
+              const payload = { weekday: dp.dayIdx };
+              if (clearAlt) payload.alt_group_id = null;
+              await supabaseClient.from('exercises').update(payload).eq('id', id);
             }
           }
           continue;
@@ -2871,17 +2870,20 @@ async function openPlanReorganizer(){
 
         for (const it of dp.items){
           if (excluded.has(String(dp.dayIdx) + '|' + it.name)) continue;
+          const clearAlt = it.altGroupId && altGroupsToClear.has(it.altGroupId);
           if (isFullBodyRepeat){
             const sample = allExercises.find(e => e.name === it.name);
             if (!sample) continue;
             await supabaseClient.from('exercises').insert({
               user_id: userData.user.id, name: sample.name, category: sample.category,
-              weekday: dp.dayIdx, alt_group_id: sample.alt_group_id,
+              weekday: dp.dayIdx, alt_group_id: clearAlt ? null : sample.alt_group_id,
               push_pull: sample.push_pull, upper_lower: sample.upper_lower, location_ids: sample.location_ids
             });
           } else {
             for (const id of it.ids){
-              await supabaseClient.from('exercises').update({ weekday: dp.dayIdx }).eq('id', id);
+              const payload = { weekday: dp.dayIdx };
+              if (clearAlt) payload.alt_group_id = null;
+              await supabaseClient.from('exercises').update(payload).eq('id', id);
             }
           }
         }
