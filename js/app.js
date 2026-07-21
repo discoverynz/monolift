@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.23';
+const APP_VERSION = 'Beta 5.24';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1503,7 +1503,7 @@ function showExerciseActionsMenu(exerciseId, exerciseName){
       <div style="padding:12px 18px; font-family:'Oswald', sans-serif; font-size:14px; color:var(--slate); border-bottom:1px solid var(--line);">${exerciseName}</div>
       <div class="me-item" id="menuRename" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Rename Exercise</div><div class="chev">›</div></div>
       <div class="me-item" id="menuEditAlt" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Edit Alt Group</div><div class="chev">›</div></div>
-      <div class="me-item" id="menuEditLoc" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Edit Locations</div><div class="chev">›</div></div>
+      <div class="me-item" id="menuEditLoc" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Edit Push/Pull/Upper/Lower/Location</div><div class="chev">›</div></div>
       <div class="me-item" id="menuRemove" style="border-bottom:none; cursor:pointer;"><div style="color:var(--flame);">Remove from ${DAY_LABELS[state.selectedDay]}</div><div class="chev">›</div></div>
       <div style="text-align:center; padding:12px; color:var(--slate); font-size:13px; cursor:pointer;" id="menuCancel">Cancel</div>
     </div>`;
@@ -1511,7 +1511,7 @@ function showExerciseActionsMenu(exerciseId, exerciseName){
   overlay.querySelector('#menuCancel').onclick = () => overlay.remove();
   overlay.querySelector('#menuRename').onclick = () => { overlay.remove(); openRenameExerciseForm(exerciseId, exerciseName); };
   overlay.querySelector('#menuEditAlt').onclick = () => { overlay.remove(); openEditAltGroupForm(exerciseId, exerciseName); };
-  overlay.querySelector('#menuEditLoc').onclick = () => { overlay.remove(); openEditLocationForm(exerciseId, exerciseName); };
+  overlay.querySelector('#menuEditLoc').onclick = () => { overlay.remove(); openEditTagsForm(exerciseId, exerciseName); };
   overlay.querySelector('#menuRemove').onclick = () => { overlay.remove(); confirmRemoveExercise(exerciseId, exerciseName); };
 }
 
@@ -1584,6 +1584,76 @@ function openEditAltGroupForm(exerciseId, exerciseName){
     overlay.remove();
     if (state.currentTab === 'track') renderTrack();
   });
+}
+
+function openEditTagsForm(exerciseId, exerciseName){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeTags">✕</button><h1>Edit Tags</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll">
+      <div class="field-label" style="padding-top:0;">${exerciseName}</div>
+      <div class="field-label">Push / Pull</div>
+      <div class="chip-row" id="tagPushPullRow"><div class="small" style="color:var(--slate); padding:8px 0;">Loading…</div></div>
+      <div class="field-label">Upper / Lower</div>
+      <div class="chip-row" id="tagUpperLowerRow"></div>
+      <div class="field-label">Locations <span class="opt">(optional, pick any)</span></div>
+      <div class="chip-row" id="tagLocationRow"></div>
+      <button class="save-btn" id="saveTagsBtn">Save</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeTags').onclick = () => overlay.remove();
+
+  let pushPull = null, upperLower = null, locationIds = [];
+  (async () => {
+    const [exResult, locs] = await Promise.all([
+      withTimeout(supabaseClient.from('exercises').select('push_pull, upper_lower, location_ids').eq('id', exerciseId).maybeSingle(), 15000),
+      loadLocations()
+    ]);
+    const data = exResult.__timeout || exResult.error || !exResult.data ? {} : exResult.data;
+    pushPull = data.push_pull || null;
+    upperLower = data.upper_lower || null;
+    locationIds = data.location_ids || [];
+
+    const ppRow = overlay.querySelector('#tagPushPullRow');
+    ppRow.innerHTML = ['push','pull'].map(v => `<div class="chip ${pushPull===v?'active':''}" data-pp="${v}">${cap(v)}</div>`).join('');
+    ppRow.querySelectorAll('.chip').forEach(el => {
+      el.onclick = () => { const already = el.classList.contains('active'); ppRow.querySelectorAll('.chip').forEach(c=>c.classList.remove('active')); pushPull = already ? null : el.dataset.pp; if (!already) el.classList.add('active'); };
+    });
+
+    const ulRow = overlay.querySelector('#tagUpperLowerRow');
+    ulRow.innerHTML = ['upper','lower'].map(v => `<div class="chip ${upperLower===v?'active':''}" data-ul="${v}">${cap(v)}</div>`).join('');
+    ulRow.querySelectorAll('.chip').forEach(el => {
+      el.onclick = () => { const already = el.classList.contains('active'); ulRow.querySelectorAll('.chip').forEach(c=>c.classList.remove('active')); upperLower = already ? null : el.dataset.ul; if (!already) el.classList.add('active'); };
+    });
+
+    renderLocChips(locs);
+  })();
+
+  function renderLocChips(locs){
+    const row = overlay.querySelector('#tagLocationRow');
+    row.innerHTML = locs.map(l => `<div class="chip ${locationIds.includes(l.id)?'active':''}" data-loc="${l.id}">${l.name}</div>`).join('')
+      + `<div class="chip" id="tagNewLocChip" style="color:var(--flame); border-color:var(--flame);">+ New</div>`;
+    row.querySelectorAll('.chip[data-loc]').forEach(el => {
+      el.onclick = () => {
+        const id = el.dataset.loc;
+        if (locationIds.includes(id)){ locationIds = locationIds.filter(x=>x!==id); el.classList.remove('active'); }
+        else { locationIds.push(id); el.classList.add('active'); }
+      };
+    });
+    row.querySelector('#tagNewLocChip').onclick = () => {
+      promptText({
+        title: 'New Location Name', placeholder: 'e.g. Home Gym',
+        onConfirm: async (name) => { const loc = await createLocation(name); if (loc) locationIds.push(loc.id); renderLocChips(await loadLocations()); }
+      });
+    };
+  }
+
+  overlay.querySelector('#saveTagsBtn').onclick = async () => {
+    await supabaseClient.from('exercises').update({ push_pull: pushPull, upper_lower: upperLower, location_ids: locationIds }).eq('id', exerciseId);
+    overlay.remove();
+    if (state.currentTab === 'track') renderTrack();
+  };
 }
 
 function openEditLocationForm(exerciseId, exerciseName){
@@ -3093,6 +3163,7 @@ function openLogForm(exerciseId, exerciseName){
       <button id="nextExerciseBtn" style="font-size:20px; ${navNext ? '' : 'visibility:hidden;'}">›</button>
     </div>
     <div class="overlay-scroll">
+      <div id="tagInfoArea" style="padding:0 18px; margin-bottom:10px;"></div>
       <div id="guideArea" style="margin-bottom:18px;"></div>
       <div id="sameAsLastArea" style="margin-bottom:18px;"></div>
       <div id="lastTimePlatesArea" style="padding:0 18px; margin-top:-14px; margin-bottom:14px;"></div>
@@ -3331,15 +3402,36 @@ function openLogForm(exerciseId, exerciseName){
   loadHistory();
   loadExerciseGuide(overlay, exerciseName);
   (async () => {
-    const result = await withTimeout(
-      supabaseClient.from('exercises').select('category').eq('id', exerciseId).maybeSingle(),
-      15000
-    );
-    exerciseCategory = result.__timeout || result.error || !result.data ? null : result.data.category;
+    const [result, allLocations] = await Promise.all([
+      withTimeout(
+        supabaseClient.from('exercises').select('category, push_pull, upper_lower, location_ids').eq('id', exerciseId).maybeSingle(),
+        15000
+      ),
+      loadLocations()
+    ]);
+    const data = result.__timeout || result.error || !result.data ? null : result.data;
+    exerciseCategory = data ? data.category : null;
     // Re-render now that the category is known - the plate calc initially rendered
     // with no category available and would have shown nothing.
     renderPlateCalc(overlay, exerciseName, exerciseCategory);
     renderLastTimePlates(overlay, exerciseName, lastEntry, exerciseCategory);
+
+    // This was missing entirely before - push/pull, upper/lower, and locations
+    // were being saved and used everywhere else (the reorganizer, the scanner,
+    // Track's swap suggestions) but never actually shown when looking at the
+    // exercise itself.
+    const tagArea = overlay.querySelector('#tagInfoArea');
+    if (!data){ tagArea.innerHTML = ''; return; }
+    const tags = [];
+    if (data.push_pull) tags.push({ label: cap(data.push_pull), color: '#FF6B1A' });
+    if (data.upper_lower) tags.push({ label: cap(data.upper_lower), color: '#3A6EA5' });
+    const locNames = (data.location_ids || []).map(id => allLocations.find(l => l.id === id)?.name).filter(Boolean);
+    locNames.forEach(name => tags.push({ label: name, color: '#8FBF7A' }));
+    tagArea.innerHTML = tags.length
+      ? tags.map(t => `<span style="display:inline-block; font-size:10.5px; font-weight:600; padding:4px 10px; border-radius:12px; margin:2px 4px 2px 0; background:${t.color}26; color:${t.color};">${t.label}</span>`).join('') + `<span id="tagEditLink" style="display:inline-block; font-size:10.5px; color:var(--slate); margin:2px 0 2px 6px; text-decoration:underline;">edit</span>`
+      : `<span class="small" style="color:var(--slate);">No tags set — </span><span id="tagEditLink" style="font-size:10.5px; color:var(--flame); text-decoration:underline;">add Push/Pull, Upper/Lower, or Location</span>`;
+    const editLink = tagArea.querySelector('#tagEditLink');
+    if (editLink) editLink.onclick = () => openEditTagsForm(exerciseId, exerciseName);
   })();
 
   overlay.querySelector('#saveSetBtn').onclick = async () => {
