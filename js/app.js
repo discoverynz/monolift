@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.22';
+const APP_VERSION = 'Beta 5.23';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -2301,6 +2301,7 @@ async function openPlanReorganizer(){
         <div class="field-label">${d.toUpperCase()}</div>
         <div class="chip-row" data-day="${i}">
           ${cats.map(c => `<div class="chip" data-cat="${c}">${SPLIT_CATEGORY_LABELS[c] || cap(c)}</div>`).join('')}
+          <div class="chip" data-cat="custom" style="color:var(--flame); border-color:var(--flame);">Custom</div>
         </div>
       `).join('')}
       <button class="save-btn" id="toPreviewBtn" style="margin-top:10px;">Preview Changes</button>
@@ -2347,11 +2348,17 @@ async function openPlanReorganizer(){
     const body = overlay.querySelector('#reorgPreviewBody');
     const dayPlans = DAY_NAMES.map((d, i) => {
       const assignedCat = dayAssignments[i];
-      const items = (assignedCat && assignedCat !== 'rest')
+      const isCustom = assignedCat === 'custom';
+      const items = (assignedCat && assignedCat !== 'rest' && !isCustom)
         ? namedList.filter(n => n.category === assignedCat)
         : [];
-      return { day: d, dayIdx: i, catLabel: assignedCat ? (SPLIT_CATEGORY_LABELS[assignedCat] || cap(assignedCat)) : 'Not Assigned', items };
+      const label = isCustom ? 'Custom' : (assignedCat ? (SPLIT_CATEGORY_LABELS[assignedCat] || cap(assignedCat)) : 'Not Assigned');
+      return { day: d, dayIdx: i, catLabel: label, isCustom, items };
     });
+    // Custom days start empty - the person picks exactly what goes there from
+    // everything available, rather than anything being auto-derived for them.
+    const customSelections = {};
+    dayPlans.forEach(dp => { if (dp.isCustom) customSelections[dp.dayIdx] = new Set(); });
 
     body.innerHTML = `
       <div class="banner" style="margin:8px 18px 16px 18px; background:#251a12; border:1px solid #4a2f16; border-radius:10px; padding:12px 14px; font-size:11.5px; color:#E8A33D; line-height:1.5;">⚠ Nothing changes until you confirm below. Your current layout is saved automatically and can be restored with one tap from Me → Data if this isn't right.</div>
@@ -2361,20 +2368,50 @@ async function openPlanReorganizer(){
             <div style="font-family:'Bebas Neue',sans-serif; font-size:15px;">${dp.day.toUpperCase()}</div>
             <div style="font-family:'JetBrains Mono',monospace; font-size:9px; padding:3px 8px; border-radius:10px; background:rgba(255,107,26,0.15); color:var(--flame);">${dp.catLabel.toUpperCase()}</div>
           </div>
-          ${dp.items.length ? `<div style="padding:6px 14px 2px 14px; font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--slate);">${dp.items.length} exercises would move here</div>` : `<div style="padding:10px 14px; font-size:11px; color:var(--slate);">${dp.catLabel==='Not Assigned'||dp.catLabel==='Rest' ? 'Nothing assigned' : 'No matching exercises found'}</div>`}
-          ${dp.items.map(it => `<div class="reorg-item" data-day="${dp.dayIdx}" data-name="${it.name}" style="display:flex; justify-content:space-between; align-items:center; padding:7px 14px; font-size:12px;"><span>${it.name}</span><span class="reorg-rm" style="color:var(--slate); font-size:11px;">✕</span></div>`).join('')}
+          ${dp.isCustom ? `
+            <div style="padding:8px 14px; font-size:11px; color:var(--slate);">Pick exactly what goes here - starts empty.</div>
+            <div class="pick-row custom-picker-toggle" data-day="${dp.dayIdx}" style="cursor:pointer;"><div class="ex-name" style="color:var(--flame); font-size:12.5px;">+ Add Exercises</div></div>
+            <div class="custom-selected-list" data-day="${dp.dayIdx}"></div>
+          ` : `
+            ${dp.items.length ? `<div style="padding:6px 14px 2px 14px; font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--slate);">${dp.items.length} exercises would move here</div>` : `<div style="padding:10px 14px; font-size:11px; color:var(--slate);">${dp.catLabel==='Not Assigned'||dp.catLabel==='Rest' ? 'Nothing assigned' : 'No matching exercises found'}</div>`}
+            ${dp.items.map(it => `<div class="reorg-item" data-day="${dp.dayIdx}" data-name="${it.name}" style="display:flex; justify-content:space-between; align-items:center; padding:7px 14px; font-size:12px;"><span>${it.name}</span><span class="reorg-rm" style="color:var(--slate); font-size:11px;">✕</span></div>`).join('')}
+          `}
         </div>
       `).join('')}
       <button class="save-btn" id="confirmReorgBtn" style="margin:0 18px 20px 18px;">Confirm & Apply</button>
     `;
 
-    // Removing an item from the preview list means it stays where it is -
-    // tracked via a simple exclusion set.
+    // Removing an auto-derived item means it stays where it is - tracked via
+    // a simple exclusion set.
     const excluded = new Set();
     body.querySelectorAll('.reorg-item').forEach(row => {
       row.querySelector('.reorg-rm').onclick = () => {
         excluded.add(row.dataset.day + '|' + row.dataset.name);
         row.style.opacity = '0.3'; row.style.textDecoration = 'line-through';
+      };
+    });
+
+    function renderCustomList(dayIdx){
+      const listArea = body.querySelector(`.custom-selected-list[data-day="${dayIdx}"]`);
+      const selected = [...customSelections[dayIdx]];
+      listArea.innerHTML = selected.map(name => `<div class="reorg-item" data-day="${dayIdx}" data-name="${name}" style="display:flex; justify-content:space-between; align-items:center; padding:7px 14px; font-size:12px;"><span>${name}</span><span class="custom-rm" data-day="${dayIdx}" data-name="${name}" style="color:var(--slate); font-size:11px;">✕</span></div>`).join('');
+      listArea.querySelectorAll('.custom-rm').forEach(btn => {
+        btn.onclick = () => { customSelections[btn.dataset.day].delete(btn.dataset.name); renderCustomList(btn.dataset.day); };
+      });
+    }
+    body.querySelectorAll('.custom-picker-toggle').forEach(toggle => {
+      toggle.onclick = () => {
+        const dayIdx = toggle.dataset.day;
+        promptText({
+          title: 'Search exercise name to add', placeholder: 'Type a name…',
+          onConfirm: (typed) => {
+            const found = namedList.find(n => n.name.toLowerCase() === typed.trim().toLowerCase())
+              || namedList.find(n => n.name.toLowerCase().includes(typed.trim().toLowerCase()));
+            if (found) customSelections[dayIdx].add(found.name);
+            else alert('No exercise matching "' + typed + '" found.');
+            renderCustomList(dayIdx);
+          }
+        });
       };
     });
 
@@ -2385,6 +2422,16 @@ async function openPlanReorganizer(){
       localStorage.setItem('zealift_reorg_snapshot', JSON.stringify({ snapshot, at: new Date().toISOString() }));
 
       for (const dp of dayPlans){
+        if (dp.isCustom){
+          for (const name of customSelections[dp.dayIdx]){
+            const match = namedList.find(n => n.name === name);
+            if (!match) continue;
+            for (const id of match.ids){
+              await supabaseClient.from('exercises').update({ weekday: dp.dayIdx }).eq('id', id);
+            }
+          }
+          continue;
+        }
         for (const it of dp.items){
           if (excluded.has(String(dp.dayIdx) + '|' + it.name)) continue;
           for (const id of it.ids){
