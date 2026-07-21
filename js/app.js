@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.28';
+const APP_VERSION = 'Beta 5.29';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -2400,12 +2400,18 @@ async function createPlanBackup(name){
     supabaseClient.from('exercises').select('id, name, category, weekday, alt_group_id, push_pull, upper_lower, location_ids').eq('user_id', userData.user.id).eq('active', true),
     15000
   );
-  const exercises = exResult.__timeout || exResult.error ? [] : (exResult.data || []);
+  if (exResult.__timeout) return { backup: null, errorMessage: 'Timed out reading your exercises.' };
+  if (exResult.error) return { backup: null, errorMessage: 'Could not read your exercises: ' + exResult.error.message };
+  const exercises = exResult.data || [];
+
   const result = await withTimeout(
     supabaseClient.from('plan_backups').insert({ user_id: userData.user.id, name, snapshot: exercises }).select(),
     15000
   );
-  return result.__timeout || result.error || !result.data ? null : result.data[0];
+  if (result.__timeout) return { backup: null, errorMessage: 'Timed out saving the backup.' };
+  if (result.error) return { backup: null, errorMessage: result.error.message };
+  if (!result.data || !result.data[0]) return { backup: null, errorMessage: 'No data returned after saving.' };
+  return { backup: result.data[0], errorMessage: null };
 }
 async function loadPlanBackups(){
   const { data: userData } = await supabaseClient.auth.getUser();
@@ -2456,8 +2462,8 @@ async function openBackupPlanScreen(){
     promptText({
       title: 'Name This Plan', placeholder: 'e.g. Bro Split, PPL, Upper/Lower',
       onConfirm: async (name) => {
-        const backup = await createPlanBackup(name);
-        if (!backup){ alert('Could not save the backup.'); return; }
+        const { backup, errorMessage } = await createPlanBackup(name);
+        if (!backup){ alert('Could not save the backup: ' + errorMessage); return; }
         renderList();
       }
     });
@@ -2490,7 +2496,8 @@ async function openBackupPlanScreen(){
       btn.onclick = async () => {
         const backup = backups.find(b => b.id === btn.dataset.id);
         if (!confirm(`Restore "${backup.name}"? Your current plan will be saved as a safety backup first, so this can be undone.`)) return;
-        await createPlanBackup(`Before restoring "${backup.name}" — ${todayStr()}`);
+        const { backup: safetyBackup, errorMessage } = await createPlanBackup(`Before restoring "${backup.name}" — ${todayStr()}`);
+        if (!safetyBackup && !confirm(`Could not save the safety backup (${errorMessage}). Restore anyway with no way back?`)) return;
         const { restored, skipped } = await restorePlanBackup(backup);
         overlay.remove();
         alert(`Restored ${restored} exercises.${skipped ? ' ' + skipped + ' from this backup no longer exist and were skipped.' : ''}`);
