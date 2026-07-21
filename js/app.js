@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.35';
+const APP_VERSION = 'Beta 5.36';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -650,6 +650,8 @@ async function loadExercises(){
 }
 
 function getCurrentLocationId(){ return localStorage.getItem('zealift_current_location') || null; }
+function getHideCompletedPref(){ return localStorage.getItem('zealift_hide_completed') === '1'; }
+function setHideCompletedPref(v){ localStorage.setItem('zealift_hide_completed', v ? '1' : '0'); }
 function setCurrentLocationId(id){ if (id) localStorage.setItem('zealift_current_location', id); else localStorage.removeItem('zealift_current_location'); }
 
 // An exercise with no locations set is available everywhere (untagged = universal,
@@ -1372,11 +1374,15 @@ async function renderTrack(){
     ex.locationSwap = ex.locationAvailable ? null : findLocationSwap(ex, state.exercises, currentLocationId);
   });
   const currentLocationName = allLocations.find(l => l.id === currentLocationId)?.name || null;
+  const hideCompleted = getHideCompletedPref();
   // Only show what's actually usable at the current location - either directly
   // available, or has a real swap suggestion. A separate list from
   // state.exercises so progress stats above still reflect the whole day's plan,
-  // not just what's visible right now.
-  const visibleExercises = state.exercises.filter(ex => ex.locationAvailable || ex.locationSwap);
+  // not just what's visible right now. Hide Completed (including alt-completed)
+  // filters further, but only for display - the stats above still count everything.
+  const visibleExercises = state.exercises.filter(ex =>
+    (ex.locationAvailable || ex.locationSwap) && (!hideCompleted || !(ex.loggedToday || ex.completeVia))
+  );
   const { grouped, orderedKeys } = await groupExercisesByChoice(visibleExercises, groupBy);
 
   let suggestions = [];
@@ -1463,6 +1469,12 @@ async function renderTrack(){
         <div style="margin:12px 18px 14px 18px; height:4px; background:var(--panel); border-radius:4px; overflow:hidden;">
           <div style="height:100%; width:${pct}%; background:var(--good); border-radius:4px;"></div>
         </div>
+        ${state.exercises.some(ex => ex.loggedToday || ex.completeVia) ? `<div style="padding:0 18px 8px 18px; display:flex; justify-content:flex-end;">
+          <button id="hideCompletedToggle" style="display:flex; align-items:center; gap:6px; background:${hideCompleted?'rgba(255,107,26,0.12)':'var(--panel)'}; border:1px solid ${hideCompleted?'var(--flame)':'var(--line)'}; border-radius:20px; padding:6px 12px;">
+            <span style="font-size:12px;">${hideCompleted?'☑':'☐'}</span>
+            <span style="font-family:'Bebas Neue',sans-serif; font-size:11px; letter-spacing:0.5px; color:${hideCompleted?'var(--flame)':'var(--slate)'};">HIDE COMPLETED</span>
+          </button>
+        </div>` : ''}
         ${state.exercises.length > 0 ? groupByToggleHtml(groupBy) : ''}
         ${state.exercises.some(ex => !ex.alt_group_id) ? `<div style="padding:0 18px 10px 18px; text-align:right;"><button id="autoGroupBtn" style="background:none; color:var(--flame); font-size:11px; font-weight:600; padding:6px 8px;">✨ Auto-Group Alts</button></div>` : ''}
         ${listHtml}
@@ -1475,6 +1487,8 @@ async function renderTrack(){
   document.getElementById('dayTypeHeader').onclick = () => openEditDayTypeForm(state.selectedDay, dayTypeLabel);
   const locSwitcher = document.getElementById('locSwitcher');
   if (locSwitcher) locSwitcher.onclick = () => openLocationPicker(allLocations, currentLocationId);
+  const hideCompletedToggle = document.getElementById('hideCompletedToggle');
+  if (hideCompletedToggle) hideCompletedToggle.onclick = () => { setHideCompletedPref(!hideCompleted); renderTrack(); };
   const autoGroupBtn = document.getElementById('autoGroupBtn');
   if (autoGroupBtn) autoGroupBtn.onclick = () => openAutoAltReview();
   document.querySelectorAll('.cat-rename-btn').forEach(btn => {
