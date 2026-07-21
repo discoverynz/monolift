@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.20';
+const APP_VERSION = 'Beta 5.21';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -284,6 +284,21 @@ function classifyUpperLower(muscle){
   if (['chest','shoulders','lats','traps','biceps','triceps','forearms','lower back','middle back'].includes(m)) return 'upper';
   return null;
 }
+
+// Derives which category an exercise falls into for a given split type. PPL
+// specifically needs a 3-way split, but push_pull only ever holds push/pull -
+// so Legs is derived from upper_lower==='lower' first, and push_pull only
+// decides Push vs Pull for whatever's left (upper-body exercises).
+function deriveSplitCategory(ex, splitType, muscle){
+  if (splitType === 'ppl'){
+    if (ex.upper_lower === 'lower') return 'legs';
+    return ex.push_pull || null;
+  }
+  if (splitType === 'upperlower') return ex.upper_lower || null;
+  if (splitType === 'muscle') return muscle ? muscle.toLowerCase() : null;
+  return null; // custom - no auto-derivation, fully manual
+}
+const SPLIT_CATEGORY_LABELS = { push:'Push', pull:'Pull', legs:'Legs', upper:'Upper', lower:'Lower' };
 
 function movementPatternOf(name){
   const n = name.toLowerCase();
@@ -2110,6 +2125,181 @@ async function openSplitTagReview(){
   render();
 }
 
+// ---------- PLAN REORGANIZER ----------
+const SPLIT_TYPES = [
+  { id:'ppl', label:'Push / Pull / Legs', cats:['push','pull','legs','rest'] },
+  { id:'upperlower', label:'Upper / Lower', cats:['upper','lower','rest'] },
+  { id:'muscle', label:'Muscle Group', cats:null }, // populated dynamically from what's actually in use
+  { id:'custom', label:'Custom (manual only)', cats:null }
+];
+
+async function openPlanReorganizer(){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  document.body.appendChild(overlay);
+  let splitType = null;
+  let dayAssignments = {}; // weekday index -> category string ('rest' or null = no exercises move here)
+
+  function renderStep1(){
+    overlay.innerHTML = `
+      <div class="form-header"><button id="closeReorg">✕</button><h1>Reorganize Week</h1><div style="width:18px;"></div></div>
+      <div class="overlay-scroll">
+        <div class="small" style="padding:8px 18px 16px 18px; color:var(--slate); line-height:1.5;">Pick a split style. The next steps preview exactly what would move where before anything actually changes.</div>
+        ${SPLIT_TYPES.map(s => `<div class="pick-row" data-split="${s.id}"><div class="ex-name">${s.label}</div><div class="chev">›</div></div>`).join('')}
+      </div>`;
+    overlay.querySelector('#closeReorg').onclick = () => overlay.remove();
+    overlay.querySelectorAll('.pick-row').forEach(row => {
+      row.onclick = () => { splitType = row.dataset.split; renderStep2(); };
+    });
+  }
+
+  async function renderStep2(){
+    overlay.innerHTML = `<div class="form-header"><button id="closeReorg">✕</button><h1>Assign Days</h1><div style="width:18px;"></div></div>
+      <div class="overlay-scroll"><div class="small" style="padding:20px 18px; color:var(--slate);">Loading…</div></div>`;
+    overlay.querySelector('#closeReorg').onclick = () => overlay.remove();
+
+    let cats = SPLIT_TYPES.find(s=>s.id===splitType).cats;
+    if (splitType === 'muscle'){
+      const { data: userData } = await supabaseClient.auth.getUser();
+      const [exResult, db] = await Promise.all([
+        withTimeout(supabaseClient.from('exercises').select('name').eq('user_id', userData.user.id), 15000),
+        loadExerciseDB()
+      ]);
+      const names = [...new Set((exResult.data||[]).map(e=>e.name))];
+      const muscles = new Set();
+      names.forEach(n => { const m = matchExercise(n, db); if (m && m.primaryMuscles && m.primaryMuscles[0]) muscles.add(m.primaryMuscles[0]); });
+      cats = [...muscles, 'rest'];
+    }
+    if (splitType === 'custom'){
+      // No auto-derivation possible - reorganizing by custom categories means
+      // hand-picking per day in the next step with everything available, not
+      // assigning a single tag per day.
+      dayAssignments = {};
+      renderStep3();
+      return;
+    }
+
+    const body = overlay.querySelector('.overlay-scroll');
+    body.innerHTML = `
+      <div class="small" style="padding:8px 18px 16px 18px; color:var(--slate);">What should each day focus on? Pick "Rest" for days that shouldn't get anything assigned.</div>
+      ${DAY_NAMES.map((d,i) => `
+        <div class="field-label">${d.toUpperCase()}</div>
+        <div class="chip-row" data-day="${i}">
+          ${cats.map(c => `<div class="chip" data-cat="${c}">${SPLIT_CATEGORY_LABELS[c] || cap(c)}</div>`).join('')}
+        </div>
+      `).join('')}
+      <button class="save-btn" id="toPreviewBtn" style="margin-top:10px;">Preview Changes</button>
+    `;
+    body.querySelectorAll('.chip-row[data-day]').forEach(row => {
+      row.querySelectorAll('.chip').forEach(chip => {
+        chip.onclick = () => {
+          row.querySelectorAll('.chip').forEach(c=>c.classList.remove('active'));
+          chip.classList.add('active');
+          dayAssignments[row.dataset.day] = chip.dataset.cat;
+        };
+      });
+    });
+    body.querySelector('#toPreviewBtn').onclick = () => renderStep3();
+  }
+
+  async function renderStep3(){
+    overlay.innerHTML = `<div class="form-header"><button id="closeReorg">✕</button><h1>Preview</h1><div style="width:18px;"></div></div>
+      <div class="overlay-scroll" id="reorgPreviewBody"><div class="small" style="padding:20px 18px; color:var(--slate);">Building preview…</div></div>`;
+    overlay.querySelector('#closeReorg').onclick = () => overlay.remove();
+
+    const { data: userData } = await supabaseClient.auth.getUser();
+    const [exResult, db] = await Promise.all([
+      withTimeout(supabaseClient.from('exercises').select('id, name, weekday, push_pull, upper_lower').eq('user_id', userData.user.id).eq('active', true), 15000),
+      loadExerciseDB()
+    ]);
+    const allExercises = exResult.__timeout || exResult.error ? [] : (exResult.data || []);
+
+    // Group all exercises by distinct name, deriving each name's category once.
+    const byName = {};
+    allExercises.forEach(ex => {
+      const key = ex.name.toLowerCase();
+      if (!byName[key]) byName[key] = { name: ex.name, ids: [] };
+      byName[key].ids.push(ex.id);
+    });
+    const namedList = Object.values(byName).map(item => {
+      const sample = allExercises.find(e => e.name === item.name);
+      const match = matchExercise(item.name, db);
+      const muscle = match && match.primaryMuscles && match.primaryMuscles[0];
+      const category = deriveSplitCategory(sample, splitType, muscle);
+      return { ...item, category };
+    });
+
+    const body = overlay.querySelector('#reorgPreviewBody');
+    const dayPlans = DAY_NAMES.map((d, i) => {
+      const assignedCat = dayAssignments[i];
+      const items = (assignedCat && assignedCat !== 'rest')
+        ? namedList.filter(n => n.category === assignedCat)
+        : [];
+      return { day: d, dayIdx: i, catLabel: assignedCat ? (SPLIT_CATEGORY_LABELS[assignedCat] || cap(assignedCat)) : 'Not Assigned', items };
+    });
+
+    body.innerHTML = `
+      <div class="banner" style="margin:8px 18px 16px 18px; background:#251a12; border:1px solid #4a2f16; border-radius:10px; padding:12px 14px; font-size:11.5px; color:#E8A33D; line-height:1.5;">⚠ Nothing changes until you confirm below. Your current layout is saved automatically and can be restored with one tap from Me → Data if this isn't right.</div>
+      ${dayPlans.map(dp => `
+        <div class="day-card" data-day="${dp.dayIdx}" style="margin:0 18px 14px 18px; background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden;">
+          <div style="padding:10px 14px; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--line);">
+            <div style="font-family:'Bebas Neue',sans-serif; font-size:15px;">${dp.day.toUpperCase()}</div>
+            <div style="font-family:'JetBrains Mono',monospace; font-size:9px; padding:3px 8px; border-radius:10px; background:rgba(255,107,26,0.15); color:var(--flame);">${dp.catLabel.toUpperCase()}</div>
+          </div>
+          ${dp.items.length ? `<div style="padding:6px 14px 2px 14px; font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--slate);">${dp.items.length} exercises would move here</div>` : `<div style="padding:10px 14px; font-size:11px; color:var(--slate);">${dp.catLabel==='Not Assigned'||dp.catLabel==='Rest' ? 'Nothing assigned' : 'No matching exercises found'}</div>`}
+          ${dp.items.map(it => `<div class="reorg-item" data-day="${dp.dayIdx}" data-name="${it.name}" style="display:flex; justify-content:space-between; align-items:center; padding:7px 14px; font-size:12px;"><span>${it.name}</span><span class="reorg-rm" style="color:var(--slate); font-size:11px;">✕</span></div>`).join('')}
+        </div>
+      `).join('')}
+      <button class="save-btn" id="confirmReorgBtn" style="margin:0 18px 20px 18px;">Confirm & Apply</button>
+    `;
+
+    // Removing an item from the preview list means it stays where it is -
+    // tracked via a simple exclusion set.
+    const excluded = new Set();
+    body.querySelectorAll('.reorg-item').forEach(row => {
+      row.querySelector('.reorg-rm').onclick = () => {
+        excluded.add(row.dataset.day + '|' + row.dataset.name);
+        row.style.opacity = '0.3'; row.style.textDecoration = 'line-through';
+      };
+    });
+
+    body.querySelector('#confirmReorgBtn').onclick = async () => {
+      // Snapshot current weekday assignments before touching anything, so this
+      // can be reverted in one tap from Me -> Data.
+      const snapshot = allExercises.map(ex => ({ id: ex.id, weekday: ex.weekday }));
+      localStorage.setItem('zealift_reorg_snapshot', JSON.stringify({ snapshot, at: new Date().toISOString() }));
+
+      for (const dp of dayPlans){
+        for (const it of dp.items){
+          if (excluded.has(String(dp.dayIdx) + '|' + it.name)) continue;
+          for (const id of it.ids){
+            await supabaseClient.from('exercises').update({ weekday: dp.dayIdx }).eq('id', id);
+          }
+        }
+      }
+      overlay.remove();
+      state.selectedDay = todayWeekday();
+      state.currentTab = 'track';
+      renderTrack();
+    };
+  }
+
+  renderStep1();
+}
+
+async function revertLastReorganization(){
+  const raw = localStorage.getItem('zealift_reorg_snapshot');
+  if (!raw){ alert('No reorganization to revert.'); return; }
+  const { snapshot } = JSON.parse(raw);
+  if (!confirm(`Restore ${snapshot.length} exercises to their previous days?`)) return;
+  for (const item of snapshot){
+    await supabaseClient.from('exercises').update({ weekday: item.weekday }).eq('id', item.id);
+  }
+  localStorage.removeItem('zealift_reorg_snapshot');
+  if (state.currentTab === 'track') renderTrack();
+  alert('Reverted.');
+}
+
 async function pickAltGroup(container, onPicked){
   container.innerHTML = `<div class="action-row" id="clearAltRow" style="border-color:var(--line);"><div class="ex-name" style="color:var(--slate); font-size:13px;">✕ No Alt Group</div></div><div class="search-bar">🔍 <input id="altSearch" placeholder="Search or create alt group…"></div><div id="altList"></div>`;
   container.querySelector('#clearAltRow').onclick = () => onPicked(null);
@@ -3877,6 +4067,8 @@ async function renderMe(){
         <div class="me-item" id="redoWeekBtn"><div>Redo Week Setup</div><div class="chev">›</div></div>
         <div class="section-label">Data</div>
         <div class="me-item" id="scanSplitTagsBtn"><div>Tag Push/Pull/Upper/Lower</div><div class="chev">›</div></div>
+        <div class="me-item" id="reorganizeWeekBtn"><div>Reorganize Week by Split</div><div class="chev">›</div></div>
+        ${localStorage.getItem('zealift_reorg_snapshot') ? `<div class="me-item" id="revertReorgBtn"><div style="color:#E8A33D;">Revert Last Reorganization</div><div class="chev">›</div></div>` : ''}
         <div class="section-label">App</div>
         <div class="me-item" id="refreshAppBtn"><div>Refresh App</div><div class="chev">›</div></div>
         <div class="me-item" id="updateAppBtn"><div>Check for Updates</div><div class="chev">›</div></div>
@@ -3890,6 +4082,9 @@ async function renderMe(){
   document.getElementById('replayTourBtn').onclick = () => showOnboarding('teach');
   document.getElementById('redoWeekBtn').onclick = () => showOnboarding('setup');
   document.getElementById('scanSplitTagsBtn').onclick = openSplitTagReview;
+  document.getElementById('reorganizeWeekBtn').onclick = openPlanReorganizer;
+  const revertBtn = document.getElementById('revertReorgBtn');
+  if (revertBtn) revertBtn.onclick = revertLastReorganization;
   document.getElementById('refreshAppBtn').onclick = () => { location.reload(); };
   document.getElementById('updateAppBtn').onclick = async () => {
     const btn = document.getElementById('updateAppBtn');
