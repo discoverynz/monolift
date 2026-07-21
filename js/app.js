@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.34';
+const APP_VERSION = 'Beta 5.35';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1555,6 +1555,7 @@ function showExerciseActionsMenu(exerciseId, exerciseName){
       <div style="padding:12px 18px; font-family:'Oswald', sans-serif; font-size:14px; color:var(--slate); border-bottom:1px solid var(--line);">${exerciseName}</div>
       <div class="me-item" id="menuRename" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Rename Exercise</div><div class="chev">›</div></div>
       <div class="me-item" id="menuEditAlt" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Edit Alt Group</div><div class="chev">›</div></div>
+      <div class="me-item" id="menuEditCategory" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Edit Category</div><div class="chev">›</div></div>
       <div class="me-item" id="menuEditLoc" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Edit Push/Pull/Upper/Lower/Location</div><div class="chev">›</div></div>
       <div class="me-item" id="menuRemove" style="border-bottom:none; cursor:pointer;"><div style="color:var(--flame);">Remove from ${DAY_LABELS[state.selectedDay]}</div><div class="chev">›</div></div>
       <div style="text-align:center; padding:12px; color:var(--slate); font-size:13px; cursor:pointer;" id="menuCancel">Cancel</div>
@@ -1563,6 +1564,7 @@ function showExerciseActionsMenu(exerciseId, exerciseName){
   overlay.querySelector('#menuCancel').onclick = () => overlay.remove();
   overlay.querySelector('#menuRename').onclick = () => { overlay.remove(); openRenameExerciseForm(exerciseId, exerciseName); };
   overlay.querySelector('#menuEditAlt').onclick = () => { overlay.remove(); openEditAltGroupForm(exerciseId, exerciseName); };
+  overlay.querySelector('#menuEditCategory').onclick = () => { overlay.remove(); openEditCategoryForm(exerciseId, exerciseName); };
   overlay.querySelector('#menuEditLoc').onclick = () => { overlay.remove(); openEditTagsForm(exerciseId, exerciseName); };
   overlay.querySelector('#menuRemove').onclick = () => { overlay.remove(); confirmRemoveExercise(exerciseId, exerciseName); };
 }
@@ -1636,6 +1638,57 @@ function openEditAltGroupForm(exerciseId, exerciseName){
     overlay.remove();
     if (state.currentTab === 'track') renderTrack();
   });
+}
+
+function openEditCategoryForm(exerciseId, exerciseName){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeCatEdit">✕</button><h1>Edit Category</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll">
+      <div class="field-label" style="padding-top:0;">${exerciseName}</div>
+      <div class="small" style="padding:0 18px 10px 18px; color:var(--slate); line-height:1.5;">Applies to every day this exercise appears on, not just this one - it's the same exercise wherever it shows up.</div>
+      <div class="chip-row" id="editCatChipRow" style="flex-wrap:wrap;"><div class="small" style="color:var(--slate); padding:8px 0;">Loading…</div></div>
+      <button class="save-btn" id="saveCatBtn">Save</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeCatEdit').onclick = () => overlay.remove();
+
+  let selectedCategory = null;
+  (async () => {
+    const [cats, exResult] = await Promise.all([
+      getAllCategories(),
+      withTimeout(supabaseClient.from('exercises').select('category').eq('id', exerciseId).maybeSingle(), 15000)
+    ]);
+    selectedCategory = (exResult.__timeout || exResult.error || !exResult.data) ? null : exResult.data.category;
+    const row = overlay.querySelector('#editCatChipRow');
+    row.innerHTML = cats.map(c => `<div class="chip ${c===selectedCategory?'active':''}" data-cat="${c}">${c}</div>`).join('')
+      + `<div class="chip" id="editCatNewChip" style="color:var(--flame); border-color:var(--flame);">+ New</div>`;
+    row.querySelectorAll('.chip[data-cat]').forEach(el => {
+      el.onclick = () => { row.querySelectorAll('.chip[data-cat]').forEach(c=>c.classList.remove('active')); el.classList.add('active'); selectedCategory = el.dataset.cat; };
+    });
+    row.querySelector('#editCatNewChip').onclick = () => {
+      promptText({
+        title: 'New Category Name', placeholder: 'e.g. Bodyweight',
+        onConfirm: (name) => { addCustomCategory(name); selectedCategory = name; overlay.querySelector('#saveCatBtn').click(); }
+      });
+    };
+  })();
+
+  overlay.querySelector('#saveCatBtn').onclick = async () => {
+    if (!selectedCategory) return;
+    const { data: userData } = await supabaseClient.auth.getUser();
+    const sameNameResult = await withTimeout(
+      supabaseClient.from('exercises').select('id').eq('user_id', userData.user.id).ilike('name', exerciseName),
+      15000
+    );
+    const ids = (sameNameResult.__timeout || sameNameResult.error) ? [exerciseId] : (sameNameResult.data || []).map(r => r.id);
+    for (const id of (ids.length ? ids : [exerciseId])){
+      await supabaseClient.from('exercises').update({ category: selectedCategory }).eq('id', id);
+    }
+    overlay.remove();
+    if (state.currentTab === 'track') renderTrack();
+  };
 }
 
 function openEditTagsForm(exerciseId, exerciseName){
