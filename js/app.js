@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.37';
+const APP_VERSION = 'Beta 5.38';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -942,6 +942,34 @@ async function loadDayType(weekday){
   return result.data.label;
 }
 
+// Small confirm popover anchored near the button that triggered it - guards
+// small icon buttons (easy to mis-tap) from firing their action immediately.
+// Dismisses on outside tap. description is optional for lower-stakes actions.
+function showPreCheckPopover(anchorEl, title, description, onConfirm){
+  document.querySelectorAll('.precheck-popover').forEach(p => p.remove());
+  const rect = anchorEl.getBoundingClientRect();
+  const popover = document.createElement('div');
+  popover.className = 'precheck-popover';
+  popover.style = `position:fixed; top:${rect.bottom + 8}px; left:${Math.max(12, rect.left - 60)}px; z-index:80; background:var(--panel); border:1px solid ${description ? 'var(--flame)' : 'var(--line)'}; border-radius:${description?'12px':'10px'}; padding:${description?'14px':'10px 12px'}; box-shadow:0 8px 24px rgba(0,0,0,0.5); width:${description?'220px':'auto'}; white-space:${description?'normal':'nowrap'};`;
+  popover.innerHTML = `
+    ${description ? `<div style="font-family:'Bebas Neue',sans-serif; font-size:14px; color:var(--flame); margin-bottom:4px;">${title.toUpperCase()}</div>
+      <div style="font-size:10.5px; color:var(--slate); line-height:1.5; margin-bottom:12px;">${description}</div>`
+      : `<div style="font-size:11px; margin-bottom:8px;">${title}</div>`}
+    <div style="display:flex; gap:${description?'8px':'6px'};">
+      <div class="precheck-cancel" style="${description?'flex:1;':''} text-align:center; background:var(--ink); border:1px solid var(--line); border-radius:${description?'8px':'6px'}; padding:${description?'9px':'5px 10px'}; font-size:${description?'11px':'10px'}; color:var(--slate);">Cancel</div>
+      <div class="precheck-confirm" style="${description?'flex:1;':''} text-align:center; background:var(--flame); color:var(--ink); border-radius:${description?'8px':'6px'}; padding:${description?'9px':'5px 10px'}; font-size:${description?'11px':'10px'}; font-weight:700;">${description ? 'Continue' : 'OK'}</div>
+    </div>`;
+  document.body.appendChild(popover);
+  const dismiss = (e) => {
+    if (popover.contains(e.target)) return;
+    popover.remove();
+    document.removeEventListener('click', dismiss, true);
+  };
+  setTimeout(() => document.addEventListener('click', dismiss, true), 0);
+  popover.querySelector('.precheck-cancel').onclick = () => popover.remove();
+  popover.querySelector('.precheck-confirm').onclick = () => { popover.remove(); onConfirm(); };
+}
+
 function openLocationPicker(locations, currentId){
   const overlay = document.createElement('div');
   overlay.style = 'position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:70; display:flex; align-items:flex-end;';
@@ -1466,29 +1494,27 @@ async function renderTrack(){
   app.innerHTML = `
     <div class="app-shell">
       <div class="scroll-area">
-        <div class="brandbar"><img src="icons/icon-inapp-32.png" alt=""><div class="name">ZEALIFT</div><button class="brandbar-timer" onclick="openTimer()" aria-label="Timer" style="margin-left:auto; background:none; color:var(--slate); padding:6px; display:flex; align-items:center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg></button></div>
+        <div class="brandbar"><img src="icons/icon-inapp-32.png" alt=""><div class="name">ZEALIFT</div>
+          ${allLocations.length > 0 ? `<div id="locSwitcher" style="margin-left:auto; display:flex; align-items:center; gap:5px; background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:5px 10px 5px 8px; cursor:pointer;">
+            <span style="font-size:10px;">📍</span>
+            <span style="font-family:'Bebas Neue',sans-serif; font-size:10px; color:var(--flame); letter-spacing:0.5px;">${currentLocationName ? currentLocationName.toUpperCase() : 'ANYWHERE'}</span>
+          </div>` : ''}
+        </div>
         <div class="day-strip">${dayChips}</div>
-        ${allLocations.length > 0 ? `<div id="locSwitcher" style="margin:10px 18px 0 18px; display:flex; align-items:center; gap:8px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:8px 12px; cursor:pointer;">
-          <span style="font-size:11px; color:var(--slate);">📍</span>
-          <span style="font-family:'Bebas Neue',sans-serif; font-size:13px; color:var(--flame); letter-spacing:0.5px;">${currentLocationName ? currentLocationName.toUpperCase() : 'ANYWHERE'}</span>
-          <span style="margin-left:auto; font-size:10px; color:var(--slate);">tap to change</span>
-        </div>` : ''}
         <div class="header">
           <div class="eyebrow">${DAY_LABELS[state.selectedDay].toUpperCase()}</div>
           <h1 id="dayTypeHeader" style="cursor:pointer;">${dayTypeLabel}</h1>
           <div class="quote">"${q.t}" — ${q.a}</div>
         </div>
+        <div style="padding:8px 18px 0 18px; display:flex; gap:8px;">
+          <button id="toolbarTimerBtn" style="width:28px; height:28px; border-radius:8px; background:var(--panel); border:1px solid var(--line); color:var(--slate); display:flex; align-items:center; justify-content:center;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg></button>
+          ${state.exercises.some(ex => !ex.alt_group_id) ? `<button id="toolbarAutoGroupBtn" style="width:28px; height:28px; border-radius:8px; background:var(--panel); border:1px solid var(--flame); color:var(--flame); font-size:12px;">✨</button>` : ''}
+          ${state.exercises.some(ex => ex.loggedToday || ex.completeVia) ? `<button id="toolbarHideCompletedBtn" style="width:28px; height:28px; border-radius:8px; background:${hideCompleted?'rgba(255,107,26,0.12)':'var(--panel)'}; border:1px solid ${hideCompleted?'var(--flame)':'var(--line)'}; color:${hideCompleted?'var(--flame)':'var(--slate)'}; font-size:12px;">${hideCompleted?'☑':'☐'}</button>` : ''}
+        </div>
         <div style="margin:12px 18px 14px 18px; height:4px; background:var(--panel); border-radius:4px; overflow:hidden;">
           <div style="height:100%; width:${pct}%; background:var(--good); border-radius:4px;"></div>
         </div>
-        ${state.exercises.some(ex => ex.loggedToday || ex.completeVia) ? `<div style="padding:0 18px 8px 18px; display:flex; justify-content:flex-end;">
-          <button id="hideCompletedToggle" style="display:flex; align-items:center; gap:6px; background:${hideCompleted?'rgba(255,107,26,0.12)':'var(--panel)'}; border:1px solid ${hideCompleted?'var(--flame)':'var(--line)'}; border-radius:20px; padding:6px 12px;">
-            <span style="font-size:12px;">${hideCompleted?'☑':'☐'}</span>
-            <span style="font-family:'Bebas Neue',sans-serif; font-size:11px; letter-spacing:0.5px; color:${hideCompleted?'var(--flame)':'var(--slate)'};">HIDE COMPLETED</span>
-          </button>
-        </div>` : ''}
         ${state.exercises.length > 0 ? groupByToggleHtml(groupBy) : ''}
-        ${state.exercises.some(ex => !ex.alt_group_id) ? `<div style="padding:0 18px 10px 18px; text-align:right;"><button id="autoGroupBtn" style="background:none; color:var(--flame); font-size:11px; font-weight:600; padding:6px 8px;">✨ Auto-Group Alts</button></div>` : ''}
         ${listHtml}
         ${suggestionsHtml}
       </div>
@@ -1499,10 +1525,20 @@ async function renderTrack(){
   document.getElementById('dayTypeHeader').onclick = () => openEditDayTypeForm(state.selectedDay, dayTypeLabel);
   const locSwitcher = document.getElementById('locSwitcher');
   if (locSwitcher) locSwitcher.onclick = () => openLocationPicker(allLocations, currentLocationId);
-  const hideCompletedToggle = document.getElementById('hideCompletedToggle');
-  if (hideCompletedToggle) hideCompletedToggle.onclick = () => { setHideCompletedPref(!hideCompleted); renderTrack(); };
-  const autoGroupBtn = document.getElementById('autoGroupBtn');
-  if (autoGroupBtn) autoGroupBtn.onclick = () => openAutoAltReview();
+  const timerBtn = document.getElementById('toolbarTimerBtn');
+  if (timerBtn) timerBtn.onclick = () => openTimer();
+  const autoGroupBtn = document.getElementById('toolbarAutoGroupBtn');
+  if (autoGroupBtn) autoGroupBtn.onclick = () => showPreCheckPopover(autoGroupBtn,
+    'Scan for Alt Groups?',
+    'Looks at today\'s exercises and suggests groupings. Nothing is created until you review and confirm on the next screen.',
+    () => openAutoAltReview()
+  );
+  const hideCompletedBtn = document.getElementById('toolbarHideCompletedBtn');
+  if (hideCompletedBtn) hideCompletedBtn.onclick = () => showPreCheckPopover(hideCompletedBtn,
+    hideCompleted ? 'Show completed exercises again?' : 'Hide completed exercises?',
+    null,
+    () => { setHideCompletedPref(!hideCompleted); renderTrack(); }
+  );
   document.querySelectorAll('.cat-rename-btn').forEach(btn => {
     btn.onclick = (e) => {
       e.stopPropagation();
@@ -4860,9 +4896,9 @@ async function renderMe(){
           <div><div>🏷️ Tag Workouts</div><div class="small" style="color:var(--slate); margin-top:2px;">Push, pull, upper, lower - all figured out for you</div></div>
           <div class="chev" style="margin-top:2px;">›</div>
         </div>
-        <div class="me-item" id="reorganizeWeekBtn" style="align-items:flex-start; padding-top:14px; padding-bottom:14px; border:1px solid var(--flame); border-radius:10px; margin:6px 18px 8px 18px; background:rgba(255,107,26,0.06);">
-          <div><div style="color:var(--flame); font-weight:700;">✨ Change Split</div><div class="small" style="color:var(--chalk); margin-top:2px; opacity:0.85;">PPL, Arnold, Bro Split, Full Body, or your own - Zealift rebuilds your whole week automatically</div></div>
-          <div class="chev" style="margin-top:2px; color:var(--flame);">›</div>
+        <div class="me-item" id="reorganizeWeekBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+          <div><div>✨ Change Split</div><div class="small" style="color:var(--slate); margin-top:2px;">PPL, Arnold, Bro Split, Full Body, or your own - Zealift rebuilds your whole week automatically</div></div>
+          <div class="chev" style="margin-top:2px;">›</div>
         </div>
         <div class="me-item" id="changeSingleDayBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
           <div><div>🔁 Change One Day</div><div class="small" style="color:var(--slate); margin-top:2px;">Just swap one day's focus - everything else stays put</div></div>
