@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.39';
+const APP_VERSION = 'Beta 5.40';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -145,14 +145,26 @@ function clusterByAltGroup(items){
   return [...clustered, ...ungrouped];
 }
 
+// Muscle grouping is normally auto-detected by fuzzy-matching the exercise
+// name against the exercise database - this lets a person pin a specific
+// exercise to a muscle group manually, overriding the auto-detection when
+// it's wrong or just not how they think about that exercise. The override
+// stores the final label directly (e.g. "Rear Delts"), not a broad muscle
+// that still needs further processing.
+function getEffectiveMuscleLabel(ex, db){
+  if (ex && ex.muscle_override) return ex.muscle_override;
+  const m = matchExercise(ex.name, db);
+  const muscle = m && m.primaryMuscles && m.primaryMuscles[0];
+  return muscle ? fineMuscleCategory(muscle, ex.name) : 'Other';
+}
+
 async function groupExercisesByChoice(exercises, groupBy){
   const grouped = {};
   let orderedKeys;
   if (groupBy === 'muscle'){
     const db = await loadExerciseDB();
     exercises.forEach(ex => {
-      const m = matchExercise(ex.name, db);
-      const label = (m && m.primaryMuscles && m.primaryMuscles[0]) ? fineMuscleCategory(m.primaryMuscles[0], ex.name) : 'Other';
+      const label = getEffectiveMuscleLabel(ex, db);
       (grouped[label] = grouped[label] || []).push(ex);
     });
     orderedKeys = Object.keys(grouped).sort((a,b) => a === 'Other' ? 1 : b === 'Other' ? -1 : muscleSortKey(a).localeCompare(muscleSortKey(b)));
@@ -562,7 +574,7 @@ function renderCodeEntry(email){
 async function loadExercises(){
   const result = await withTimeout(
     supabaseClient.from('exercises')
-      .select('id, name, category, alt_group_id, alt_groups(name, color), location_ids')
+      .select('id, name, category, alt_group_id, alt_groups(name, color), location_ids, muscle_override')
       .eq('weekday', state.selectedDay)
       .eq('active', true)
       .order('category', { ascending: true })
@@ -1627,6 +1639,7 @@ function showExerciseActionsMenu(exerciseId, exerciseName){
       <div class="me-item" id="menuRename" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Rename Exercise</div><div class="chev">›</div></div>
       <div class="me-item" id="menuEditAlt" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Edit Alt Group</div><div class="chev">›</div></div>
       <div class="me-item" id="menuEditCategory" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Edit Category</div><div class="chev">›</div></div>
+      <div class="me-item" id="menuEditMuscle" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Edit Muscle Group</div><div class="chev">›</div></div>
       <div class="me-item" id="menuEditLoc" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Edit Push/Pull/Upper/Lower/Location</div><div class="chev">›</div></div>
       <div class="me-item" id="menuRemove" style="border-bottom:none; cursor:pointer;"><div style="color:var(--flame);">Remove from ${DAY_LABELS[state.selectedDay]}</div><div class="chev">›</div></div>
       <div style="text-align:center; padding:12px; color:var(--slate); font-size:13px; cursor:pointer;" id="menuCancel">Cancel</div>
@@ -1636,6 +1649,7 @@ function showExerciseActionsMenu(exerciseId, exerciseName){
   overlay.querySelector('#menuRename').onclick = () => { overlay.remove(); openRenameExerciseForm(exerciseId, exerciseName); };
   overlay.querySelector('#menuEditAlt').onclick = () => { overlay.remove(); openEditAltGroupForm(exerciseId, exerciseName); };
   overlay.querySelector('#menuEditCategory').onclick = () => { overlay.remove(); openEditCategoryForm(exerciseId, exerciseName); };
+  overlay.querySelector('#menuEditMuscle').onclick = () => { overlay.remove(); openEditMuscleForm(exerciseId, exerciseName); };
   overlay.querySelector('#menuEditLoc').onclick = () => { overlay.remove(); openEditTagsForm(exerciseId, exerciseName); };
   overlay.querySelector('#menuRemove').onclick = () => { overlay.remove(); confirmRemoveExercise(exerciseId, exerciseName); };
 }
@@ -1708,6 +1722,44 @@ function openEditAltGroupForm(exerciseId, exerciseName){
     await supabaseClient.from('exercises').update({ alt_group_id: picked ? picked.id : null }).eq('id', exerciseId);
     overlay.remove();
     if (state.currentTab === 'track') renderTrack();
+  });
+}
+
+function openEditMuscleForm(exerciseId, exerciseName){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  const regions = {};
+  Object.entries(MUSCLE_SORT_REGION).forEach(([label, region]) => { (regions[region] = regions[region] || []).push(label); });
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeMuscleEdit">✕</button><h1>Edit Muscle Group</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll">
+      <div class="field-label" style="padding-top:0;">${exerciseName}</div>
+      <div class="small" style="padding:0 18px 10px 18px; color:var(--slate); line-height:1.5;">Overrides auto-detection for Muscle mode grouping. Applies to every day this exercise appears on.</div>
+      <div class="pick-row" id="resetMuscleRow"><div class="ex-name" style="color:var(--flame);">↺ Reset to Auto-Detect</div></div>
+      ${Object.entries(regions).map(([region, labels]) => `
+        <div class="category">${region.toUpperCase()}</div>
+        <div class="chip-row" style="flex-wrap:wrap;">${labels.map(l => `<div class="chip" data-muscle="${l}">${l}</div>`).join('')}</div>
+      `).join('')}
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeMuscleEdit').onclick = () => overlay.remove();
+
+  async function apply(muscleOverride){
+    const { data: userData } = await supabaseClient.auth.getUser();
+    const sameNameResult = await withTimeout(
+      supabaseClient.from('exercises').select('id').eq('user_id', userData.user.id).ilike('name', exerciseName),
+      15000
+    );
+    const ids = (sameNameResult.__timeout || sameNameResult.error) ? [exerciseId] : (sameNameResult.data || []).map(r => r.id);
+    for (const id of (ids.length ? ids : [exerciseId])){
+      await supabaseClient.from('exercises').update({ muscle_override: muscleOverride }).eq('id', id);
+    }
+    overlay.remove();
+    if (state.currentTab === 'track') renderTrack();
+  }
+  overlay.querySelector('#resetMuscleRow').onclick = () => apply(null);
+  overlay.querySelectorAll('.chip[data-muscle]').forEach(chip => {
+    chip.onclick = () => apply(chip.dataset.muscle);
   });
 }
 
