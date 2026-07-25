@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.45';
+const APP_VERSION = 'Beta 5.46';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -4080,15 +4080,13 @@ function openLogForm(exerciseId, exerciseName){
     const allLocationsForHistory = locationColumnAvailable ? await loadLocations() : [];
     list.innerHTML = sets.map(s => {
       const locName = locationColumnAvailable && s.location_id
-        ? (allLocationsForHistory.find(l => l.id === s.location_id)?.name || '')
-        : '';
+        ? (allLocationsForHistory.find(l => l.id === s.location_id)?.name || '—')
+        : '—';
       return `<div class="log-row" data-id="${s.id}" style="flex-direction:column; align-items:flex-start; gap:3px;">
-        <div style="display:flex; justify-content:space-between; width:100%;">
+        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; align-items:center; width:100%; gap:6px;">
           <div class="log-date">${formatLoggedDate(s.logged_at)}</div>
-          <div style="display:flex; align-items:center; gap:8px;">
-            ${locName ? `<span style="font-size:9.5px; color:var(--slate); background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:2px 7px;">📍 ${locName}</span>` : ''}
-            <div class="log-weight">${formatSetValue(s, true)}</div>
-          </div>
+          <div style="font-size:11px; color:var(--slate); text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">📍 ${locName}</div>
+          <div class="log-weight" style="text-align:right;">${formatSetValue(s, true)}</div>
         </div>
         ${s.notes ? `<div style="font-size:11px; color:var(--slate); font-style:italic;">${s.notes}</div>` : ''}
       </div>`;
