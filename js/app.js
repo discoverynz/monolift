@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.43';
+const APP_VERSION = 'Beta 5.44';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -628,18 +628,31 @@ async function loadExercises(){
       siblings.forEach(id => prQueryIds.add(id));
     });
 
-    const setsResult = await withTimeout(
+    let setsResult = await withTimeout(
       supabaseClient.from('sets').select('exercise_id, weight, weight_unit, weight_type, reps, num_sets, logged_at, location_id')
         .in('exercise_id', [...prQueryIds]).order('logged_at', { ascending: false }),
       15000
     );
+    // Same resilience fix as the exercises query above - a newer optional
+    // column not being migrated yet should never wipe out PR/history data for
+    // every exercise on Track.
+    let locationDataAvailable = true;
+    if (!setsResult.__timeout && setsResult.error){
+      console.error('Sets query failed, retrying without location_id:', setsResult.error);
+      locationDataAvailable = false;
+      setsResult = await withTimeout(
+        supabaseClient.from('sets').select('exercise_id, weight, weight_unit, weight_type, reps, num_sets, logged_at')
+          .in('exercise_id', [...prQueryIds]).order('logged_at', { ascending: false }),
+        15000
+      );
+    }
     let allSets = setsResult.__timeout || setsResult.error ? [] : (setsResult.data || []);
     // Track's preview reflects only the currently active location, since the
     // same exercise can be loaded very differently machine to machine. The
     // full unfiltered history still shows everything once you open the
     // exercise itself - this only narrows what the row preview shows.
     const activeLocationId = getCurrentLocationId();
-    if (activeLocationId) allSets = allSets.filter(s => s.location_id === activeLocationId);
+    if (activeLocationId && locationDataAvailable) allSets = allSets.filter(s => s.location_id === activeLocationId);
     const idToLowerName = {};
     allUserExercises.forEach(ex => { idToLowerName[ex.id] = (ex.name || '').toLowerCase(); });
     // Results are ordered newest-first, so the first time we see an exercise_id is its most recent set.
