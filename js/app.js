@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.40';
+const APP_VERSION = 'Beta 5.41';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -572,7 +572,7 @@ function renderCodeEntry(email){
 
 // ---------- TRACK ----------
 async function loadExercises(){
-  const result = await withTimeout(
+  let result = await withTimeout(
     supabaseClient.from('exercises')
       .select('id, name, category, alt_group_id, alt_groups(name, color), location_ids, muscle_override')
       .eq('weekday', state.selectedDay)
@@ -581,6 +581,24 @@ async function loadExercises(){
       .order('name', { ascending: true }),
     15000
   );
+  // Resilience fix: a query error here (e.g. a newer optional column like
+  // muscle_override not existing yet because its migration hasn't been run)
+  // used to silently wipe the entire exercise list, making the whole app look
+  // like all workouts had disappeared. Retry without the optional field
+  // rather than giving up entirely - the core exercise list should never
+  // depend on a newer, optional column being present.
+  if (!result.__timeout && result.error){
+    console.error('Exercise query failed, retrying without muscle_override:', result.error);
+    result = await withTimeout(
+      supabaseClient.from('exercises')
+        .select('id, name, category, alt_group_id, alt_groups(name, color), location_ids')
+        .eq('weekday', state.selectedDay)
+        .eq('active', true)
+        .order('category', { ascending: true })
+        .order('name', { ascending: true }),
+      15000
+    );
+  }
   if (result.__timeout){ state.exercises = []; return; }
   const { data: exercises, error } = result;
   if (error){ console.error(error); state.exercises = []; return; }
