@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.42';
+const APP_VERSION = 'Beta 5.43';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -629,11 +629,17 @@ async function loadExercises(){
     });
 
     const setsResult = await withTimeout(
-      supabaseClient.from('sets').select('exercise_id, weight, weight_unit, weight_type, reps, num_sets, logged_at')
+      supabaseClient.from('sets').select('exercise_id, weight, weight_unit, weight_type, reps, num_sets, logged_at, location_id')
         .in('exercise_id', [...prQueryIds]).order('logged_at', { ascending: false }),
       15000
     );
-    const allSets = setsResult.__timeout || setsResult.error ? [] : (setsResult.data || []);
+    let allSets = setsResult.__timeout || setsResult.error ? [] : (setsResult.data || []);
+    // Track's preview reflects only the currently active location, since the
+    // same exercise can be loaded very differently machine to machine. The
+    // full unfiltered history still shows everything once you open the
+    // exercise itself - this only narrows what the row preview shows.
+    const activeLocationId = getCurrentLocationId();
+    if (activeLocationId) allSets = allSets.filter(s => s.location_id === activeLocationId);
     const idToLowerName = {};
     allUserExercises.forEach(ex => { idToLowerName[ex.id] = (ex.name || '').toLowerCase(); });
     // Results are ordered newest-first, so the first time we see an exercise_id is its most recent set.
@@ -3772,6 +3778,10 @@ function openLogForm(exerciseId, exerciseName){
   let unit = 'kg';
   let weightType = 'total';
   let lastEntry = null;
+  // Defaults to whatever location is currently active on Track. If Track is
+  // in "Anywhere" mode (no specific location chosen), this starts unassigned
+  // rather than silently guessing - the person has to actually pick one.
+  let selectedLocationId = getCurrentLocationId();
 
   // Prev/next navigation only makes sense if this exercise is part of today's
   // currently-displayed Track order (won't apply if opened from the picker/
@@ -3804,6 +3814,8 @@ function openLogForm(exerciseId, exerciseName){
           <button class="active" data-u="kg">kg</button><button data-u="lb">lb</button><button data-u="sec">sec</button><button data-u="pin">pin</button>
         </div>
       </div>
+      <div class="field-label">Location <span class="opt">(some machines differ by location)</span></div>
+      <div class="chip-row" id="setLocationRow" style="flex-wrap:wrap;"><div class="small" style="color:var(--slate); padding:8px 0;">Loading…</div></div>
       <div class="field-label">Per Side or Total?</div>
       <div class="chip-row">
         <div class="chip active" data-wt="total">Total</div>
@@ -3867,7 +3879,8 @@ function openLogForm(exerciseId, exerciseName){
       weight_type: weightType,
       num_sets: numSets, reps: reps,
       notes: notes || null,
-      logged_at: todayStr()
+      logged_at: todayStr(),
+      location_id: selectedLocationId
     }).select();
     if (error){ alert(error.message); return null; }
     // Celebrate a new PR: strictly greater than the prior best, and there must be a prior best.
@@ -4036,6 +4049,18 @@ function openLogForm(exerciseId, exerciseName){
       loadLocations()
     ]);
     const data = result.__timeout || result.error || !result.data ? null : result.data;
+
+    // Location chips - rendered before the early-return below so this always
+    // populates even if the exercise's own tag-data fetch fails.
+    const locRow = overlay.querySelector('#setLocationRow');
+    function renderLocRow(){
+      locRow.innerHTML = `<div class="chip ${!selectedLocationId?'active':''}" data-loc="">Unassigned</div>`
+        + allLocations.map(l => `<div class="chip ${selectedLocationId===l.id?'active':''}" data-loc="${l.id}">${l.name}</div>`).join('');
+      locRow.querySelectorAll('.chip').forEach(chip => {
+        chip.onclick = () => { selectedLocationId = chip.dataset.loc || null; renderLocRow(); };
+      });
+    }
+    renderLocRow();
 
     // This was missing entirely before - push/pull, upper/lower, and locations
     // were being saved and used everywhere else (the reorganizer, the scanner,
