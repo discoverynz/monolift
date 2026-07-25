@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.44';
+const APP_VERSION = 'Beta 5.45';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -699,6 +699,8 @@ async function loadExercises(){
 }
 
 function getCurrentLocationId(){ return localStorage.getItem('zealift_current_location') || null; }
+function getDefaultLocationId(){ return localStorage.getItem('zealift_default_location') || null; }
+function setDefaultLocationId(id){ if (id) localStorage.setItem('zealift_default_location', id); else localStorage.removeItem('zealift_default_location'); }
 function getHideCompletedPref(){ return localStorage.getItem('zealift_hide_completed') === '1'; }
 function setHideCompletedPref(v){ localStorage.setItem('zealift_hide_completed', v ? '1' : '0'); }
 function setCurrentLocationId(id){ if (id) localStorage.setItem('zealift_current_location', id); else localStorage.removeItem('zealift_current_location'); }
@@ -999,6 +1001,36 @@ function showPreCheckPopover(anchorEl, title, description, onConfirm){
   setTimeout(() => document.addEventListener('click', dismiss, true), 0);
   popover.querySelector('.precheck-cancel').onclick = () => popover.remove();
   popover.querySelector('.precheck-confirm').onclick = () => { popover.remove(); onConfirm(); };
+}
+
+async function openDefaultLocationPicker(){
+  const locations = await loadLocations();
+  const currentId = getDefaultLocationId();
+  const overlay = document.createElement('div');
+  overlay.style = 'position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:70; display:flex; align-items:flex-end;';
+  overlay.innerHTML = `
+    <div style="width:100%; background:var(--panel); border-radius:18px 18px 0 0; padding:20px 18px calc(20px + env(safe-area-inset-bottom, 0px)) 18px;">
+      <div class="field-label" style="padding:0 0 4px 0;">Default Location</div>
+      <div class="small" style="padding:0 0 12px 0; color:var(--slate); line-height:1.5;">Used when logging a set if Track isn't currently set to a specific location.</div>
+      <div class="pick-row" data-loc="" style="${!currentId ? 'color:var(--flame);' : ''}"><div class="ex-name">None</div>${!currentId ? '<span>✓</span>' : ''}</div>
+      ${locations.map(l => `<div class="pick-row" data-loc="${l.id}" style="${l.id===currentId ? 'color:var(--flame);' : ''}"><div class="ex-name">${l.name}</div>${l.id===currentId ? '<span>✓</span>' : ''}</div>`).join('')}
+      <div class="pick-row" id="newDefaultLocRow"><div class="ex-name" style="color:var(--flame);">+ New Location</div></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.querySelectorAll('.pick-row[data-loc]').forEach(row => {
+    row.onclick = () => { setDefaultLocationId(row.dataset.loc || null); overlay.remove(); };
+  });
+  overlay.querySelector('#newDefaultLocRow').onclick = () => {
+    promptText({
+      title: 'New Location Name', placeholder: 'e.g. Home Gym',
+      onConfirm: async (name) => {
+        const loc = await createLocation(name);
+        overlay.remove();
+        if (loc) setDefaultLocationId(loc.id);
+      }
+    });
+  };
 }
 
 function openLocationPicker(locations, currentId){
@@ -3791,10 +3823,10 @@ function openLogForm(exerciseId, exerciseName){
   let unit = 'kg';
   let weightType = 'total';
   let lastEntry = null;
-  // Defaults to whatever location is currently active on Track. If Track is
-  // in "Anywhere" mode (no specific location chosen), this starts unassigned
-  // rather than silently guessing - the person has to actually pick one.
-  let selectedLocationId = getCurrentLocationId();
+  // Defaults to whatever location is currently active on Track, falling back
+  // to the designated default location if Track is in Anywhere mode. Only
+  // starts genuinely unassigned if neither is set.
+  let selectedLocationId = getCurrentLocationId() || getDefaultLocationId();
 
   // Prev/next navigation only makes sense if this exercise is part of today's
   // currently-displayed Track order (won't apply if opened from the picker/
@@ -3932,11 +3964,21 @@ function openLogForm(exerciseId, exerciseName){
       : (sameNameResult.data || []).map(r => r.id);
     const idsToQuery = allIds.length ? allIds : [exerciseId];
 
-    const result = await withTimeout(
-      supabaseClient.from('sets').select('id, weight, weight_unit, weight_type, reps, num_sets, notes, logged_at')
+    let result = await withTimeout(
+      supabaseClient.from('sets').select('id, weight, weight_unit, weight_type, reps, num_sets, notes, logged_at, location_id')
         .in('exercise_id', idsToQuery).order('logged_at', { ascending: false }).limit(30),
       15000
     );
+    let locationColumnAvailable = true;
+    if (!result.__timeout && result.error){
+      console.error('History query failed, retrying without location_id:', result.error);
+      locationColumnAvailable = false;
+      result = await withTimeout(
+        supabaseClient.from('sets').select('id, weight, weight_unit, weight_type, reps, num_sets, notes, logged_at')
+          .in('exercise_id', idsToQuery).order('logged_at', { ascending: false }).limit(30),
+        15000
+      );
+    }
     const list = overlay.querySelector('#historyList');
     if (result.__timeout || result.error){ list.innerHTML = '<div class="empty-state" style="padding:20px;">Could not load history.</div>'; return; }
     const sets = result.data || [];
@@ -4035,12 +4077,22 @@ function openLogForm(exerciseId, exerciseName){
     }
     overlay.querySelector('#chartArea').innerHTML = chartHtml;
 
-    list.innerHTML = sets.map(s =>
-      `<div class="log-row" data-id="${s.id}" style="flex-direction:column; align-items:flex-start; gap:3px;">
-        <div style="display:flex; justify-content:space-between; width:100%;"><div class="log-date">${formatLoggedDate(s.logged_at)}</div><div class="log-weight">${formatSetValue(s, true)}</div></div>
+    const allLocationsForHistory = locationColumnAvailable ? await loadLocations() : [];
+    list.innerHTML = sets.map(s => {
+      const locName = locationColumnAvailable && s.location_id
+        ? (allLocationsForHistory.find(l => l.id === s.location_id)?.name || '')
+        : '';
+      return `<div class="log-row" data-id="${s.id}" style="flex-direction:column; align-items:flex-start; gap:3px;">
+        <div style="display:flex; justify-content:space-between; width:100%;">
+          <div class="log-date">${formatLoggedDate(s.logged_at)}</div>
+          <div style="display:flex; align-items:center; gap:8px;">
+            ${locName ? `<span style="font-size:9.5px; color:var(--slate); background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:2px 7px;">📍 ${locName}</span>` : ''}
+            <div class="log-weight">${formatSetValue(s, true)}</div>
+          </div>
+        </div>
         ${s.notes ? `<div style="font-size:11px; color:var(--slate); font-style:italic;">${s.notes}</div>` : ''}
-      </div>`
-    ).join('');
+      </div>`;
+    }).join('');
     list.querySelectorAll('.log-row[data-id]').forEach(row => {
       let pressTimer = null;
       const start = () => { pressTimer = setTimeout(() => confirmDeleteLog(row.dataset.id, loadHistory), 550); };
@@ -4987,6 +5039,10 @@ async function renderMe(){
           <div><div>📍 Assign Location</div><div class="small" style="color:var(--slate); margin-top:2px;">Tell the app what's where, gym by gym</div></div>
           <div class="chev" style="margin-top:2px;">›</div>
         </div>
+        <div class="me-item" id="defaultLocationBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+          <div><div>🏠 Default Location</div><div class="small" style="color:var(--slate); margin-top:2px;">Used when logging a set if Track isn't set to a specific location</div></div>
+          <div class="chev" style="margin-top:2px;">›</div>
+        </div>
         <div class="me-item" id="scanSplitTagsBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
           <div><div>🏷️ Tag Workouts</div><div class="small" style="color:var(--slate); margin-top:2px;">Push, pull, upper, lower - all figured out for you</div></div>
           <div class="chev" style="margin-top:2px;">›</div>
@@ -5018,6 +5074,7 @@ async function renderMe(){
     'Loads your locations and every exercise you have - can take a moment.',
     () => openBulkLocationAssign()
   );
+  document.getElementById('defaultLocationBtn').onclick = () => openDefaultLocationPicker();
   document.getElementById('scanSplitTagsBtn').onclick = openSplitTagReview;
   document.getElementById('reorganizeWeekBtn').onclick = openPlanReorganizer;
   document.getElementById('changeSingleDayBtn').onclick = openChangeSingleDay;
