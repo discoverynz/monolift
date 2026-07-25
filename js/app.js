@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.47';
+const APP_VERSION = 'Beta 5.48';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -3851,6 +3851,7 @@ function openLogForm(exerciseId, exerciseName){
       <div id="tagInfoArea" style="padding:0 18px; margin-bottom:10px;"></div>
       <div id="guideArea" style="margin-bottom:18px;"></div>
       <div id="sameAsLastArea" style="margin-bottom:18px;"></div>
+      <button class="save-btn" id="saveSetBtn" style="margin-bottom:18px;">Save Set</button>
       <div style="height:1px; background:var(--line); margin:0 18px 18px 18px;"></div>
       <div class="field-label">Weight or Time <span class="opt">(optional)</span></div>
       <div class="field-card">
@@ -3872,7 +3873,6 @@ function openLogForm(exerciseId, exerciseName){
       <div class="field-card"><input class="field-input" id="repsInput" type="number" inputmode="numeric" placeholder="—"></div>
       <div class="field-label">Notes <span class="opt">(optional)</span></div>
       <div class="field-card"><input class="field-input" id="notesInput" type="text" placeholder="Anything worth remembering" style="font-size:14px; font-weight:400;"></div>
-      <button class="save-btn" id="saveSetBtn">Save Set</button>
       <div class="section-label">History</div>
       <div id="chartArea"></div>
       <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; padding:0 18px 6px 18px; font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:0.5px; color:var(--slate); text-transform:uppercase;">
@@ -4146,7 +4146,7 @@ function openLogForm(exerciseId, exerciseName){
     if (editLink) editLink.onclick = () => openEditTagsForm(exerciseId, exerciseName);
   })();
 
-  overlay.querySelector('#saveSetBtn').onclick = async () => {
+  async function handleSaveClick(){
     const weightRaw = document.getElementById('weightInput').value;
     const setsVal = document.getElementById('setsInput').value;
     const repsVal = document.getElementById('repsInput').value;
@@ -4158,7 +4158,8 @@ function openLogForm(exerciseId, exerciseName){
       overlay.remove();
       if (state.currentTab === 'track') renderTrack();
     }
-  };
+  }
+  overlay.querySelector('#saveSetBtn').onclick = handleSaveClick;
 }
 
 // ---------- REST TIMER (standalone, manual) ----------
