@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.41';
+const APP_VERSION = 'Beta 5.42';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -693,17 +693,6 @@ function isAvailableAtLocation(ex, locationId){
   return ex.location_ids.includes(locationId);
 }
 
-// For an exercise that's NOT available at the current location, look for an
-// alt-group sibling that IS - leans on the alt-group system already built
-// rather than inventing a parallel mechanism.
-function findLocationSwap(ex, allDayExercises, locationId){
-  if (!ex.alt_group_id) return null;
-  const sibling = allDayExercises.find(other =>
-    other.id !== ex.id && other.alt_group_id === ex.alt_group_id && isAvailableAtLocation(other, locationId)
-  );
-  return sibling || null;
-}
-
 function formatSetsReps(s){
   if (s.num_sets && s.reps) return ` (${s.num_sets} × ${s.reps})`;
   if (s.reps) return ` × ${s.reps}`;
@@ -943,19 +932,12 @@ function exerciseRow(ex){
 
   const mech = ex.mechanicInfo;
   const mechTag = mech ? `<span style="font-size:9px; padding:2px 5px; border-radius:4px; margin-left:5px; background:${mech.value==='compound'?'rgba(255,107,26,0.15)':'rgba(122,150,220,0.15)'}; color:${mech.value==='compound'?'#FF6B1A':'#7BA6C9'}; opacity:${mech.guessed?0.75:1};">${mech.guessed?'~':''}${mech.value==='compound'?'Compound':'Isolation'}</span>` : '';
-  // locationAvailable/locationSwap: items that are neither available nor
-  // swappable are filtered out before reaching this function entirely, so the
-  // only remaining case here is a real swap suggestion.
-  const locSwapLine = (!ex.locationAvailable && ex.locationSwap)
-    ? `<div class="small" style="color:#E8A33D; margin-top:3px;">↳ Not here — swap to ${ex.locationSwap.name}</div>`
-    : '';
 
   return `<div class="exercise" style="${borderStyle}" data-id="${ex.id}" data-name="${ex.name}">
     ${cornerTag}
     <div style="flex:1; min-width:0; ${topPad}">
       <div class="ex-name">${ex.name}${mechTag}</div>
       ${subtitle}
-      ${locSwapLine}
     </div>
     ${showCheck ? `<div class="check-circle">${ICON_CHECK}</div>` : `<div class="chev">›</div>`}
   </div>`;
@@ -1439,19 +1421,15 @@ async function renderTrack(){
   ]);
   state.exercises.forEach(ex => { ex.mechanicInfo = classifyMechanic(matchExercise(ex.name, exdb)); });
   const currentLocationId = getCurrentLocationId();
-  state.exercises.forEach(ex => {
-    ex.locationAvailable = isAvailableAtLocation(ex, currentLocationId);
-    ex.locationSwap = ex.locationAvailable ? null : findLocationSwap(ex, state.exercises, currentLocationId);
-  });
+  state.exercises.forEach(ex => { ex.locationAvailable = isAvailableAtLocation(ex, currentLocationId); });
   const currentLocationName = allLocations.find(l => l.id === currentLocationId)?.name || null;
   const hideCompleted = getHideCompletedPref();
-  // Only show what's actually usable at the current location - either directly
-  // available, or has a real swap suggestion. A separate list from
-  // state.exercises so progress stats above still reflect the whole day's plan,
-  // not just what's visible right now. Hide Completed (including alt-completed)
-  // filters further, but only for display - the stats above still count everything.
+  // Strict location filter: only what's actually available here, full stop -
+  // not exercises that aren't here even if an alt-group swap exists elsewhere.
+  // A separate list from state.exercises so progress stats above still
+  // reflect the whole day's plan, not just what's visible right now.
   const visibleExercises = state.exercises.filter(ex =>
-    (ex.locationAvailable || ex.locationSwap) && (!hideCompleted || !(ex.loggedToday || ex.completeVia))
+    ex.locationAvailable && (!hideCompleted || !(ex.loggedToday || ex.completeVia))
   );
   const { grouped, orderedKeys } = await groupExercisesByChoice(visibleExercises, groupBy);
 
@@ -4997,7 +4975,11 @@ async function renderMe(){
   document.getElementById('replayTourBtn').onclick = () => showOnboarding('teach');
   document.getElementById('redoWeekBtn').onclick = () => showOnboarding('setup');
   document.getElementById('backupPlanBtn').onclick = openBackupPlanScreen;
-  document.getElementById('bulkLocationBtn').onclick = openBulkLocationAssign;
+  document.getElementById('bulkLocationBtn').onclick = (e) => showPreCheckPopover(e.currentTarget,
+    'Open Assign Location?',
+    'Loads your locations and every exercise you have - can take a moment.',
+    () => openBulkLocationAssign()
+  );
   document.getElementById('scanSplitTagsBtn').onclick = openSplitTagReview;
   document.getElementById('reorganizeWeekBtn').onclick = openPlanReorganizer;
   document.getElementById('changeSingleDayBtn').onclick = openChangeSingleDay;
