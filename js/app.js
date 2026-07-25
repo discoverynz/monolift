@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.46';
+const APP_VERSION = 'Beta 5.47';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -3859,13 +3859,13 @@ function openLogForm(exerciseId, exerciseName){
           <button class="active" data-u="kg">kg</button><button data-u="lb">lb</button><button data-u="sec">sec</button><button data-u="pin">pin</button>
         </div>
       </div>
-      <div class="field-label">Location <span class="opt">(some machines differ by location)</span></div>
-      <div class="chip-row" id="setLocationRow" style="flex-wrap:wrap;"><div class="small" style="color:var(--slate); padding:8px 0;">Loading…</div></div>
       <div class="field-label">Per Side or Total?</div>
       <div class="chip-row">
         <div class="chip active" data-wt="total">Total</div>
         <div class="chip" data-wt="per">Per Side</div>
       </div>
+      <div class="field-label">Location <span class="opt">(some machines differ by location)</span></div>
+      <div class="chip-row" id="setLocationRow" style="flex-wrap:wrap;"><div class="small" style="color:var(--slate); padding:8px 0;">Loading…</div></div>
       <div class="field-label">Sets <span class="opt">(optional)</span></div>
       <div class="field-card"><input class="field-input" id="setsInput" type="number" inputmode="numeric" placeholder="—"></div>
       <div class="field-label">Reps <span class="opt">(optional)</span></div>
@@ -3875,6 +3875,9 @@ function openLogForm(exerciseId, exerciseName){
       <button class="save-btn" id="saveSetBtn">Save Set</button>
       <div class="section-label">History</div>
       <div id="chartArea"></div>
+      <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; padding:0 18px 6px 18px; font-family:'JetBrains Mono',monospace; font-size:9px; letter-spacing:0.5px; color:var(--slate); text-transform:uppercase;">
+        <div>Date</div><div style="text-align:center;">Location</div><div style="text-align:right;">Weight</div>
+      </div>
       <div id="historyList"><div class="empty-state" style="padding:20px;">Loading…</div></div>
     </div>`;
   document.body.appendChild(overlay);
