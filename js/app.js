@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.60';
+const APP_VERSION = 'Beta 5.61';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -108,6 +108,11 @@ function getStarterExercises(dayTypeLabel){
 }
 async function quickAddStarter(name, category, weekday){
   const { data: userData } = await supabaseClient.auth.getUser();
+  const existingResult = await withTimeout(
+    supabaseClient.from('exercises').select('id').eq('user_id', userData.user.id).eq('weekday', weekday).ilike('name', name).eq('active', true).maybeSingle(),
+    15000
+  );
+  if (!existingResult.__timeout && !existingResult.error && existingResult.data){ renderTrack(); return; }
   const { error } = await supabaseClient.from('exercises').insert({
     user_id: userData.user.id, name, category, weekday, alt_group_id: null
   });
@@ -1172,6 +1177,10 @@ function openPlanSubPage(){
         <div><div>Tag Workouts</div><div class="small" style="color:var(--slate); margin-top:2px;">Push, pull, upper, lower - what Reorganize uses to build a split automatically</div></div>
         <div class="chev" style="margin-top:2px;">›</div>
       </div>
+      <div class="me-item" id="subDupeCleanBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+        <div><div>Clean Up Duplicates</div><div class="small" style="color:var(--slate); margin-top:2px;">Find and merge the same exercise showing up more than once on a day</div></div>
+        <div class="chev" style="margin-top:2px;">›</div>
+      </div>
       ${localStorage.getItem('zealift_reorg_snapshot') ? `<div class="me-item" id="subRevertReorgBtn"><div style="color:#E8A33D;">Revert Last Reorganization</div><div class="chev">›</div></div>` : ''}
     </div>`;
   document.body.appendChild(overlay);
@@ -1180,8 +1189,82 @@ function openPlanSubPage(){
   overlay.querySelector('#subSwapDaysBtn').onclick = openSwapDaysForm;
   overlay.querySelector('#subRedoWeekBtn').onclick = () => showOnboarding('setup');
   overlay.querySelector('#subScanSplitTagsBtn').onclick = openSplitTagReview;
+  overlay.querySelector('#subDupeCleanBtn').onclick = openDuplicateCleanupScreen;
   const subRevertBtn = overlay.querySelector('#subRevertReorgBtn');
   if (subRevertBtn) subRevertBtn.onclick = revertLastReorganization;
+}
+
+async function openDuplicateCleanupScreen(){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeDupeClean">✕</button><h1>Clean Up Duplicates</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll" id="dupeCleanBody"><div class="small" style="padding:20px 18px; color:var(--slate);">Scanning…</div></div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeDupeClean').onclick = () => overlay.remove();
+
+  const { data: userData } = await supabaseClient.auth.getUser();
+  const exResult = await withTimeout(
+    supabaseClient.from('exercises').select('id, name, weekday, alt_group_id, category, created_at').eq('user_id', userData.user.id).eq('active', true),
+    15000
+  );
+  const all = exResult.__timeout || exResult.error ? [] : (exResult.data || []);
+  const byKey = {};
+  all.forEach(ex => {
+    const key = ex.weekday + '|' + ex.name.toLowerCase();
+    (byKey[key] = byKey[key] || []).push(ex);
+  });
+  // A duplicate group is the same exercise name on the same day, more than
+  // once - prioritizes whichever record already has an alt group set as the
+  // keeper, since that's real, valuable data worth not losing.
+  const groups = Object.values(byKey).filter(g => g.length > 1).map(members => {
+    const sorted = [...members].sort((a, b) => {
+      if (!!a.alt_group_id !== !!b.alt_group_id) return a.alt_group_id ? -1 : 1;
+      return (a.created_at || '').localeCompare(b.created_at || '');
+    });
+    return { keeper: sorted[0], duplicates: sorted.slice(1), name: sorted[0].name, weekday: sorted[0].weekday };
+  });
+
+  const body = overlay.querySelector('#dupeCleanBody');
+  if (!groups.length){
+    body.innerHTML = `<div class="empty-state" style="padding:30px 18px;">No duplicates found - everything's clean.</div>`;
+    return;
+  }
+  body.innerHTML = `
+    <div class="small" style="padding:12px 18px; color:var(--slate); line-height:1.6;">${groups.length} exercise${groups.length===1?'':'s'} appear more than once on the same day. For each, the version with an alt group (or the oldest, if none have one) is kept - the rest are deactivated, but any logged history on them is moved to the one being kept first, so nothing is lost.</div>
+    ${groups.map((g, i) => `
+      <div class="proposal-card" style="margin:0 18px 10px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px;">
+        <div class="ex-name" style="font-size:13px; margin-bottom:4px;">${g.name} <span class="small" style="color:var(--slate);">· ${DAY_NAMES[g.weekday]}</span></div>
+        <div class="small" style="color:var(--good);">✓ Keeping ${g.keeper.alt_group_id ? '(has alt group)' : '(oldest)'}</div>
+        <div class="small" style="color:#E8492A;">${g.duplicates.length} duplicate${g.duplicates.length===1?'':'s'} will be deactivated</div>
+      </div>
+    `).join('')}
+    <button class="save-btn" id="confirmDupeCleanBtn" style="margin:0 18px 20px 18px;">Clean Up ${groups.length} Group${groups.length===1?'':'s'}</button>
+  `;
+
+  body.querySelector('#confirmDupeCleanBtn').onclick = async () => {
+    const btn = body.querySelector('#confirmDupeCleanBtn');
+    btn.textContent = 'Cleaning…';
+    let movedSets = 0, deactivated = 0;
+    for (const g of groups){
+      for (const dupe of g.duplicates){
+        const setsResult = await withTimeout(
+          supabaseClient.from('sets').select('id').eq('exercise_id', dupe.id),
+          15000
+        );
+        const dupeSets = setsResult.__timeout || setsResult.error ? [] : (setsResult.data || []);
+        for (const s of dupeSets){
+          await supabaseClient.from('sets').update({ exercise_id: g.keeper.id }).eq('id', s.id);
+          movedSets++;
+        }
+        await supabaseClient.from('exercises').update({ active: false }).eq('id', dupe.id);
+        deactivated++;
+      }
+    }
+    overlay.remove();
+    alert(`Cleaned up ${deactivated} duplicate${deactivated===1?'':'s'}${movedSets ? `, moved ${movedSets} logged set${movedSets===1?'':'s'} to the kept record` : ''}.`);
+    if (state.currentTab === 'track') renderTrack();
+  };
 }
 
 function openReorganizeChoice(){
@@ -1704,6 +1787,21 @@ async function openSuggestionPreview(name, category, navList){
 
   overlay.querySelector('#addSuggestionBtn').onclick = async () => {
     const { data: userData } = await supabaseClient.auth.getUser();
+    // This was the actual source of same-day duplicates: tapping "+ Add" more
+    // than once on the same suggestion (e.g. navigating back to it, or
+    // re-adding after it resurfaces) inserted a brand new record every time
+    // with no check for one already existing today. Now checks first, same
+    // as the other add-exercise flow already does correctly.
+    const existingResult = await withTimeout(
+      supabaseClient.from('exercises').select('id').eq('user_id', userData.user.id).eq('weekday', state.selectedDay).ilike('name', name).eq('active', true).maybeSingle(),
+      15000
+    );
+    if (!existingResult.__timeout && !existingResult.error && existingResult.data){
+      overlay.remove();
+      state.currentTab = 'track';
+      openLogForm(existingResult.data.id, name);
+      return;
+    }
     const { error } = await supabaseClient.from('exercises').insert({
       user_id: userData.user.id, name, category, weekday: state.selectedDay, alt_group_id: null
     });
@@ -3964,6 +4062,13 @@ async function openNewExerciseForm(){
     const name = document.getElementById('exNameInput').value.trim();
     if (!name) return;
     const { data: userData } = await supabaseClient.auth.getUser();
+    const existingResult = await withTimeout(
+      supabaseClient.from('exercises').select('id').eq('user_id', userData.user.id).eq('weekday', selectedDay).ilike('name', name).eq('active', true).maybeSingle(),
+      15000
+    );
+    if (!existingResult.__timeout && !existingResult.error && existingResult.data){
+      if (!confirm(`"${name}" already exists on ${DAY_NAMES[selectedDay]}. Add another copy anyway?`)) return;
+    }
     const { error } = await supabaseClient.from('exercises').insert({
       user_id: userData.user.id, name, category: selectedCategory, weekday: selectedDay,
       alt_group_id: pickedAltGroup ? pickedAltGroup.id : null,
