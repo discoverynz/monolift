@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.56';
+const APP_VERSION = 'Beta 5.57';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -116,6 +116,8 @@ async function quickAddStarter(name, category, weekday){
 }
 
 function getGroupByPref(){ return localStorage.getItem('zealift_group_by') || 'equipment'; }
+function getSplitModePref(){ return localStorage.getItem('zealift_split_mode') || 'ppl'; }
+function setSplitModePref(v){ localStorage.setItem('zealift_split_mode', v); }
 function setGroupByPref(v){ localStorage.setItem('zealift_group_by', v); }
 
 // Groups a list of {name, category, ...} exercises either by their stored equipment
@@ -158,7 +160,7 @@ function getEffectiveMuscleLabel(ex, db){
   return muscle ? fineMuscleCategory(muscle, ex.name) : 'Other';
 }
 
-async function groupExercisesByChoice(exercises, groupBy){
+async function groupExercisesByChoice(exercises, groupBy, splitMode){
   const grouped = {};
   let orderedKeys;
   if (groupBy === 'muscle'){
@@ -170,13 +172,19 @@ async function groupExercisesByChoice(exercises, groupBy){
     orderedKeys = Object.keys(grouped).sort((a,b) => a === 'Other' ? 1 : b === 'Other' ? -1 : muscleSortKey(a).localeCompare(muscleSortKey(b)));
   } else if (groupBy === 'split'){
     const db = await loadExerciseDB();
-    const order = ['Push','Pull','Legs','Other'];
+    const isUpperLower = splitMode === 'upperlower';
+    const order = isUpperLower ? ['Upper','Lower','Other'] : ['Push','Pull','Legs','Other'];
     exercises.forEach(ex => {
       const match = matchExercise(ex.name, db);
       const muscle = match && match.primaryMuscles && match.primaryMuscles[0];
-      const pp = ex.push_pull || classifyPushPull(muscle, ex.name);
       const ul = ex.upper_lower || classifyUpperLower(muscle);
-      const label = ul === 'lower' ? 'Legs' : (pp === 'push' ? 'Push' : pp === 'pull' ? 'Pull' : 'Other');
+      let label;
+      if (isUpperLower){
+        label = ul === 'upper' ? 'Upper' : ul === 'lower' ? 'Lower' : 'Other';
+      } else {
+        const pp = ex.push_pull || classifyPushPull(muscle, ex.name);
+        label = ul === 'lower' ? 'Legs' : (pp === 'push' ? 'Push' : pp === 'pull' ? 'Pull' : 'Other');
+      }
       (grouped[label] = grouped[label] || []).push(ex);
     });
     orderedKeys = order;
@@ -272,12 +280,29 @@ function groupByToggleHtml(current){
   return `<div style="padding:10px 18px 10px 18px;">
     <div style="display:flex; border:1px solid var(--line);">
       <div class="groupby-chip ${current==='equipment'?'active':''}" data-groupby="equipment"
-        style="flex:1; text-align:center; padding:7px 0; font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px; color:${current==='equipment'?'var(--ink)':'var(--slate)'}; background:${current==='equipment'?'var(--flame)':'transparent'};">EQUIPMENT</div>
+        style="flex:1; text-align:center; padding:7px 0; font-family:'Bebas Neue',sans-serif; font-size:13px; letter-spacing:1px; color:${current==='equipment'?'var(--ink)':'var(--slate)'}; background:${current==='equipment'?'var(--flame)':'transparent'};">EQUIPMENT</div>
       <div class="groupby-chip ${current==='muscle'?'active':''}" data-groupby="muscle"
+        style="flex:1; text-align:center; padding:7px 0; font-family:'Bebas Neue',sans-serif; font-size:13px; letter-spacing:1px; color:${current==='muscle'?'var(--ink)':'var(--slate)'}; background:${current==='muscle'?'var(--flame)':'transparent'};">MUSCLE</div>
+    </div>
+  </div>`;
+}
+// Picker-specific: adds a third Split option with its own nested sub-choice
+// (Push/Pull/Legs vs Upper/Lower), since those are two different ways of
+// slicing the same exercises, not one flat category list.
+function pickerGroupByToggleHtml(current, splitMode){
+  return `<div style="padding:10px 18px 10px 18px;">
+    <div style="display:flex; border:1px solid var(--line);">
+      <div class="groupby-chip" data-groupby="equipment"
+        style="flex:1; text-align:center; padding:7px 0; font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px; color:${current==='equipment'?'var(--ink)':'var(--slate)'}; background:${current==='equipment'?'var(--flame)':'transparent'};">EQUIPMENT</div>
+      <div class="groupby-chip" data-groupby="muscle"
         style="flex:1; text-align:center; padding:7px 0; font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px; color:${current==='muscle'?'var(--ink)':'var(--slate)'}; background:${current==='muscle'?'var(--flame)':'transparent'};">MUSCLE</div>
-      <div class="groupby-chip ${current==='split'?'active':''}" data-groupby="split"
+      <div class="groupby-chip" data-groupby="split"
         style="flex:1; text-align:center; padding:7px 0; font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px; color:${current==='split'?'var(--ink)':'var(--slate)'}; background:${current==='split'?'var(--flame)':'transparent'};">SPLIT</div>
     </div>
+    ${current==='split' ? `<div style="display:flex; gap:8px; margin-top:8px;">
+      <div class="splitmode-chip ${splitMode!=='upperlower'?'active':''}" data-splitmode="ppl" style="flex:1; text-align:center; padding:6px 0; border-radius:14px; border:1px solid var(--line); font-size:11px; font-family:'Bebas Neue',sans-serif; letter-spacing:0.5px; color:${splitMode!=='upperlower'?'var(--ink)':'var(--slate)'}; background:${splitMode!=='upperlower'?'var(--flame)':'transparent'};">PUSH / PULL / LEGS</div>
+      <div class="splitmode-chip ${splitMode==='upperlower'?'active':''}" data-splitmode="upperlower" style="flex:1; text-align:center; padding:6px 0; border-radius:14px; border:1px solid var(--line); font-size:11px; font-family:'Bebas Neue',sans-serif; letter-spacing:0.5px; color:${splitMode==='upperlower'?'var(--ink)':'var(--slate)'}; background:${splitMode==='upperlower'?'var(--flame)':'transparent'};">UPPER / LOWER</div>
+    </div>` : ''}
   </div>`;
 }
 const ALT_COLORS = ["#2DD4BF","#9B7EDE","#E8A33D","#6FA8DC","#E8718D","#7FD17A"];
@@ -2393,24 +2418,30 @@ function muscleSortKey(label){
   return region + '|' + label;
 }
 
-function groupDatabaseExercises(list, groupBy){
+function groupDatabaseExercises(list, groupBy, splitMode){
   const grouped = {};
+  const isUpperLower = splitMode === 'upperlower';
   list.forEach(e => {
     const muscle = (e.primaryMuscles && e.primaryMuscles[0]) || null;
     let key;
     if (groupBy === 'muscle') key = muscle ? fineMuscleCategory(muscle, e.name) : 'Other';
     else if (groupBy === 'split'){
-      const pp = classifyPushPull(muscle, e.name);
       const ul = classifyUpperLower(muscle);
-      key = ul === 'lower' ? 'Legs' : (pp === 'push' ? 'Push' : pp === 'pull' ? 'Pull' : 'Other');
+      if (isUpperLower){
+        key = ul === 'upper' ? 'Upper' : ul === 'lower' ? 'Lower' : 'Other';
+      } else {
+        const pp = classifyPushPull(muscle, e.name);
+        key = ul === 'lower' ? 'Legs' : (pp === 'push' ? 'Push' : pp === 'pull' ? 'Pull' : 'Other');
+      }
     }
     else key = e.equipment ? cap(e.equipment) : 'Other';
     (grouped[key] = grouped[key] || []).push(e);
   });
+  const splitOrder = isUpperLower ? ['Upper','Lower','Other'] : ['Push','Pull','Legs','Other'];
   const sortFn = groupBy === 'muscle'
     ? (a,b) => a==='Other'?1:b==='Other'?-1:muscleSortKey(a).localeCompare(muscleSortKey(b))
     : groupBy === 'split'
-    ? (a,b) => ['Push','Pull','Legs','Other'].indexOf(a) - ['Push','Pull','Legs','Other'].indexOf(b)
+    ? (a,b) => splitOrder.indexOf(a) - splitOrder.indexOf(b)
     : (a,b) => a==='Other'?1:b==='Other'?-1:a.localeCompare(b);
   const orderedKeys = Object.keys(grouped).sort(sortFn);
   return { grouped, orderedKeys };
@@ -2455,8 +2486,9 @@ async function openPicker(initialTab, jumpToMuscle){
       });
       const deduped = Object.values(byName).filter(ex => ex.name.toLowerCase().includes(f));
       const groupBy = getGroupByPref();
+      const splitMode = getSplitModePref();
       const [{ grouped, orderedKeys }, db] = await Promise.all([
-        groupExercisesByChoice(deduped, groupBy),
+        groupExercisesByChoice(deduped, groupBy, splitMode),
         loadExerciseDB()
       ]);
 
@@ -2474,9 +2506,12 @@ async function openPicker(initialTab, jumpToMuscle){
           return `<div class="pick-row" data-id="${ex.id}" data-name="${ex.name}"><div><div class="ex-name">${ex.name}${mechTag}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}</div><div class="chev">›</div></div>`;
         }).join('');
       });
-      body.querySelector('#pickerGroupToggle').innerHTML = groupByToggleHtml(groupBy);
+      body.querySelector('#pickerGroupToggle').innerHTML = pickerGroupByToggleHtml(groupBy, splitMode);
       body.querySelectorAll('.groupby-chip').forEach(chip => {
         chip.onclick = () => { setGroupByPref(chip.dataset.groupby); renderList(body.querySelector('#pickerSearch').value); };
+      });
+      body.querySelectorAll('.splitmode-chip').forEach(chip => {
+        chip.onclick = () => { setSplitModePref(chip.dataset.splitmode); renderList(body.querySelector('#pickerSearch').value); };
       });
       body.querySelector('#pickerList').innerHTML = html || '<div class="empty-state">No matches.</div>';
       if (presentKeys.length > 0){
@@ -2546,7 +2581,8 @@ async function openPicker(initialTab, jumpToMuscle){
       const f = (filter || '').toLowerCase();
       const filtered = db.filter(e => e.name.toLowerCase().includes(f));
       const groupBy = getGroupByPref();
-      const { grouped, orderedKeys } = groupDatabaseExercises(filtered, groupBy);
+      const splitMode = getSplitModePref();
+      const { grouped, orderedKeys } = groupDatabaseExercises(filtered, groupBy, splitMode);
       let html = '';
       const presentKeys = orderedKeys.filter(k => (grouped[k]||[]).length);
       const flatOrder = []; // display order across every visible category, for swipe nav
@@ -2565,9 +2601,12 @@ async function openPicker(initialTab, jumpToMuscle){
           return `<div class="pick-row db-pick" data-name="${e.name}" data-equip="${e.equipment||''}"><div><div class="ex-name">${e.name}${star}${mechTag}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}${equipLine ? `<div class="small" style="color:var(--slate); opacity:0.7; font-size:10.5px;">${equipLine}</div>` : ''}</div><div class="chev">›</div></div>`;
         }).join('');
       });
-      body.querySelector('#dbGroupToggle').innerHTML = groupByToggleHtml(groupBy);
+      body.querySelector('#dbGroupToggle').innerHTML = pickerGroupByToggleHtml(groupBy, splitMode);
       body.querySelectorAll('.groupby-chip').forEach(chip => {
         chip.onclick = () => { setGroupByPref(chip.dataset.groupby); renderDbList(body.querySelector('#dbSearch').value); };
+      });
+      body.querySelectorAll('.splitmode-chip').forEach(chip => {
+        chip.onclick = () => { setSplitModePref(chip.dataset.splitmode); renderDbList(body.querySelector('#dbSearch').value); };
       });
       body.querySelector('#dbList').innerHTML = html || '<div class="empty-state">No matches.</div>';
 
