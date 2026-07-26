@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.63';
+const APP_VERSION = 'Beta 5.64';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -488,13 +488,12 @@ async function proposeAltGroups(dayExercises){
     const key = fineMuscle + '|' + pattern + '|' + mechKey;
     (buckets[key] = buckets[key] || []).push(ex);
   });
-  const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
   return Object.entries(buckets)
     .filter(([, members]) => members.length >= 2)
     .map(([key, members], i) => {
-      const [fineMuscle, pattern] = key.split('|');
+      const [fineMuscle] = key.split('|');
       return {
-        suggestedName: `${cap(pattern)} Alt`,
+        suggestedName: `${fineMuscle} Alt`,
         muscle: fineMuscle,
         color: ALT_COLORS[i % ALT_COLORS.length],
         members
@@ -2607,6 +2606,27 @@ function fineMuscleCategory(broadMuscle, exerciseName){
     if (n.includes('row')) return 'Upper Back';
     return 'Lats';
   }
+  if (m === 'triceps'){
+    // Long head crosses the shoulder joint, so it's emphasized whenever the
+    // arm goes overhead or the elbow is positioned behind the body (lying
+    // extensions, skullcrushers). Lateral head dominates pushdown-style
+    // movements where the arm stays at the side.
+    if (n.includes('overhead') || n.includes('skullcrusher') || n.includes('french press') ||
+        (n.includes('lying') && n.includes('extension'))) return 'Triceps (Long Head)';
+    if (n.includes('pushdown') || n.includes('push-down') || n.includes('push down') || n.includes('kickback')) return 'Triceps (Lateral Head)';
+    return 'Triceps';
+  }
+  if (m === 'biceps'){
+    // Long head is emphasized when the arm trails behind the body plane
+    // (incline curls); short head dominates when the arm is held in front
+    // (preacher, concentration curls). Hammer grip is checked first since
+    // it determines brachialis-dominance regardless of the angle - an
+    // incline hammer curl is still a brachialis movement, not a long-head one.
+    if (n.includes('hammer')) return 'Brachialis';
+    if (n.includes('incline')) return 'Biceps (Long Head)';
+    if (n.includes('preacher') || n.includes('concentration') || n.includes('spider')) return 'Biceps (Short Head)';
+    return 'Biceps';
+  }
   return cap(broadMuscle);
 }
 
@@ -2620,7 +2640,8 @@ const MUSCLE_SORT_REGION = {
   'Upper Chest':'Chest', 'Mid Chest':'Chest', 'Lower Chest':'Chest', 'Chest':'Chest',
   'Front Delts':'Shoulders', 'Side Delts':'Shoulders', 'Rear Delts':'Shoulders', 'Shoulders':'Shoulders',
   'Lats':'Back', 'Upper Back':'Back', 'Middle back':'Back', 'Lower back':'Back', 'Traps':'Back',
-  'Biceps':'Arms', 'Triceps':'Arms', 'Forearms':'Arms',
+  'Biceps':'Arms', 'Biceps (Long Head)':'Arms', 'Biceps (Short Head)':'Arms', 'Brachialis':'Arms',
+  'Triceps':'Arms', 'Triceps (Long Head)':'Arms', 'Triceps (Lateral Head)':'Arms', 'Forearms':'Arms',
   'Quadriceps':'Legs', 'Hamstrings':'Legs', 'Glutes':'Legs', 'Calves':'Legs', 'Adductors':'Legs', 'Abductors':'Legs',
   'Abdominals':'Core', 'Neck':'Neck'
 };
@@ -2631,7 +2652,8 @@ const MUSCLE_ANATOMICAL_ORDER = [
   'Front Delts', 'Side Delts', 'Rear Delts', 'Shoulders',
   'Upper Chest', 'Mid Chest', 'Lower Chest', 'Chest',
   'Lats', 'Upper Back', 'Middle back', 'Lower back',
-  'Biceps', 'Triceps', 'Forearms',
+  'Biceps (Long Head)', 'Biceps (Short Head)', 'Biceps', 'Brachialis',
+  'Triceps (Long Head)', 'Triceps (Lateral Head)', 'Triceps', 'Forearms',
   'Abdominals',
   'Glutes', 'Quadriceps', 'Hamstrings', 'Adductors', 'Abductors',
   'Calves'
