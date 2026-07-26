@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.58';
+const APP_VERSION = 'Beta 5.59';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -2524,7 +2524,7 @@ async function openPicker(initialTab, jumpToMuscle){
           const presentSubKeys = subOrderedKeys.filter(k => (subGrouped[k]||[]).length);
           presentSubKeys.forEach(subCat => {
             const subItems = (subGrouped[subCat] || []).slice().sort((a,b) => a.name.localeCompare(b.name));
-            html += `<div class="small" style="padding:8px 18px 4px 18px; color:var(--slate); font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:0.5px; text-transform:uppercase;">${subCat}</div>`;
+            html += `<div class="small" style="padding:10px 18px 5px 18px; color:var(--chalk); font-family:'Bebas Neue',sans-serif; font-size:14px; letter-spacing:0.5px;">${subCat}</div>`;
             html += subItems.map(renderExerciseRow).join('');
           });
         } else {
@@ -2636,7 +2636,7 @@ async function openPicker(initialTab, jumpToMuscle){
           const presentSubKeys = subOrderedKeys.filter(k => (subGrouped[k]||[]).length);
           presentSubKeys.forEach(subCat => {
             const subItems = (subGrouped[subCat] || []).slice().sort((a,b) => a.name.localeCompare(b.name));
-            html += `<div class="small" style="padding:8px 18px 4px 18px; color:var(--slate); font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:0.5px; text-transform:uppercase;">${subCat}</div>`;
+            html += `<div class="small" style="padding:10px 18px 5px 18px; color:var(--chalk); font-family:'Bebas Neue',sans-serif; font-size:14px; letter-spacing:0.5px;">${subCat}</div>`;
             html += subItems.map(renderDbRow).join('');
           });
         } else {
