@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.59';
+const APP_VERSION = 'Beta 5.60';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -2522,9 +2522,10 @@ async function openPicker(initialTab, jumpToMuscle){
           // section instead of building separate logic for it.
           const { grouped: subGrouped, orderedKeys: subOrderedKeys } = await groupExercisesByChoice(items, splitSubGroup);
           const presentSubKeys = subOrderedKeys.filter(k => (subGrouped[k]||[]).length);
-          presentSubKeys.forEach(subCat => {
+          presentSubKeys.forEach((subCat, subIdx) => {
             const subItems = (subGrouped[subCat] || []).slice().sort((a,b) => a.name.localeCompare(b.name));
-            html += `<div class="small" style="padding:10px 18px 5px 18px; color:var(--chalk); font-family:'Bebas Neue',sans-serif; font-size:14px; letter-spacing:0.5px;">${subCat}</div>`;
+            const divider = subIdx > 0 ? 'margin-top:14px; border-top:1px solid var(--line);' : '';
+            html += `<div class="small" style="${divider} padding:10px 18px 5px 18px; color:var(--chalk); font-family:'Bebas Neue',sans-serif; font-size:14px; letter-spacing:0.5px;">${subCat}</div>`;
             html += subItems.map(renderExerciseRow).join('');
           });
         } else {
@@ -2634,9 +2635,10 @@ async function openPicker(initialTab, jumpToMuscle){
         if (groupBy === 'split'){
           const { grouped: subGrouped, orderedKeys: subOrderedKeys } = groupDatabaseExercises(items, splitSubGroup);
           const presentSubKeys = subOrderedKeys.filter(k => (subGrouped[k]||[]).length);
-          presentSubKeys.forEach(subCat => {
+          presentSubKeys.forEach((subCat, subIdx) => {
             const subItems = (subGrouped[subCat] || []).slice().sort((a,b) => a.name.localeCompare(b.name));
-            html += `<div class="small" style="padding:10px 18px 5px 18px; color:var(--chalk); font-family:'Bebas Neue',sans-serif; font-size:14px; letter-spacing:0.5px;">${subCat}</div>`;
+            const divider = subIdx > 0 ? 'margin-top:14px; border-top:1px solid var(--line);' : '';
+            html += `<div class="small" style="${divider} padding:10px 18px 5px 18px; color:var(--chalk); font-family:'Bebas Neue',sans-serif; font-size:14px; letter-spacing:0.5px;">${subCat}</div>`;
             html += subItems.map(renderDbRow).join('');
           });
         } else {
