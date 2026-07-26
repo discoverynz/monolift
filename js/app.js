@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.52';
+const APP_VERSION = 'Beta 5.53';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -698,12 +698,26 @@ async function loadExercises(){
   state.exercises = withLogs;
 }
 
-function getCurrentLocationId(){ return localStorage.getItem('zealift_current_location') || null; }
+// The active location is a per-day choice, not a permanent one - store today's
+// date alongside it, and once that date has passed, treat it as unset rather
+// than silently staying stuck on whatever was picked days ago. Falls through
+// to the designated Default Location (or Anywhere) each new day.
+function getCurrentLocationId(){
+  const raw = localStorage.getItem('zealift_current_location');
+  if (!raw) return null;
+  try {
+    const { id, date } = JSON.parse(raw);
+    if (date !== todayStr()) return null;
+    return id || null;
+  } catch(e){
+    return null; // legacy plain-string value from before this format existed
+  }
+}
 function getDefaultLocationId(){ return localStorage.getItem('zealift_default_location') || null; }
 function setDefaultLocationId(id){ if (id) localStorage.setItem('zealift_default_location', id); else localStorage.removeItem('zealift_default_location'); }
 function getHideCompletedPref(){ return localStorage.getItem('zealift_hide_completed') === '1'; }
 function setHideCompletedPref(v){ localStorage.setItem('zealift_hide_completed', v ? '1' : '0'); }
-function setCurrentLocationId(id){ if (id) localStorage.setItem('zealift_current_location', id); else localStorage.removeItem('zealift_current_location'); }
+function setCurrentLocationId(id){ if (id) localStorage.setItem('zealift_current_location', JSON.stringify({ id, date: todayStr() })); else localStorage.removeItem('zealift_current_location'); }
 
 // An exercise with no locations set is available everywhere (untagged = universal,
 // so introducing locations doesn't break exercises nobody's gotten around to
@@ -1615,7 +1629,7 @@ async function renderTrack(){
     loadLocations()
   ]);
   state.exercises.forEach(ex => { ex.mechanicInfo = classifyMechanic(matchExercise(ex.name, exdb)); });
-  const currentLocationId = getCurrentLocationId();
+  const currentLocationId = getCurrentLocationId() || getDefaultLocationId();
   state.exercises.forEach(ex => { ex.locationAvailable = isAvailableAtLocation(ex, currentLocationId); });
   const currentLocationName = allLocations.find(l => l.id === currentLocationId)?.name || null;
   const hideCompleted = getHideCompletedPref();
