@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.62';
+const APP_VERSION = 'Beta 5.63';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1069,7 +1069,13 @@ async function showAltGroupHistory(groupId, groupName){
 }
 
 function exerciseRow(ex){
-  const groupName = ex.alt_groups ? ex.alt_groups.name : null;
+  const groupNameRaw = ex.alt_groups ? ex.alt_groups.name : null;
+  // Never show a day-of-week reference in the tag itself - a group can
+  // legitimately apply regardless of which day it's viewed from, so a name
+  // like "Back (Weds)" showing up on Monday is just confusing, not useful.
+  const groupName = groupNameRaw
+    ? groupNameRaw.replace(/\s*[\(\[]?\s*\b(mon(day)?|tue(s|sday)?|wed(s|nesday)?|thu(r|rs|rsday)?|fri(day)?|sat(urday)?|sun(day)?)\b\s*[\)\]]?\s*/gi, ' ').replace(/\s+/g,' ').trim() || null
+    : null;
   const groupColor = ex.alt_groups ? ex.alt_groups.color : null;
   const cornerTag = groupName
     ? `<div class="corner-tag alt-badge-tap" data-group-id="${ex.alt_group_id}" data-group-name="${groupName}" style="background:${groupColor};">${groupName}</div>`
@@ -1201,6 +1207,10 @@ function openPlanSubPage(){
         <div><div>Clean Up Duplicates</div><div class="small" style="color:var(--slate); margin-top:2px;">Find and merge the same exercise showing up more than once on a day</div></div>
         <div class="chev" style="margin-top:2px;">›</div>
       </div>
+      <div class="me-item" id="subFixAltsBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+        <div><div>Fix Alt Groups</div><div class="small" style="color:var(--slate); margin-top:2px;">Clean up groups scattered across days or named after one</div></div>
+        <div class="chev" style="margin-top:2px;">›</div>
+      </div>
       ${localStorage.getItem('zealift_reorg_snapshot') ? `<div class="me-item" id="subRevertReorgBtn"><div style="color:#E8A33D;">Revert Last Reorganization</div><div class="chev">›</div></div>` : ''}
     </div>`;
   document.body.appendChild(overlay);
@@ -1210,8 +1220,81 @@ function openPlanSubPage(){
   overlay.querySelector('#subRedoWeekBtn').onclick = () => showOnboarding('setup');
   overlay.querySelector('#subScanSplitTagsBtn').onclick = openSplitTagReview;
   overlay.querySelector('#subDupeCleanBtn').onclick = openDuplicateCleanupScreen;
+  overlay.querySelector('#subFixAltsBtn').onclick = openFixAltGroupsScreen;
   const subRevertBtn = overlay.querySelector('#subRevertReorgBtn');
   if (subRevertBtn) subRevertBtn.onclick = revertLastReorganization;
+}
+
+async function openFixAltGroupsScreen(){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeFixAlts">✕</button><h1>Fix Alt Groups</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll" id="fixAltsBody"><div class="small" style="padding:20px 18px; color:var(--slate);">Scanning…</div></div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeFixAlts').onclick = () => overlay.remove();
+
+  const { data: userData } = await supabaseClient.auth.getUser();
+  const [groupsResult, exResult] = await Promise.all([
+    withTimeout(supabaseClient.from('alt_groups').select('id, name').eq('user_id', userData.user.id), 15000),
+    withTimeout(supabaseClient.from('exercises').select('id, name, weekday, alt_group_id').eq('user_id', userData.user.id).eq('active', true), 15000)
+  ]);
+  const allGroups = groupsResult.__timeout || groupsResult.error ? [] : (groupsResult.data || []);
+  const allExercises = exResult.__timeout || exResult.error ? [] : (exResult.data || []);
+  const membersByGroup = {};
+  allExercises.forEach(ex => { if (ex.alt_group_id) (membersByGroup[ex.alt_group_id] = membersByGroup[ex.alt_group_id] || []).push(ex); });
+
+  // A well-formed alt group is a real swap option: same day, no day baked
+  // into the name (since the group can legitimately live on any day - naming
+  // it after one specific day is what made "Back (Weds)" show up confusingly
+  // on Monday).
+  const dayNameRegex = /\b(mon(day)?|tue(s|sday)?|wed(s|nesday)?|thu(r|rs|rsday)?|fri(day)?|sat(urday)?|sun(day)?)\b/i;
+  const fixes = [];
+  allGroups.forEach(g => {
+    const members = membersByGroup[g.id] || [];
+    if (members.length < 2 && !dayNameRegex.test(g.name)) return;
+    const dayCounts = {};
+    members.forEach(m => { dayCounts[m.weekday] = (dayCounts[m.weekday] || 0) + 1; });
+    const days = Object.keys(dayCounts).map(Number);
+    const majorityDay = days.length ? days.reduce((best, d) => dayCounts[d] > dayCounts[best] ? d : best, days[0]) : null;
+    const outliers = days.length > 1 ? members.filter(m => m.weekday !== majorityDay) : [];
+    const cleanedName = g.name.replace(/\s*[\(\[]?\s*\b(mon(day)?|tue(s|sday)?|wed(s|nesday)?|thu(r|rs|rsday)?|fri(day)?|sat(urday)?|sun(day)?)\b\s*[\)\]]?\s*/gi, ' ').replace(/\s+/g,' ').trim() || 'Alt';
+    const nameNeedsFix = cleanedName !== g.name;
+    if (outliers.length || nameNeedsFix){
+      fixes.push({ group: g, outliers, majorityDay, cleanedName: nameNeedsFix ? cleanedName : null });
+    }
+  });
+
+  const body = overlay.querySelector('#fixAltsBody');
+  if (!fixes.length){
+    body.innerHTML = `<div class="empty-state" style="padding:30px 18px;">No alt group issues found - everything's clean.</div>`;
+    return;
+  }
+  body.innerHTML = `
+    <div class="small" style="padding:12px 18px; color:var(--slate); line-height:1.6;">${fixes.length} alt group${fixes.length===1?' has':'s have'} an issue. A swap only makes sense between exercises on the same day, and a group's name shouldn't reference one specific day when it can live on any day.</div>
+    ${fixes.map((f, i) => `
+      <div class="proposal-card" style="margin:0 18px 10px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px;">
+        <div class="ex-name" style="font-size:13px; margin-bottom:6px;">${f.group.name}</div>
+        ${f.cleanedName ? `<div class="small" style="color:var(--flame);">Rename to "${f.cleanedName}"</div>` : ''}
+        ${f.outliers.length ? `<div class="small" style="color:#E8492A;">${f.outliers.length} exercise${f.outliers.length===1?'':'s'} on a different day will be removed from this group: ${f.outliers.map(o=>o.name + ' (' + DAY_NAMES[o.weekday] + ')').join(', ')}</div>` : ''}
+      </div>
+    `).join('')}
+    <button class="save-btn" id="confirmFixAltsBtn" style="margin:0 18px 20px 18px;">Fix ${fixes.length} Group${fixes.length===1?'':'s'}</button>
+  `;
+
+  body.querySelector('#confirmFixAltsBtn').onclick = async () => {
+    const btn = body.querySelector('#confirmFixAltsBtn');
+    btn.textContent = 'Fixing…';
+    for (const f of fixes){
+      if (f.cleanedName) await supabaseClient.from('alt_groups').update({ name: f.cleanedName }).eq('id', f.group.id);
+      for (const outlier of f.outliers){
+        await supabaseClient.from('exercises').update({ alt_group_id: null }).eq('id', outlier.id);
+      }
+    }
+    overlay.remove();
+    alert(`Fixed ${fixes.length} alt group${fixes.length===1?'':'s'}.`);
+    if (state.currentTab === 'track') renderTrack();
+  };
 }
 
 async function openDuplicateCleanupScreen(){
@@ -2531,6 +2614,8 @@ function fineMuscleCategory(broadMuscle, exerciseName){
 // Back and Middle Back sort adjacent to each other instead of being scattered
 // apart by whatever else happens to fall alphabetically between them (Mid Chest
 // would otherwise land between Lower Back and Middle Back in a pure A-Z sort).
+// Used by the edit-muscle picker to group chips by region (Chest, Shoulders,
+// etc) - a different concern from sort order, so kept separate.
 const MUSCLE_SORT_REGION = {
   'Upper Chest':'Chest', 'Mid Chest':'Chest', 'Lower Chest':'Chest', 'Chest':'Chest',
   'Front Delts':'Shoulders', 'Side Delts':'Shoulders', 'Rear Delts':'Shoulders', 'Shoulders':'Shoulders',
@@ -2539,9 +2624,21 @@ const MUSCLE_SORT_REGION = {
   'Quadriceps':'Legs', 'Hamstrings':'Legs', 'Glutes':'Legs', 'Calves':'Legs', 'Adductors':'Legs', 'Abductors':'Legs',
   'Abdominals':'Core', 'Neck':'Neck'
 };
+// True anatomical top-to-bottom order, not alphabetical within a region -
+// neck and traps sit at the top of the body, calves at the bottom.
+const MUSCLE_ANATOMICAL_ORDER = [
+  'Neck', 'Traps',
+  'Front Delts', 'Side Delts', 'Rear Delts', 'Shoulders',
+  'Upper Chest', 'Mid Chest', 'Lower Chest', 'Chest',
+  'Lats', 'Upper Back', 'Middle back', 'Lower back',
+  'Biceps', 'Triceps', 'Forearms',
+  'Abdominals',
+  'Glutes', 'Quadriceps', 'Hamstrings', 'Adductors', 'Abductors',
+  'Calves'
+];
 function muscleSortKey(label){
-  const region = MUSCLE_SORT_REGION[label] || label;
-  return region + '|' + label;
+  const idx = MUSCLE_ANATOMICAL_ORDER.indexOf(label);
+  return String(idx === -1 ? 999 : idx).padStart(3,'0') + '|' + label;
 }
 
 function groupDatabaseExercises(list, groupBy, splitMode){
