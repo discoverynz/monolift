@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.54';
+const APP_VERSION = 'Beta 5.55';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -334,6 +334,64 @@ const SPLIT_CATEGORY_LABELS = { push:'Push', pull:'Pull', legs:'Legs', upper:'Up
 // categories belonging to one split. Kept consistent with the same rules
 // deriveSplitCategory uses, just checkable against an arbitrary target
 // instead of only returning one canonical category per exercise.
+// Collapses alt-group siblings into a single slot each (they're meant to be
+// interchangeable, not all done in one session), keeping the others as swap
+// options attached to that slot rather than separate rows. Exercises with no
+// alt group just become their own single-item slot.
+function collapseAltGroups(items){
+  const byGroup = {};
+  const standalone = [];
+  items.forEach(it => {
+    if (it.altGroupId){
+      (byGroup[it.altGroupId] = byGroup[it.altGroupId] || []).push(it);
+    } else {
+      standalone.push({ representative: it, swapOptions: [] });
+    }
+  });
+  const grouped = Object.values(byGroup).map(members => {
+    const sorted = [...members].sort((a,b) => a.name.localeCompare(b.name));
+    return { representative: sorted[0], swapOptions: sorted.slice(1) };
+  });
+  return [...standalone, ...grouped];
+}
+
+// Once alt-groups are collapsed, a genuinely large day can still exceed what
+// fits a session. Rather than an arbitrary cut, this rounds-robins across
+// fine muscle regions (so a Push day doesn't accidentally load up on chest
+// with no triceps) and prefers compound movements first within each region.
+// Anything not selected stays visible, just unchecked by default - never
+// removed, always one tap away from being added back.
+function selectBalancedSlots(slots, targetSize){
+  if (slots.length <= targetSize) return { included: slots, excluded: [] };
+  const byRegion = {};
+  slots.forEach(s => {
+    const rep = s.representative;
+    const region = rep.muscle ? fineMuscleCategory(rep.muscle, rep.name) : 'Other';
+    (byRegion[region] = byRegion[region] || []).push(s);
+  });
+  Object.values(byRegion).forEach(list => {
+    list.sort((a, b) => {
+      const am = a.representative.mechanic, bm = b.representative.mechanic;
+      if (am === bm) return 0;
+      if (am === 'compound') return -1;
+      if (bm === 'compound') return 1;
+      return 0;
+    });
+  });
+  const regionKeys = Object.keys(byRegion);
+  const included = [];
+  let idx = 0;
+  while (included.length < targetSize && regionKeys.some(r => byRegion[r].length)){
+    const region = regionKeys[idx % regionKeys.length];
+    const list = byRegion[region];
+    if (list.length) included.push(list.shift());
+    idx++;
+  }
+  const includedSet = new Set(included);
+  const excluded = slots.filter(s => !includedSet.has(s));
+  return { included, excluded };
+}
+
 function exerciseMatchesCategory(ex, muscle, category){
   const m = (muscle || '').toLowerCase();
   if (category === 'push') return ex.push_pull === 'push' && ex.upper_lower !== 'lower';
@@ -3318,7 +3376,8 @@ async function openPlanReorganizer(){
       const match = matchExercise(item.name, db);
       const muscle = match && match.primaryMuscles && match.primaryMuscles[0];
       const category = deriveSplitCategory(sample, splitType, muscle);
-      return { ...item, category, muscle, altGroupId: sample.alt_group_id, push_pull: sample.push_pull, upper_lower: sample.upper_lower };
+      const mech = classifyMechanic(match);
+      return { ...item, category, muscle, mechanic: mech ? mech.value : null, altGroupId: sample.alt_group_id, push_pull: sample.push_pull, upper_lower: sample.upper_lower };
     });
 
     const body = overlay.querySelector('#reorgPreviewBody');
@@ -3366,6 +3425,23 @@ async function openPlanReorganizer(){
     const customSelections = {};
     dayPlans.forEach(dp => { if (dp.isCustom) customSelections[dp.dayIdx] = new Set(); });
 
+    // Option D: collapse alt-group siblings into one slot each (only one of
+    // them needs doing in a session, not all), then balance whatever's left
+    // against a realistic session size instead of pre-including every single
+    // matching exercise - which is how a Push day ends up with 39 items.
+    const SESSION_TARGET = 8;
+    const swapChoices = {}; // "dayIdx|slotIndex" -> chosen name, if swapped from the default representative
+    dayPlans.forEach(dp => {
+      if (dp.isCustom) return;
+      const itemsForCollapse = dp.items.map(it =>
+        (it.altGroupId && altGroupsToClear.has(it.altGroupId)) ? { ...it, altGroupId: null } : it
+      );
+      const allSlots = collapseAltGroups(itemsForCollapse);
+      const { included, excluded } = selectBalancedSlots(allSlots, SESSION_TARGET);
+      dp.slots = included;
+      dp.excludedSlots = excluded;
+    });
+
     body.innerHTML = `
       <div class="banner" style="margin:8px 18px 16px 18px; background:#251a12; border:1px solid #4a2f16; border-radius:10px; padding:12px 14px; font-size:11.5px; color:#E8A33D; line-height:1.5;">⚠ Nothing changes until you confirm below. Your current layout is saved automatically and can be restored with one tap from Me → Data if this isn't right.${altGroupsToClear.size ? ` ${altGroupsToClear.size} alt group${altGroupsToClear.size===1?'':'s'} would be scattered by this split, so ${altGroupsToClear.size===1?'it':'they'} will be cleared rather than forced together — use Auto-Group Alts afterward to rebuild ones that make sense here.` : ''}</div>
       ${dayPlans.map(dp => `
@@ -3379,21 +3455,84 @@ async function openPlanReorganizer(){
             <div class="pick-row custom-picker-toggle" data-day="${dp.dayIdx}" style="cursor:pointer;"><div class="ex-name" style="color:var(--flame); font-size:12.5px;">+ Add Exercises</div></div>
             <div class="custom-selected-list" data-day="${dp.dayIdx}"></div>
           ` : `
-            ${dp.items.length ? `<div style="padding:6px 14px 2px 14px; font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--slate);">${dp.items.length} exercises would move here</div>` : `<div style="padding:10px 14px; font-size:11px; color:var(--slate);">${dp.catLabel==='Not Assigned'||dp.catLabel==='Rest' ? 'Nothing assigned' : 'No matching exercises found'}</div>`}
-            ${dp.items.map(it => `<div class="reorg-item" data-day="${dp.dayIdx}" data-name="${it.name}" style="display:flex; justify-content:space-between; align-items:center; padding:7px 14px; font-size:12px;"><span>${it.name}</span><span class="reorg-rm" style="color:var(--slate); font-size:11px;">✕</span></div>`).join('')}
+            ${dp.slots.length ? `<div style="padding:6px 14px 2px 14px; font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--slate);">${dp.slots.length} exercises for the session${dp.excludedSlots.length ? ` · ${dp.excludedSlots.length} more available below` : ''}</div>` : `<div style="padding:10px 14px; font-size:11px; color:var(--slate);">${dp.catLabel==='Not Assigned'||dp.catLabel==='Rest' ? 'Nothing assigned' : 'No matching exercises found'}</div>`}
+            ${dp.slots.map((slot, si) => {
+              const chosenName = swapChoices[dp.dayIdx + '|' + si] || slot.representative.name;
+              return `<div class="reorg-item" data-day="${dp.dayIdx}" data-name="${chosenName}" style="display:flex; justify-content:space-between; align-items:center; padding:7px 14px; font-size:12px;">
+                <span>${chosenName}${slot.swapOptions.length ? ` <span class="reorg-swap" data-day="${dp.dayIdx}" data-slot="${si}" style="color:var(--flame); font-size:10.5px; text-decoration:underline;">↺ ${slot.swapOptions.length} alt${slot.swapOptions.length===1?'':'s'}</span>` : ''}</span>
+                <span class="reorg-rm" style="color:var(--slate); font-size:11px;">✕</span>
+              </div>`;
+            }).join('')}
+            ${dp.excludedSlots.length ? `
+              <div class="pick-row reorg-show-more" data-day="${dp.dayIdx}" style="cursor:pointer;"><div class="ex-name" style="color:var(--slate); font-size:11.5px;">+ ${dp.excludedSlots.length} more matching exercises</div></div>
+              <div class="reorg-excluded-list" data-day="${dp.dayIdx}" style="display:none;">
+                ${dp.excludedSlots.map((slot, si) => `<div class="reorg-excluded-item" data-day="${dp.dayIdx}" data-name="${slot.representative.name}" style="display:flex; justify-content:space-between; align-items:center; padding:7px 14px; font-size:12px; color:var(--slate);">
+                  <span>${slot.representative.name}</span>
+                  <span class="reorg-add" style="color:var(--flame); font-size:11px;">+ add</span>
+                </div>`).join('')}
+              </div>
+            ` : ''}
           `}
         </div>
       `).join('')}
       <button class="save-btn" id="confirmReorgBtn" style="margin:0 18px 20px 18px;">Confirm & Apply</button>
     `;
 
-    // Removing an auto-derived item means it stays where it is - tracked via
-    // a simple exclusion set.
+    // Removing a shown item means it stays where it is - tracked via a simple
+    // exclusion set, pre-populated with anything the balancing step left out
+    // by default so the confirm step has one consistent source of truth.
     const excluded = new Set();
+    dayPlans.forEach(dp => {
+      if (dp.isCustom || !dp.excludedSlots) return;
+      dp.excludedSlots.forEach(slot => excluded.add(dp.dayIdx + '|' + slot.representative.name));
+    });
     body.querySelectorAll('.reorg-item').forEach(row => {
       row.querySelector('.reorg-rm').onclick = () => {
         excluded.add(row.dataset.day + '|' + row.dataset.name);
         row.style.opacity = '0.3'; row.style.textDecoration = 'line-through';
+      };
+    });
+    body.querySelectorAll('.reorg-show-more').forEach(toggle => {
+      toggle.onclick = () => {
+        const list = body.querySelector(`.reorg-excluded-list[data-day="${toggle.dataset.day}"]`);
+        list.style.display = list.style.display === 'none' ? 'block' : 'none';
+      };
+    });
+    body.querySelectorAll('.reorg-add').forEach(btn => {
+      btn.onclick = (e) => {
+        const row = e.target.closest('.reorg-excluded-item');
+        excluded.delete(row.dataset.day + '|' + row.dataset.name);
+        row.style.color = 'var(--chalk)';
+        btn.textContent = '✓ included';
+        btn.style.color = 'var(--good)';
+      };
+    });
+    body.querySelectorAll('.reorg-swap').forEach(swapBtn => {
+      swapBtn.onclick = (e) => {
+        e.stopPropagation();
+        const dp = dayPlans.find(d => d.dayIdx === parseInt(swapBtn.dataset.day, 10));
+        const slot = dp.slots[parseInt(swapBtn.dataset.slot, 10)];
+        const options = [slot.representative, ...slot.swapOptions];
+        const popover = document.createElement('div');
+        popover.style = 'position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:80; display:flex; align-items:flex-end;';
+        popover.innerHTML = `<div style="width:100%; background:var(--panel); border-radius:18px 18px 0 0; padding:20px 18px calc(20px + env(safe-area-inset-bottom, 0px)) 18px;">
+          <div class="field-label" style="padding:0 0 8px 0;">Swap This Slot</div>
+          ${options.map(o => `<div class="pick-row swap-option" data-name="${o.name}"><div class="ex-name">${o.name}</div></div>`).join('')}
+        </div>`;
+        document.body.appendChild(popover);
+        popover.onclick = (ev) => { if (ev.target === popover) popover.remove(); };
+        popover.querySelectorAll('.swap-option').forEach(opt => {
+          opt.onclick = () => {
+            const key = swapBtn.dataset.day + '|' + swapBtn.dataset.slot;
+            const oldName = swapBtn.closest('.reorg-item').dataset.name;
+            excluded.delete(dp.dayIdx + '|' + oldName);
+            swapChoices[key] = opt.dataset.name;
+            const row = swapBtn.closest('.reorg-item');
+            row.dataset.name = opt.dataset.name;
+            row.querySelector('span').innerHTML = `${opt.dataset.name}${slot.swapOptions.length ? ` <span class="reorg-swap" style="color:var(--flame); font-size:10.5px; text-decoration:underline;">↺ swapped</span>` : ''}`;
+            popover.remove();
+          };
+        });
       };
     });
 
@@ -3449,11 +3588,15 @@ async function openPlanReorganizer(){
           }
           continue;
         }
-        const isFullBodyRepeat = splitType === 'fullbody' && dp.items.length && fullBodyDaysSeen > 0;
-        if (splitType === 'fullbody' && dp.items.length) fullBodyDaysSeen++;
+        const isFullBodyRepeat = splitType === 'fullbody' && dp.slots.length && fullBodyDaysSeen > 0;
+        if (splitType === 'fullbody' && dp.slots.length) fullBodyDaysSeen++;
 
-        for (const it of dp.items){
-          if (excluded.has(String(dp.dayIdx) + '|' + it.name)) continue;
+        const allCandidateSlots = [...dp.slots.map((slot, si) => ({ slot, si })), ...dp.excludedSlots.map(slot => ({ slot, si: null }))];
+        for (const { slot, si } of allCandidateSlots){
+          const resolvedName = si !== null ? (swapChoices[dp.dayIdx + '|' + si] || slot.representative.name) : slot.representative.name;
+          if (excluded.has(String(dp.dayIdx) + '|' + resolvedName)) continue;
+          const it = namedList.find(n => n.name === resolvedName);
+          if (!it) continue;
           const clearAlt = it.altGroupId && altGroupsToClear.has(it.altGroupId);
           if (isFullBodyRepeat){
             const sample = allExercises.find(e => e.name === it.name);
