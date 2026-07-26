@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.49';
+const APP_VERSION = 'Beta 5.50';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1001,6 +1001,90 @@ function showPreCheckPopover(anchorEl, title, description, onConfirm){
   setTimeout(() => document.addEventListener('click', dismiss, true), 0);
   popover.querySelector('.precheck-cancel').onclick = () => popover.remove();
   popover.querySelector('.precheck-confirm').onclick = () => { popover.remove(); onConfirm(); };
+}
+
+function openReorganizeChoice(){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeReorgChoice">✕</button><h1>Reorganize</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll">
+      <div class="small" style="padding:8px 18px 16px 18px; color:var(--slate); line-height:1.5;">Rebuild your whole week around a new split, or just change one day - everything else stays put either way.</div>
+      <div class="pick-row" id="reorgWholeWeekRow">
+        <div><div class="ex-name">✨ Whole Week</div><div class="small" style="color:var(--slate); margin-top:2px;">PPL, Arnold, Bro Split, Full Body, or your own</div></div>
+        <div class="chev">›</div>
+      </div>
+      <div class="pick-row" id="reorgOneDayRow">
+        <div><div class="ex-name">🔁 Just One Day</div><div class="small" style="color:var(--slate); margin-top:2px;">Change one day's focus, nothing else touched</div></div>
+        <div class="chev">›</div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeReorgChoice').onclick = () => overlay.remove();
+  overlay.querySelector('#reorgWholeWeekRow').onclick = () => { overlay.remove(); openPlanReorganizer(); };
+  overlay.querySelector('#reorgOneDayRow').onclick = () => { overlay.remove(); openChangeSingleDay(); };
+}
+
+async function openManageLocationsScreen(){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeManageLoc">✕</button><h1>Manage Locations</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll">
+      <div class="action-row" id="newLocRowManage"><div class="ex-name" style="color:var(--flame);">+ New Location</div></div>
+      <div id="manageLocList"><div class="small" style="padding:16px 18px; color:var(--slate);">Loading…</div></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeManageLoc').onclick = () => overlay.remove();
+  overlay.querySelector('#newLocRowManage').onclick = () => {
+    promptText({
+      title: 'New Location Name', placeholder: 'e.g. Home Gym',
+      onConfirm: async (name) => { await createLocation(name); render(); }
+    });
+  };
+
+  async function render(){
+    const listArea = overlay.querySelector('#manageLocList');
+    listArea.innerHTML = `<div class="small" style="padding:16px 18px; color:var(--slate);">Loading…</div>`;
+    const locations = await loadLocations();
+    if (!locations.length){
+      listArea.innerHTML = `<div class="empty-state" style="padding:20px 18px;">No locations yet.</div>`;
+      return;
+    }
+    listArea.innerHTML = locations.map(l => `
+      <div class="proposal-card" style="margin:0 18px 10px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; display:flex; justify-content:space-between; align-items:center;">
+        <div class="ex-name" style="font-size:13.5px;">${l.name}</div>
+        <div style="display:flex; gap:8px;">
+          <button class="manage-loc-rename" data-id="${l.id}" data-name="${l.name}" style="background:var(--ink); color:var(--slate); padding:8px 12px; border-radius:8px; font-size:11.5px;">Rename</button>
+          <button class="manage-loc-delete" data-id="${l.id}" data-name="${l.name}" style="background:var(--ink); color:#E8492A; padding:8px 12px; border-radius:8px; font-size:11.5px;">Delete</button>
+        </div>
+      </div>
+    `).join('');
+    listArea.querySelectorAll('.manage-loc-rename').forEach(btn => {
+      btn.onclick = () => {
+        promptText({
+          title: 'Rename Location', placeholder: 'Name', initialValue: btn.dataset.name,
+          onConfirm: async (newName) => { await supabaseClient.from('locations').update({ name: newName }).eq('id', btn.dataset.id); render(); }
+        });
+      };
+    });
+    listArea.querySelectorAll('.manage-loc-delete').forEach(btn => {
+      btn.onclick = async () => {
+        if (!confirm(`Delete "${btn.dataset.name}"? Exercises tagged to it will just lose that tag - nothing else is affected.`)) return;
+        // Clear this location from every exercise's location_ids first, so
+        // nothing points at a deleted row.
+        const { data: userData } = await supabaseClient.auth.getUser();
+        const exResult = await withTimeout(supabaseClient.from('exercises').select('id, location_ids').eq('user_id', userData.user.id), 15000);
+        const affected = (exResult.data || []).filter(ex => (ex.location_ids || []).includes(btn.dataset.id));
+        for (const ex of affected){
+          await supabaseClient.from('exercises').update({ location_ids: ex.location_ids.filter(id => id !== btn.dataset.id) }).eq('id', ex.id);
+        }
+        await supabaseClient.from('locations').delete().eq('id', btn.dataset.id);
+        render();
+      };
+    });
+  }
+  render();
 }
 
 async function openDefaultLocationPicker(){
@@ -4121,10 +4205,22 @@ function openLogForm(exerciseId, exerciseName){
     const locRow = overlay.querySelector('#setLocationRow');
     function renderLocRow(){
       locRow.innerHTML = `<div class="chip ${!selectedLocationId?'active':''}" data-loc="">Unassigned</div>`
-        + allLocations.map(l => `<div class="chip ${selectedLocationId===l.id?'active':''}" data-loc="${l.id}">${l.name}</div>`).join('');
-      locRow.querySelectorAll('.chip').forEach(chip => {
+        + allLocations.map(l => `<div class="chip ${selectedLocationId===l.id?'active':''}" data-loc="${l.id}">${l.name}</div>`).join('')
+        + `<div class="chip" id="setLocNewChip" style="color:var(--flame); border-color:var(--flame);">+ New</div>`;
+      locRow.querySelectorAll('.chip[data-loc]').forEach(chip => {
         chip.onclick = () => { selectedLocationId = chip.dataset.loc || null; renderLocRow(); };
       });
+      locRow.querySelector('#setLocNewChip').onclick = () => {
+        promptText({
+          title: 'New Location Name', placeholder: 'e.g. Home Gym',
+          onConfirm: async (name) => {
+            const loc = await createLocation(name);
+            allLocations.push(loc);
+            if (loc) selectedLocationId = loc.id;
+            renderLocRow();
+          }
+        });
+      };
     }
     renderLocRow();
 
@@ -5029,32 +5125,40 @@ async function renderMe(){
           <div class="avatar">${initial}</div>
           <div><div class="account-email">${email}</div><div class="account-tag">● Signed in</div></div>
         </div>
-        <div class="me-item" id="swapDaysBtn"><div>Swap Days</div><div class="chev">›</div></div>
         <div class="me-item" id="replayTourBtn"><div>How Zealift Works</div><div class="chev">›</div></div>
-        <div class="me-item" id="redoWeekBtn"><div>Redo Week Setup</div><div class="chev">›</div></div>
-        <div class="section-label">Data</div>
         <div class="me-item" id="backupPlanBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
           <div><div>📦 Backup Plan</div><div class="small" style="color:var(--slate); margin-top:2px;">Save a snapshot before you shake things up</div></div>
+          <div class="chev" style="margin-top:2px;">›</div>
+        </div>
+        <div class="section-label">Data</div>
+        <div class="small" style="padding:0 18px 4px 18px; color:var(--slate); font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:1px;">LOCATION</div>
+        <div class="me-item" id="defaultLocationBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+          <div><div>🏠 Default Location</div><div class="small" style="color:var(--slate); margin-top:2px;">Used when logging a set if Track isn't set to a specific location</div></div>
           <div class="chev" style="margin-top:2px;">›</div>
         </div>
         <div class="me-item" id="bulkLocationBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
           <div><div>📍 Assign Location</div><div class="small" style="color:var(--slate); margin-top:2px;">Tell the app what's where, gym by gym</div></div>
           <div class="chev" style="margin-top:2px;">›</div>
         </div>
-        <div class="me-item" id="defaultLocationBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
-          <div><div>🏠 Default Location</div><div class="small" style="color:var(--slate); margin-top:2px;">Used when logging a set if Track isn't set to a specific location</div></div>
+        <div class="me-item" id="manageLocationsBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+          <div><div>✏️ Manage Locations</div><div class="small" style="color:var(--slate); margin-top:2px;">Rename or delete a location</div></div>
+          <div class="chev" style="margin-top:2px;">›</div>
+        </div>
+        <div class="small" style="padding:14px 18px 4px 18px; color:var(--slate); font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:1px;">PLAN</div>
+        <div class="me-item" id="reorganizeChoiceBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+          <div><div>✨ Reorganize</div><div class="small" style="color:var(--slate); margin-top:2px;">Whole week or just one day - Zealift rebuilds it for you</div></div>
+          <div class="chev" style="margin-top:2px;">›</div>
+        </div>
+        <div class="me-item" id="swapDaysBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+          <div><div>🔀 Swap Days</div><div class="small" style="color:var(--slate); margin-top:2px;">Swap what's on two specific days</div></div>
+          <div class="chev" style="margin-top:2px;">›</div>
+        </div>
+        <div class="me-item" id="redoWeekBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+          <div><div>🔄 Redo Week Setup</div><div class="small" style="color:var(--slate); margin-top:2px;">Start the whole week over from scratch</div></div>
           <div class="chev" style="margin-top:2px;">›</div>
         </div>
         <div class="me-item" id="scanSplitTagsBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
           <div><div>🏷️ Tag Workouts</div><div class="small" style="color:var(--slate); margin-top:2px;">Push, pull, upper, lower - all figured out for you</div></div>
-          <div class="chev" style="margin-top:2px;">›</div>
-        </div>
-        <div class="me-item" id="reorganizeWeekBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
-          <div><div>✨ Change Split</div><div class="small" style="color:var(--slate); margin-top:2px;">PPL, Arnold, Bro Split, Full Body, or your own - Zealift rebuilds your whole week automatically</div></div>
-          <div class="chev" style="margin-top:2px;">›</div>
-        </div>
-        <div class="me-item" id="changeSingleDayBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
-          <div><div>🔁 Change One Day</div><div class="small" style="color:var(--slate); margin-top:2px;">Just swap one day's focus - everything else stays put</div></div>
           <div class="chev" style="margin-top:2px;">›</div>
         </div>
         ${localStorage.getItem('zealift_reorg_snapshot') ? `<div class="me-item" id="revertReorgBtn"><div style="color:#E8A33D;">Revert Last Reorganization</div><div class="chev">›</div></div>` : ''}
@@ -5077,9 +5181,9 @@ async function renderMe(){
     () => openBulkLocationAssign()
   );
   document.getElementById('defaultLocationBtn').onclick = () => openDefaultLocationPicker();
+  document.getElementById('manageLocationsBtn').onclick = () => openManageLocationsScreen();
   document.getElementById('scanSplitTagsBtn').onclick = openSplitTagReview;
-  document.getElementById('reorganizeWeekBtn').onclick = openPlanReorganizer;
-  document.getElementById('changeSingleDayBtn').onclick = openChangeSingleDay;
+  document.getElementById('reorganizeChoiceBtn').onclick = openReorganizeChoice;
   const revertBtn = document.getElementById('revertReorgBtn');
   if (revertBtn) revertBtn.onclick = revertLastReorganization;
   document.getElementById('refreshAppBtn').onclick = () => { location.reload(); };
