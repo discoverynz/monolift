@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.53';
+const APP_VERSION = 'Beta 5.54';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -2840,18 +2840,40 @@ async function openBulkLocationAssign(){
 // ---------- PLAN BACKUPS ----------
 async function createPlanBackup(name){
   const { data: userData } = await supabaseClient.auth.getUser();
-  const exResult = await withTimeout(
-    supabaseClient.from('exercises').select('id, name, category, weekday, alt_group_id, push_pull, upper_lower, location_ids').eq('user_id', userData.user.id).eq('active', true),
-    15000
-  );
+  let exResult;
+  try {
+    exResult = await withTimeout(
+      supabaseClient.from('exercises').select('id, name, category, weekday, alt_group_id, push_pull, upper_lower, location_ids').eq('user_id', userData.user.id).eq('active', true),
+      15000
+    );
+  } catch(e) {
+    return { backup: null, errorMessage: 'Could not read your exercises: ' + e.message };
+  }
   if (exResult.__timeout) return { backup: null, errorMessage: 'Timed out reading your exercises.' };
   if (exResult.error) return { backup: null, errorMessage: 'Could not read your exercises: ' + exResult.error.message };
   const exercises = exResult.data || [];
 
-  const result = await withTimeout(
-    supabaseClient.from('plan_backups').insert({ user_id: userData.user.id, name, snapshot: exercises }).select(),
-    15000
-  );
+  // The insert can genuinely fail at the network level on mobile (not just
+  // resolve with an error field) - "TypeError: Load failed" is Safari's raw
+  // fetch failure message, not something Supabase's own error handling ever
+  // sees, so it needs its own try/catch. One retry since this is more likely
+  // a transient blip than a real problem with the data.
+  async function attemptInsert(){
+    try {
+      return await withTimeout(
+        supabaseClient.from('plan_backups').insert({ user_id: userData.user.id, name, snapshot: exercises }).select(),
+        15000
+      );
+    } catch(e) {
+      return { __threw: true, message: e.message };
+    }
+  }
+  let result = await attemptInsert();
+  if (result.__threw){
+    await new Promise(r => setTimeout(r, 800));
+    result = await attemptInsert();
+  }
+  if (result.__threw) return { backup: null, errorMessage: `Network error saving the backup (${result.message}). Check your connection and try again.` };
   if (result.__timeout) return { backup: null, errorMessage: 'Timed out saving the backup.' };
   if (result.error) return { backup: null, errorMessage: result.error.message };
   if (!result.data || !result.data[0]) return { backup: null, errorMessage: 'No data returned after saving.' };
@@ -2971,8 +2993,9 @@ async function openBackupPlanScreen(){
   overlay.querySelector('#closeBackup').onclick = () => overlay.remove();
 
   overlay.querySelector('#saveBackupRow').onclick = () => {
+    const defaultName = `Backup - ${SHORT_MONTH_NAMES[new Date().getMonth()]} ${new Date().getDate()}`;
     promptText({
-      title: 'Name This Plan', placeholder: 'e.g. Bro Split, PPL, Upper/Lower',
+      title: 'Name This Plan', placeholder: 'e.g. Bro Split, PPL, Upper/Lower', initialValue: defaultName,
       onConfirm: async (name) => {
         const { backup, errorMessage } = await createPlanBackup(name);
         if (!backup){ alert('Could not save the backup: ' + errorMessage); return; }
