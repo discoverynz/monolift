@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.55';
+const APP_VERSION = 'Beta 5.56';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -168,6 +168,18 @@ async function groupExercisesByChoice(exercises, groupBy){
       (grouped[label] = grouped[label] || []).push(ex);
     });
     orderedKeys = Object.keys(grouped).sort((a,b) => a === 'Other' ? 1 : b === 'Other' ? -1 : muscleSortKey(a).localeCompare(muscleSortKey(b)));
+  } else if (groupBy === 'split'){
+    const db = await loadExerciseDB();
+    const order = ['Push','Pull','Legs','Other'];
+    exercises.forEach(ex => {
+      const match = matchExercise(ex.name, db);
+      const muscle = match && match.primaryMuscles && match.primaryMuscles[0];
+      const pp = ex.push_pull || classifyPushPull(muscle, ex.name);
+      const ul = ex.upper_lower || classifyUpperLower(muscle);
+      const label = ul === 'lower' ? 'Legs' : (pp === 'push' ? 'Push' : pp === 'pull' ? 'Pull' : 'Other');
+      (grouped[label] = grouped[label] || []).push(ex);
+    });
+    orderedKeys = order;
   } else {
     CATEGORIES.forEach(c => grouped[c] = []);
     exercises.forEach(ex => { (grouped[ex.category] || (grouped[ex.category] = [])).push(ex); });
@@ -260,9 +272,11 @@ function groupByToggleHtml(current){
   return `<div style="padding:10px 18px 10px 18px;">
     <div style="display:flex; border:1px solid var(--line);">
       <div class="groupby-chip ${current==='equipment'?'active':''}" data-groupby="equipment"
-        style="flex:1; text-align:center; padding:7px 0; font-family:'Bebas Neue',sans-serif; font-size:13px; letter-spacing:1px; color:${current==='equipment'?'var(--ink)':'var(--slate)'}; background:${current==='equipment'?'var(--flame)':'transparent'};">EQUIPMENT</div>
+        style="flex:1; text-align:center; padding:7px 0; font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px; color:${current==='equipment'?'var(--ink)':'var(--slate)'}; background:${current==='equipment'?'var(--flame)':'transparent'};">EQUIPMENT</div>
       <div class="groupby-chip ${current==='muscle'?'active':''}" data-groupby="muscle"
-        style="flex:1; text-align:center; padding:7px 0; font-family:'Bebas Neue',sans-serif; font-size:13px; letter-spacing:1px; color:${current==='muscle'?'var(--ink)':'var(--slate)'}; background:${current==='muscle'?'var(--flame)':'transparent'};">MUSCLE</div>
+        style="flex:1; text-align:center; padding:7px 0; font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px; color:${current==='muscle'?'var(--ink)':'var(--slate)'}; background:${current==='muscle'?'var(--flame)':'transparent'};">MUSCLE</div>
+      <div class="groupby-chip ${current==='split'?'active':''}" data-groupby="split"
+        style="flex:1; text-align:center; padding:7px 0; font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px; color:${current==='split'?'var(--ink)':'var(--slate)'}; background:${current==='split'?'var(--flame)':'transparent'};">SPLIT</div>
     </div>
   </div>`;
 }
@@ -2382,13 +2396,21 @@ function muscleSortKey(label){
 function groupDatabaseExercises(list, groupBy){
   const grouped = {};
   list.forEach(e => {
-    const key = groupBy === 'muscle'
-      ? ((e.primaryMuscles && e.primaryMuscles[0]) ? fineMuscleCategory(e.primaryMuscles[0], e.name) : 'Other')
-      : (e.equipment ? cap(e.equipment) : 'Other');
+    const muscle = (e.primaryMuscles && e.primaryMuscles[0]) || null;
+    let key;
+    if (groupBy === 'muscle') key = muscle ? fineMuscleCategory(muscle, e.name) : 'Other';
+    else if (groupBy === 'split'){
+      const pp = classifyPushPull(muscle, e.name);
+      const ul = classifyUpperLower(muscle);
+      key = ul === 'lower' ? 'Legs' : (pp === 'push' ? 'Push' : pp === 'pull' ? 'Pull' : 'Other');
+    }
+    else key = e.equipment ? cap(e.equipment) : 'Other';
     (grouped[key] = grouped[key] || []).push(e);
   });
   const sortFn = groupBy === 'muscle'
     ? (a,b) => a==='Other'?1:b==='Other'?-1:muscleSortKey(a).localeCompare(muscleSortKey(b))
+    : groupBy === 'split'
+    ? (a,b) => ['Push','Pull','Legs','Other'].indexOf(a) - ['Push','Pull','Legs','Other'].indexOf(b)
     : (a,b) => a==='Other'?1:b==='Other'?-1:a.localeCompare(b);
   const orderedKeys = Object.keys(grouped).sort(sortFn);
   return { grouped, orderedKeys };
@@ -2409,7 +2431,7 @@ async function openPicker(initialTab, jumpToMuscle){
   overlay.querySelector('#closePicker').onclick = () => { removeSideIndex(); overlay.remove(); };
 
   const result = await withTimeout(
-    supabaseClient.from('exercises').select('id, name, category, weekday, alt_group_id').eq('active', true),
+    supabaseClient.from('exercises').select('id, name, category, weekday, alt_group_id, push_pull, upper_lower').eq('active', true),
     15000
   );
   const all = result.__timeout || result.error ? [] : (result.data || []);
@@ -3615,6 +3637,19 @@ async function openPlanReorganizer(){
           }
         }
       }
+
+      // Sync the day's header label to match its new category - otherwise
+      // Track keeps showing the old label (e.g. "Chest & Triceps") even
+      // though the actual exercises underneath have genuinely changed.
+      // Custom days are skipped since those are hand-picked, not derived.
+      for (const dp of dayPlans){
+        if (dp.isCustom) continue;
+        await supabaseClient.from('day_types').upsert(
+          { user_id: userData.user.id, weekday: dp.dayIdx, label: dp.catLabel },
+          { onConflict: 'user_id,weekday' }
+        );
+      }
+
       overlay.remove();
       state.selectedDay = todayWeekday();
       state.currentTab = 'track';
