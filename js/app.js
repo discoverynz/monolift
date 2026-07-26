@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.61';
+const APP_VERSION = 'Beta 5.62';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -113,9 +113,7 @@ async function quickAddStarter(name, category, weekday){
     15000
   );
   if (!existingResult.__timeout && !existingResult.error && existingResult.data){ renderTrack(); return; }
-  const { error } = await supabaseClient.from('exercises').insert({
-    user_id: userData.user.id, name, category, weekday, alt_group_id: null
-  });
+  const { error } = await insertExerciseSafely({ user_id: userData.user.id, name, category, weekday, alt_group_id: null });
   if (error){ alert(error.message); return; }
   renderTrack();
 }
@@ -814,6 +812,28 @@ async function loadExercises(){
 // date alongside it, and once that date has passed, treat it as unset rather
 // than silently staying stuck on whatever was picked days ago. Falls through
 // to the designated Default Location (or Anywhere) each new day.
+// Every "add this exercise to this day" path should go through here. The
+// database now has a real unique constraint preventing same-day duplicates
+// (see migration_unique_exercise_per_day.sql) - this is the backstop behind
+// the app-level checks already in place at each call site, so even a path I
+// missed, or a race condition, can't create a duplicate. A constraint
+// violation here means someone else already created the exact same row a
+// moment ago - not a real error, just fetch and reuse it.
+async function insertExerciseSafely(payload){
+  const result = await supabaseClient.from('exercises').insert(payload).select();
+  if (!result.error) return { data: result.data, error: null, wasExisting: false };
+  if (result.error.code === '23505'){
+    const existing = await withTimeout(
+      supabaseClient.from('exercises').select('*').eq('user_id', payload.user_id).eq('weekday', payload.weekday).ilike('name', payload.name).eq('active', true).maybeSingle(),
+      15000
+    );
+    if (!existing.__timeout && !existing.error && existing.data){
+      return { data: [existing.data], error: null, wasExisting: true };
+    }
+  }
+  return { data: null, error: result.error, wasExisting: false };
+}
+
 function getCurrentLocationId(){
   const raw = localStorage.getItem('zealift_current_location');
   if (!raw) return null;
@@ -1802,9 +1822,7 @@ async function openSuggestionPreview(name, category, navList){
       openLogForm(existingResult.data.id, name);
       return;
     }
-    const { error } = await supabaseClient.from('exercises').insert({
-      user_id: userData.user.id, name, category, weekday: state.selectedDay, alt_group_id: null
-    });
+    const { error } = await insertExerciseSafely({ user_id: userData.user.id, name, category, weekday: state.selectedDay, alt_group_id: null });
     if (error){ alert(error.message); return; }
     overlay.remove();
     state.currentTab = 'track';
@@ -2660,10 +2678,10 @@ async function openPicker(initialTab, jumpToMuscle){
             return;
           }
           const { data: userData } = await supabaseClient.auth.getUser();
-          const { data: inserted, error } = await supabaseClient.from('exercises').insert({
+          const { data: inserted, error } = await insertExerciseSafely({
             user_id: userData.user.id, name: picked.name, category: picked.category,
             weekday: state.selectedDay, alt_group_id: null
-          }).select();
+          });
           if (error){ alert(error.message); return; }
           openLogForm(inserted[0].id, picked.name);
         };
@@ -3807,7 +3825,7 @@ async function openPlanReorganizer(){
           if (isFullBodyRepeat){
             const sample = allExercises.find(e => e.name === it.name);
             if (!sample) continue;
-            await supabaseClient.from('exercises').insert({
+            await insertExerciseSafely({
               user_id: userData.user.id, name: sample.name, category: sample.category,
               weekday: dp.dayIdx, alt_group_id: clearAlt ? null : sample.alt_group_id,
               push_pull: sample.push_pull, upper_lower: sample.upper_lower, location_ids: sample.location_ids
@@ -4067,9 +4085,14 @@ async function openNewExerciseForm(){
       15000
     );
     if (!existingResult.__timeout && !existingResult.error && existingResult.data){
-      if (!confirm(`"${name}" already exists on ${DAY_NAMES[selectedDay]}. Add another copy anyway?`)) return;
+      alert(`"${name}" already exists on ${DAY_NAMES[selectedDay]} - opening it instead of creating a duplicate.`);
+      overlay.remove();
+      state.selectedDay = selectedDay;
+      state.currentTab = 'track';
+      openLogForm(existingResult.data.id, name);
+      return;
     }
-    const { error } = await supabaseClient.from('exercises').insert({
+    const { error } = await insertExerciseSafely({
       user_id: userData.user.id, name, category: selectedCategory, weekday: selectedDay,
       alt_group_id: pickedAltGroup ? pickedAltGroup.id : null,
       push_pull: selectedPushPull, upper_lower: selectedUpperLower, location_ids: selectedLocationIds
