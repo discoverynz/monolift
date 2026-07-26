@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.57';
+const APP_VERSION = 'Beta 5.58';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -118,6 +118,8 @@ async function quickAddStarter(name, category, weekday){
 function getGroupByPref(){ return localStorage.getItem('zealift_group_by') || 'equipment'; }
 function getSplitModePref(){ return localStorage.getItem('zealift_split_mode') || 'ppl'; }
 function setSplitModePref(v){ localStorage.setItem('zealift_split_mode', v); }
+function getSplitSubGroupPref(){ return localStorage.getItem('zealift_split_subgroup') || 'equipment'; }
+function setSplitSubGroupPref(v){ localStorage.setItem('zealift_split_subgroup', v); }
 function setGroupByPref(v){ localStorage.setItem('zealift_group_by', v); }
 
 // Groups a list of {name, category, ...} exercises either by their stored equipment
@@ -289,7 +291,7 @@ function groupByToggleHtml(current){
 // Picker-specific: adds a third Split option with its own nested sub-choice
 // (Push/Pull/Legs vs Upper/Lower), since those are two different ways of
 // slicing the same exercises, not one flat category list.
-function pickerGroupByToggleHtml(current, splitMode){
+function pickerGroupByToggleHtml(current, splitMode, splitSubGroup){
   return `<div style="padding:10px 18px 10px 18px;">
     <div style="display:flex; border:1px solid var(--line);">
       <div class="groupby-chip" data-groupby="equipment"
@@ -299,9 +301,17 @@ function pickerGroupByToggleHtml(current, splitMode){
       <div class="groupby-chip" data-groupby="split"
         style="flex:1; text-align:center; padding:7px 0; font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px; color:${current==='split'?'var(--ink)':'var(--slate)'}; background:${current==='split'?'var(--flame)':'transparent'};">SPLIT</div>
     </div>
-    ${current==='split' ? `<div style="display:flex; gap:8px; margin-top:8px;">
+    ${current==='split' ? `
+    <div style="display:flex; gap:8px; margin-top:8px;">
       <div class="splitmode-chip ${splitMode!=='upperlower'?'active':''}" data-splitmode="ppl" style="flex:1; text-align:center; padding:6px 0; border-radius:14px; border:1px solid var(--line); font-size:11px; font-family:'Bebas Neue',sans-serif; letter-spacing:0.5px; color:${splitMode!=='upperlower'?'var(--ink)':'var(--slate)'}; background:${splitMode!=='upperlower'?'var(--flame)':'transparent'};">PUSH / PULL / LEGS</div>
       <div class="splitmode-chip ${splitMode==='upperlower'?'active':''}" data-splitmode="upperlower" style="flex:1; text-align:center; padding:6px 0; border-radius:14px; border:1px solid var(--line); font-size:11px; font-family:'Bebas Neue',sans-serif; letter-spacing:0.5px; color:${splitMode==='upperlower'?'var(--ink)':'var(--slate)'}; background:${splitMode==='upperlower'?'var(--flame)':'transparent'};">UPPER / LOWER</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:8px; margin-top:8px;">
+      <span style="font-family:'JetBrains Mono',monospace; font-size:9px; color:var(--slate); letter-spacing:0.5px; white-space:nowrap;">THEN BY</span>
+      <div style="display:flex; gap:6px; flex:1;">
+        <div class="splitsub-chip ${splitSubGroup!=='muscle'?'active':''}" data-splitsub="equipment" style="flex:1; text-align:center; padding:5px 0; border-radius:12px; border:1px solid var(--line); font-size:10px; font-family:'Bebas Neue',sans-serif; letter-spacing:0.5px; color:${splitSubGroup!=='muscle'?'var(--flame)':'var(--slate)'}; background:${splitSubGroup!=='muscle'?'rgba(255,107,26,0.12)':'transparent'};">EQUIPMENT</div>
+        <div class="splitsub-chip ${splitSubGroup==='muscle'?'active':''}" data-splitsub="muscle" style="flex:1; text-align:center; padding:5px 0; border-radius:12px; border:1px solid var(--line); font-size:10px; font-family:'Bebas Neue',sans-serif; letter-spacing:0.5px; color:${splitSubGroup==='muscle'?'var(--flame)':'var(--slate)'}; background:${splitSubGroup==='muscle'?'rgba(255,107,26,0.12)':'transparent'};">MUSCLE</div>
+      </div>
     </div>` : ''}
   </div>`;
 }
@@ -2487,31 +2497,49 @@ async function openPicker(initialTab, jumpToMuscle){
       const deduped = Object.values(byName).filter(ex => ex.name.toLowerCase().includes(f));
       const groupBy = getGroupByPref();
       const splitMode = getSplitModePref();
+      const splitSubGroup = getSplitSubGroupPref();
       const [{ grouped, orderedKeys }, db] = await Promise.all([
         groupExercisesByChoice(deduped, groupBy, splitMode),
         loadExerciseDB()
       ]);
 
+      function renderExerciseRow(ex){
+        const match = matchExercise(ex.name, db);
+        const muscles = match ? muscleSubtitle(match.primaryMuscles, match.secondaryMuscles) : '';
+        const mech = classifyMechanic(match);
+        const mechTag = mech ? `<span style="font-size:9px; padding:2px 5px; border-radius:4px; margin-left:5px; background:${mech.value==='compound'?'rgba(255,107,26,0.15)':'rgba(122,150,220,0.15)'}; color:${mech.value==='compound'?'#FF6B1A':'#7BA6C9'}; opacity:${mech.guessed?0.75:1};">${mech.guessed?'~':''}${mech.value==='compound'?'Compound':'Isolation'}</span>` : '';
+        return `<div class="pick-row" data-id="${ex.id}" data-name="${ex.name}"><div><div class="ex-name">${ex.name}${mechTag}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}</div><div class="chev">›</div></div>`;
+      }
+
       let html = '';
       const presentKeys = orderedKeys.filter(k => (grouped[k]||[]).length);
-      presentKeys.forEach(cat => {
+      for (const cat of presentKeys){
         const items = (grouped[cat] || []).slice().sort((a, b) => a.name.localeCompare(b.name));
         const slug = 'mine-' + cat.replace(/[^a-z0-9]/gi,'');
         html += `<div class="category" id="${slug}">${cat}</div>`;
-        html += items.map(ex => {
-          const match = matchExercise(ex.name, db);
-          const muscles = match ? muscleSubtitle(match.primaryMuscles, match.secondaryMuscles) : '';
-          const mech = classifyMechanic(match);
-          const mechTag = mech ? `<span style="font-size:9px; padding:2px 5px; border-radius:4px; margin-left:5px; background:${mech.value==='compound'?'rgba(255,107,26,0.15)':'rgba(122,150,220,0.15)'}; color:${mech.value==='compound'?'#FF6B1A':'#7BA6C9'}; opacity:${mech.guessed?0.75:1};">${mech.guessed?'~':''}${mech.value==='compound'?'Compound':'Isolation'}</span>` : '';
-          return `<div class="pick-row" data-id="${ex.id}" data-name="${ex.name}"><div><div class="ex-name">${ex.name}${mechTag}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}</div><div class="chev">›</div></div>`;
-        }).join('');
-      });
-      body.querySelector('#pickerGroupToggle').innerHTML = pickerGroupByToggleHtml(groupBy, splitMode);
+        if (groupBy === 'split'){
+          // Nested: reuse the same Equipment/Muscle grouping within this split
+          // section instead of building separate logic for it.
+          const { grouped: subGrouped, orderedKeys: subOrderedKeys } = await groupExercisesByChoice(items, splitSubGroup);
+          const presentSubKeys = subOrderedKeys.filter(k => (subGrouped[k]||[]).length);
+          presentSubKeys.forEach(subCat => {
+            const subItems = (subGrouped[subCat] || []).slice().sort((a,b) => a.name.localeCompare(b.name));
+            html += `<div class="small" style="padding:8px 18px 4px 18px; color:var(--slate); font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:0.5px; text-transform:uppercase;">${subCat}</div>`;
+            html += subItems.map(renderExerciseRow).join('');
+          });
+        } else {
+          html += items.map(renderExerciseRow).join('');
+        }
+      }
+      body.querySelector('#pickerGroupToggle').innerHTML = pickerGroupByToggleHtml(groupBy, splitMode, splitSubGroup);
       body.querySelectorAll('.groupby-chip').forEach(chip => {
         chip.onclick = () => { setGroupByPref(chip.dataset.groupby); renderList(body.querySelector('#pickerSearch').value); };
       });
       body.querySelectorAll('.splitmode-chip').forEach(chip => {
         chip.onclick = () => { setSplitModePref(chip.dataset.splitmode); renderList(body.querySelector('#pickerSearch').value); };
+      });
+      body.querySelectorAll('.splitsub-chip').forEach(chip => {
+        chip.onclick = () => { setSplitSubGroupPref(chip.dataset.splitsub); renderList(body.querySelector('#pickerSearch').value); };
       });
       body.querySelector('#pickerList').innerHTML = html || '<div class="empty-state">No matches.</div>';
       if (presentKeys.length > 0){
@@ -2582,31 +2610,48 @@ async function openPicker(initialTab, jumpToMuscle){
       const filtered = db.filter(e => e.name.toLowerCase().includes(f));
       const groupBy = getGroupByPref();
       const splitMode = getSplitModePref();
+      const splitSubGroup = getSplitSubGroupPref();
       const { grouped, orderedKeys } = groupDatabaseExercises(filtered, groupBy, splitMode);
       let html = '';
       const presentKeys = orderedKeys.filter(k => (grouped[k]||[]).length);
       const flatOrder = []; // display order across every visible category, for swipe nav
+
+      function renderDbRow(e){
+        flatOrder.push({ name: e.name, equipment: e.equipment });
+        const star = POPULAR_EXERCISES.has(e.name)
+          ? `<span title="Popular staple" style="color:#F0C542; margin-left:5px;">★</span>` : '';
+        const muscles = muscleSubtitle(e.primaryMuscles, e.secondaryMuscles);
+        const mech = classifyMechanic(e);
+        const mechTag = mech ? `<span style="font-size:9px; padding:2px 5px; border-radius:4px; margin-left:5px; background:${mech.value==='compound'?'rgba(255,107,26,0.15)':'rgba(122,150,220,0.15)'}; color:${mech.value==='compound'?'#FF6B1A':'#7BA6C9'}; opacity:${mech.guessed?0.75:1};">${mech.guessed?'~':''}${mech.value==='compound'?'Compound':'Isolation'}</span>` : '';
+        const equipLine = [cap(e.equipment), cap(e.level)].filter(Boolean).join(' · ');
+        return `<div class="pick-row db-pick" data-name="${e.name}" data-equip="${e.equipment||''}"><div><div class="ex-name">${e.name}${star}${mechTag}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}${equipLine ? `<div class="small" style="color:var(--slate); opacity:0.7; font-size:10.5px;">${equipLine}</div>` : ''}</div><div class="chev">›</div></div>`;
+      }
+
       presentKeys.forEach(cat => {
         const items = (grouped[cat]||[]).slice().sort((a,b)=>a.name.localeCompare(b.name));
         const slug = 'cat-' + cat.replace(/[^a-z0-9]/gi,'');
         html += `<div class="category" id="${slug}">${cat}</div>`;
-        html += items.map(e => {
-          flatOrder.push({ name: e.name, equipment: e.equipment });
-          const star = POPULAR_EXERCISES.has(e.name)
-            ? `<span title="Popular staple" style="color:#F0C542; margin-left:5px;">★</span>` : '';
-          const muscles = muscleSubtitle(e.primaryMuscles, e.secondaryMuscles);
-          const mech = classifyMechanic(e);
-          const mechTag = mech ? `<span style="font-size:9px; padding:2px 5px; border-radius:4px; margin-left:5px; background:${mech.value==='compound'?'rgba(255,107,26,0.15)':'rgba(122,150,220,0.15)'}; color:${mech.value==='compound'?'#FF6B1A':'#7BA6C9'}; opacity:${mech.guessed?0.75:1};">${mech.guessed?'~':''}${mech.value==='compound'?'Compound':'Isolation'}</span>` : '';
-          const equipLine = [cap(e.equipment), cap(e.level)].filter(Boolean).join(' · ');
-          return `<div class="pick-row db-pick" data-name="${e.name}" data-equip="${e.equipment||''}"><div><div class="ex-name">${e.name}${star}${mechTag}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}${equipLine ? `<div class="small" style="color:var(--slate); opacity:0.7; font-size:10.5px;">${equipLine}</div>` : ''}</div><div class="chev">›</div></div>`;
-        }).join('');
+        if (groupBy === 'split'){
+          const { grouped: subGrouped, orderedKeys: subOrderedKeys } = groupDatabaseExercises(items, splitSubGroup);
+          const presentSubKeys = subOrderedKeys.filter(k => (subGrouped[k]||[]).length);
+          presentSubKeys.forEach(subCat => {
+            const subItems = (subGrouped[subCat] || []).slice().sort((a,b) => a.name.localeCompare(b.name));
+            html += `<div class="small" style="padding:8px 18px 4px 18px; color:var(--slate); font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:0.5px; text-transform:uppercase;">${subCat}</div>`;
+            html += subItems.map(renderDbRow).join('');
+          });
+        } else {
+          html += items.map(renderDbRow).join('');
+        }
       });
-      body.querySelector('#dbGroupToggle').innerHTML = pickerGroupByToggleHtml(groupBy, splitMode);
+      body.querySelector('#dbGroupToggle').innerHTML = pickerGroupByToggleHtml(groupBy, splitMode, splitSubGroup);
       body.querySelectorAll('.groupby-chip').forEach(chip => {
         chip.onclick = () => { setGroupByPref(chip.dataset.groupby); renderDbList(body.querySelector('#dbSearch').value); };
       });
       body.querySelectorAll('.splitmode-chip').forEach(chip => {
         chip.onclick = () => { setSplitModePref(chip.dataset.splitmode); renderDbList(body.querySelector('#dbSearch').value); };
+      });
+      body.querySelectorAll('.splitsub-chip').forEach(chip => {
+        chip.onclick = () => { setSplitSubGroupPref(chip.dataset.splitsub); renderDbList(body.querySelector('#dbSearch').value); };
       });
       body.querySelector('#dbList').innerHTML = html || '<div class="empty-state">No matches.</div>';
 
