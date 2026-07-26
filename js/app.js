@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.51';
+const APP_VERSION = 'Beta 5.52';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1025,11 +1025,7 @@ function openLocationSubPage(){
   document.body.appendChild(overlay);
   overlay.querySelector('#closeLocSubPage').onclick = () => overlay.remove();
   overlay.querySelector('#subDefaultLocationBtn').onclick = () => openDefaultLocationPicker();
-  overlay.querySelector('#subBulkLocationBtn').onclick = (e) => showPreCheckPopover(e.currentTarget,
-    'Open Assign Location?',
-    'Loads your locations and every exercise you have - can take a moment.',
-    () => openBulkLocationAssign()
-  );
+  overlay.querySelector('#subBulkLocationBtn').onclick = () => openBulkLocationAssign();
   overlay.querySelector('#subManageLocationsBtn').onclick = () => openManageLocationsScreen();
 }
 
@@ -2613,7 +2609,12 @@ async function proposeSplitTags(){
     const muscle = match && match.primaryMuscles && match.primaryMuscles[0];
     const pp = classifyPushPull(muscle, item.name);
     const ul = classifyUpperLower(muscle);
-    if (!pp && !ul) return; // genuinely couldn't infer either, skip rather than show an empty row
+    // Previously skipped entirely here if neither could be inferred, which
+    // silently dropped exercises from the count - "X of Y tagged" no longer
+    // added up because some untagged exercises just vanished. Now every
+    // untagged exercise shows up, pre-filled where the classifier could
+    // confidently guess, blank where it couldn't, so the math is always exact
+    // and nothing is silently excluded.
     proposals.push({ name: item.name, ids: item.ids, muscle: muscle ? cap(muscle) : 'Other', pushPull: pp, upperLower: ul });
   });
   proposals.sort((a,b) => a.muscle.localeCompare(b.muscle) || a.name.localeCompare(b.name));
@@ -2669,11 +2670,22 @@ async function openSplitTagReview(){
       };
     });
     body.querySelector('#confirmSplitBtn').onclick = async () => {
+      const btn = body.querySelector('#confirmSplitBtn');
+      btn.textContent = 'Applying…';
       const toApply = proposals.filter(p => p.included && (p.pushPull || p.upperLower));
+      let successCount = 0;
+      const errors = [];
       for (const p of toApply){
         for (const id of p.ids){
-          await supabaseClient.from('exercises').update({ push_pull: p.pushPull, upper_lower: p.upperLower }).eq('id', id);
+          const { error } = await supabaseClient.from('exercises').update({ push_pull: p.pushPull, upper_lower: p.upperLower }).eq('id', id);
+          if (error){ errors.push(`${p.name}: ${error.message}`); }
+          else { successCount++; }
         }
+      }
+      if (errors.length){
+        alert(`${successCount} saved, but ${errors.length} failed:\n\n${errors.slice(0,5).join('\n')}${errors.length>5 ? `\n…and ${errors.length-5} more` : ''}`);
+        btn.textContent = 'Apply Tags';
+        return;
       }
       overlay.remove();
       if (state.currentTab === 'track') renderTrack();
@@ -2774,6 +2786,10 @@ async function openBulkLocationAssign(){
         };
       });
       body.querySelector('#confirmBulkLocBtn').onclick = async () => {
+        const confirmBtn = body.querySelector('#confirmBulkLocBtn');
+        confirmBtn.textContent = 'Saving…';
+        let successCount = 0;
+        const errors = [];
         for (const n of names){
           const isChecked = checked.has(n);
           const was = originallyChecked.has(n);
@@ -2787,8 +2803,15 @@ async function openBulkLocationAssign(){
             const updated = isChecked
               ? [...new Set([...existing, locId])]
               : existing.filter(id2 => id2 !== locId);
-            await supabaseClient.from('exercises').update({ location_ids: updated }).eq('id', id);
+            const { error } = await supabaseClient.from('exercises').update({ location_ids: updated }).eq('id', id);
+            if (error){ errors.push(`${n}: ${error.message}`); }
+            else { successCount++; }
           }
+        }
+        if (errors.length){
+          alert(`${successCount} saved, but ${errors.length} failed:\n\n${errors.slice(0,5).join('\n')}${errors.length>5 ? `\n…and ${errors.length-5} more` : ''}`);
+          confirmBtn.textContent = `Save (${checked.size} at "${locName}")`;
+          return;
         }
         overlay.remove();
         if (state.currentTab === 'track') renderTrack();
