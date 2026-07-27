@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.83';
+const APP_VERSION = 'Beta 5.84';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -349,6 +349,13 @@ const MOVEMENT_PATTERNS = ['press','curl','row','raise','extension','fly','flye'
 function classifyPushPull(muscle, exerciseName){
   const m = (muscle || '').toLowerCase();
   const n = (exerciseName || '').toLowerCase();
+  // Rear delt work is a pulling motion (posterior deltoid, same pattern as
+  // rows/face pulls) even though the broad muscle match comes back as
+  // "shoulders" - this needs to be checked before the blanket shoulders=push
+  // rule below, or every rear delt exercise gets wrongly pushed onto Push day.
+  if (m === 'shoulders' && (n.includes('rear delt') || n.includes('face pull') ||
+      (n.includes('rear') && (n.includes('fly') || n.includes('flye') || n.includes('raise'))) ||
+      (n.includes('reverse') && (n.includes('fly') || n.includes('flye'))))) return 'pull';
   if (['chest','shoulders','triceps'].includes(m)) return 'push';
   if (['lats','traps','biceps','forearms','lower back','middle back'].includes(m)) return 'pull';
   if (['quadriceps','hamstrings','glutes','calves'].includes(m)){
