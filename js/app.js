@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.68';
+const APP_VERSION = 'Beta 5.69';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1218,6 +1218,10 @@ function openPlanSubPage(){
         <div><div style="color:#E8A33D;">Migrate to Exercise Master (Rebuild - Stage 2)</div><div class="small" style="color:var(--slate); margin-top:2px;">Safe, additive-only - writes to new tables, never touches your current data</div></div>
         <div class="chev" style="margin-top:2px;">›</div>
       </div>
+      <div class="me-item" id="subExportBackupBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+        <div><div style="color:#E8A33D;">Export Full Backup (Rebuild - Stage 3)</div><div class="small" style="color:var(--slate); margin-top:2px;">A real downloadable file with everything - before Stage 4 touches anything live</div></div>
+        <div class="chev" style="margin-top:2px;">›</div>
+      </div>
       ${localStorage.getItem('zealift_reorg_snapshot') ? `<div class="me-item" id="subRevertReorgBtn"><div style="color:#E8A33D;">Revert Last Reorganization</div><div class="chev">›</div></div>` : ''}
     </div>`;
   document.body.appendChild(overlay);
@@ -1230,8 +1234,67 @@ function openPlanSubPage(){
   overlay.querySelector('#subFixAltsBtn').onclick = openFixAltGroupsScreen;
   overlay.querySelector('#subRefreshMuscleBtn').onclick = openRefreshMuscleCategoriesScreen;
   overlay.querySelector('#subMigrateMasterBtn').onclick = openMigrateToMasterScreen;
+  overlay.querySelector('#subExportBackupBtn').onclick = openExportFullBackupScreen;
   const subRevertBtn = overlay.querySelector('#subRevertReorgBtn');
   if (subRevertBtn) subRevertBtn.onclick = revertLastReorganization;
+}
+
+async function openExportFullBackupScreen(){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeExportBackup">✕</button><h1>Export Full Backup</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll">
+      <div class="small" style="padding:12px 18px; color:var(--slate); line-height:1.6;">Stage 3 of the rebuild: a real, downloadable file with everything in your account - exercises, sets, alt groups, locations, day labels, plan backups, body weight, and phase settings. Not just a snapshot inside the app - an actual file you keep, that could be used to restore from if anything ever needed it. Nothing about your account changes by generating this.</div>
+      <div id="exportStatus" style="margin:0 18px 14px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px;"><div class="small" style="color:var(--slate);">Ready to export.</div></div>
+      <button class="save-btn" id="doExportBtn" style="margin:0 18px 20px 18px;">Generate Backup File</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeExportBackup').onclick = () => overlay.remove();
+
+  overlay.querySelector('#doExportBtn').onclick = async () => {
+    const btn = overlay.querySelector('#doExportBtn');
+    const statusArea = overlay.querySelector('#exportStatus');
+    btn.textContent = 'Exporting…';
+    btn.disabled = true;
+    const { data: userData } = await supabaseClient.auth.getUser();
+    const uid = userData.user.id;
+
+    const tables = ['exercises', 'sets', 'alt_groups', 'locations', 'day_types', 'plan_backups', 'body_weight', 'phase_settings', 'exercise_master', 'exercise_days'];
+    const backup = { exported_at: new Date().toISOString(), user_id: uid, app_version: APP_VERSION, tables: {} };
+    const errors = [];
+    for (const table of tables){
+      const result = await withTimeout(supabaseClient.from(table).select('*').eq('user_id', uid), 20000);
+      if (result.__timeout || result.error){
+        errors.push(`${table}: ${result.error ? result.error.message : 'timed out'}`);
+        backup.tables[table] = null;
+      } else {
+        backup.tables[table] = result.data || [];
+      }
+      statusArea.innerHTML = `<div class="small" style="color:var(--slate);">Exported ${table} (${backup.tables[table] ? backup.tables[table].length : 'failed'})…</div>`;
+    }
+
+    const rowCounts = Object.entries(backup.tables).map(([t, rows]) => `${t}: ${rows ? rows.length : 'FAILED'}`).join('\n');
+    statusArea.innerHTML = `<div class="ex-name" style="font-size:13px; margin-bottom:6px; color:${errors.length ? '#E8492A' : 'var(--good)'};">${errors.length ? `${errors.length} table(s) failed to export` : '✓ Export complete'}</div><div class="small" style="color:var(--slate); white-space:pre-line;">${rowCounts}</div>`;
+
+    if (errors.length){
+      btn.textContent = 'Retry Export';
+      btn.disabled = false;
+      return;
+    }
+
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `zealift-full-backup-${todayStr()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    btn.textContent = 'Download Again';
+    btn.disabled = false;
+  };
 }
 
 async function openMigrateToMasterScreen(){
