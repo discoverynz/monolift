@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.74';
+const APP_VERSION = 'Beta 5.75';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -122,6 +122,12 @@ function getGroupByPref(){ return localStorage.getItem('zealift_group_by') || 'e
 function getSplitModePref(){ return localStorage.getItem('zealift_split_mode') || 'ppl'; }
 function setSplitModePref(v){ localStorage.setItem('zealift_split_mode', v); }
 function getSplitSubGroupPref(){ return localStorage.getItem('zealift_split_subgroup') || 'equipment'; }
+// Rebuild Stage 4c feature flag - defaults OFF. When on, both the read path
+// (loadExercises) and the write path (saveEntry, PR detection) consistently
+// use exercise_master identity instead of the old per-day exercises table.
+// Turning this off again requires no code push - it's just a local setting.
+function getUseExerciseMasterFlag(){ return localStorage.getItem('zealift_use_exercise_master') === 'true'; }
+function setUseExerciseMasterFlag(v){ localStorage.setItem('zealift_use_exercise_master', v ? 'true' : 'false'); }
 function setSplitSubGroupPref(v){ localStorage.setItem('zealift_split_subgroup', v); }
 function setGroupByPref(v){ localStorage.setItem('zealift_group_by', v); }
 
@@ -681,6 +687,7 @@ function renderCodeEntry(email){
 
 // ---------- TRACK ----------
 async function loadExercises(){
+  if (getUseExerciseMasterFlag()) return loadExercisesFromMaster();
   let result = await withTimeout(
     supabaseClient.from('exercises')
       .select('id, name, category, alt_group_id, alt_groups(name, color), location_ids, muscle_override')
@@ -807,7 +814,85 @@ async function loadExercises(){
   state.exercises = withLogs;
 }
 
-// The active location is a per-day choice, not a permanent one - store today's
+// The exercise_master version of loadExercises - one row per real exercise,
+// so all the old sibling-hunting-by-name logic (needed because the same
+// exercise used to live as separate isolated records per day) simply isn't
+// needed anymore. Produces the exact same output shape as loadExercises so
+// everything downstream (renderTrack, exerciseRow, etc.) works unmodified.
+async function loadExercisesFromMaster(){
+  const { data: userData } = await supabaseClient.auth.getUser();
+  const uid = userData.user.id;
+
+  const result = await withTimeout(
+    supabaseClient.from('exercise_days')
+      .select('exercise_master_id, exercise_master(id, name, category, alt_group_id, alt_groups(name, color), location_ids, muscle_override)')
+      .eq('user_id', uid)
+      .eq('weekday', state.selectedDay),
+    15000
+  );
+  if (result.__timeout || result.error){ console.error('exercise_days query failed', result.error); state.exercises = []; return; }
+
+  const exercises = (result.data || [])
+    .map(row => row.exercise_master)
+    .filter(Boolean)
+    .sort((a,b) => (a.category||'').localeCompare(b.category||'') || a.name.localeCompare(b.name));
+
+  const masterIds = exercises.map(ex => ex.id);
+  let lastSetByExercise = {};
+  let maxSetByExercise = {};
+  if (masterIds.length){
+    let setsResult = await withTimeout(
+      supabaseClient.from('sets').select('exercise_master_id, weight, weight_unit, weight_type, reps, num_sets, logged_at, location_id')
+        .in('exercise_master_id', masterIds).order('logged_at', { ascending: false }),
+      15000
+    );
+    let locationDataAvailable = true;
+    if (!setsResult.__timeout && setsResult.error){
+      console.error('Sets query failed, retrying without location_id:', setsResult.error);
+      locationDataAvailable = false;
+      setsResult = await withTimeout(
+        supabaseClient.from('sets').select('exercise_master_id, weight, weight_unit, weight_type, reps, num_sets, logged_at')
+          .in('exercise_master_id', masterIds).order('logged_at', { ascending: false }),
+        15000
+      );
+    }
+    let allSets = setsResult.__timeout || setsResult.error ? [] : (setsResult.data || []);
+    const activeLocationId = getCurrentLocationId();
+    if (activeLocationId && locationDataAvailable) allSets = allSets.filter(s => s.location_id === activeLocationId);
+    allSets.forEach(s => { if (!lastSetByExercise[s.exercise_master_id]) lastSetByExercise[s.exercise_master_id] = s; });
+    allSets.forEach(s => {
+      if (s.weight === null || s.weight === undefined) return;
+      const key = s.exercise_master_id;
+      const current = maxSetByExercise[key];
+      if (!current){ maxSetByExercise[key] = s; return; }
+      const sVal = (s.weight_unit === 'kg' || s.weight_unit === 'lb') ? convertWeight(s.weight, s.weight_unit, 'kg') : s.weight;
+      const curVal = (current.weight_unit === 'kg' || current.weight_unit === 'lb') ? convertWeight(current.weight, current.weight_unit, 'kg') : current.weight;
+      if (s.weight_unit === current.weight_unit || ((s.weight_unit==='kg'||s.weight_unit==='lb') && (current.weight_unit==='kg'||current.weight_unit==='lb'))){
+        if (sVal > curVal) maxSetByExercise[key] = s;
+      }
+    });
+  }
+
+  const withLogs = exercises.map(ex => {
+    const lastSet = lastSetByExercise[ex.id] || null;
+    const loggedToday = lastSet && lastSet.logged_at === todayStr();
+    const maxSet = maxSetByExercise[ex.id] || null;
+    const showPr = maxSet && lastSet && maxSet.logged_at !== lastSet.logged_at;
+    return { ...ex, lastSet, loggedToday, maxSet, showPr };
+  });
+
+  const doneGroupMember = {};
+  withLogs.forEach(ex => { if (ex.alt_group_id && ex.loggedToday) doneGroupMember[ex.alt_group_id] = ex.name; });
+  withLogs.forEach(ex => {
+    if (ex.alt_group_id && !ex.loggedToday && doneGroupMember[ex.alt_group_id]) {
+      ex.completeVia = doneGroupMember[ex.alt_group_id];
+    }
+  });
+
+  state.exercises = withLogs;
+}
+
+
 // date alongside it, and once that date has passed, treat it as unset rather
 // than silently staying stuck on whatever was picked days ago. Falls through
 // to the designated Default Location (or Anywhere) each new day.
@@ -1230,6 +1315,11 @@ function openPlanSubPage(){
         <div><div style="color:#E8A33D;">Link Sets to Exercise Master (Rebuild - Stage 4b)</div><div class="small" style="color:var(--slate); margin-top:2px;">Additive-only - links every set to the new structure without touching its original link</div></div>
         <div class="chev" style="margin-top:2px;">›</div>
       </div>
+      <div style="margin:0 18px 12px 18px; background:var(--panel); border:1px solid #4a2f16; border-radius:10px; padding:14px;">
+        <div class="ex-name" style="font-size:13px; color:#E8A33D;">Use New Exercise Structure (Rebuild - Stage 4c)</div>
+        <div class="small" style="color:var(--slate); margin-top:4px; line-height:1.5;">Switches Track and History over to read and write through exercise_master. Turning this off again takes effect immediately - no app update needed.</div>
+        <div id="masterFlagToggle" style="margin-top:10px;"></div>
+      </div>
       ${localStorage.getItem('zealift_reorg_snapshot') ? `<div class="me-item" id="subRevertReorgBtn"><div style="color:#E8A33D;">Revert Last Reorganization</div><div class="chev">›</div></div>` : ''}
     </div>`;
   document.body.appendChild(overlay);
@@ -1245,6 +1335,17 @@ function openPlanSubPage(){
   overlay.querySelector('#subExportBackupBtn').onclick = openExportFullBackupScreen;
   overlay.querySelector('#subVerifyBtn').onclick = openVerifyMigrationScreen;
   overlay.querySelector('#subLinkSetsBtn').onclick = openLinkSetsToMasterScreen;
+  function renderMasterFlagToggle(){
+    const on = getUseExerciseMasterFlag();
+    const toggleArea = overlay.querySelector('#masterFlagToggle');
+    toggleArea.innerHTML = `<div class="chip-row">
+      <div class="chip ${!on?'active':''}" id="masterFlagOff">OFF (current app)</div>
+      <div class="chip ${on?'active':''}" id="masterFlagOn" style="${on?'background:#E8A33D; color:var(--ink);':''}">ON (new structure)</div>
+    </div>`;
+    toggleArea.querySelector('#masterFlagOff').onclick = () => { setUseExerciseMasterFlag(false); renderMasterFlagToggle(); if (state.currentTab === 'track') renderTrack(); };
+    toggleArea.querySelector('#masterFlagOn').onclick = () => { setUseExerciseMasterFlag(true); renderMasterFlagToggle(); if (state.currentTab === 'track') renderTrack(); };
+  }
+  renderMasterFlagToggle();
   const subRevertBtn = overlay.querySelector('#subRevertReorgBtn');
   if (subRevertBtn) subRevertBtn.onclick = revertLastReorganization;
 }
@@ -5092,26 +5193,30 @@ function openLogForm(exerciseId, exerciseName){
 
   async function saveEntry(weight, unit, weightType, reps, numSets, notes){
     const { data: userData } = await supabaseClient.auth.getUser();
+    const useMaster = getUseExerciseMasterFlag();
+    const idField = useMaster ? 'exercise_master_id' : 'exercise_id';
     // Capture prior best BEFORE inserting, for PR detection (weight-based only).
     let priorBest = null;
     if (weight !== null && (unit === 'kg' || unit === 'lb')){
       const prevSets = await supabaseClient.from('sets')
         .select('weight, weight_unit')
-        .eq('exercise_id', exerciseId)
+        .eq(idField, exerciseId)
         .in('weight_unit', ['kg','lb']);
       if (prevSets.data && prevSets.data.length){
         priorBest = Math.max(...prevSets.data.map(s => convertWeight(s.weight, s.weight_unit, unit)));
       }
     }
-    const { data, error } = await supabaseClient.from('sets').insert({
-      user_id: userData.user.id, exercise_id: exerciseId,
+    const insertPayload = {
+      user_id: userData.user.id,
       weight, weight_unit: weight !== null ? unit : 'bodyweight',
       weight_type: weightType,
       num_sets: numSets, reps: reps,
       notes: notes || null,
       logged_at: todayStr(),
       location_id: selectedLocationId
-    }).select();
+    };
+    insertPayload[idField] = exerciseId;
+    const { data, error } = await supabaseClient.from('sets').insert(insertPayload).select();
     if (error){ alert(error.message); return null; }
     // Celebrate a new PR: strictly greater than the prior best, and there must be a prior best.
     if (priorBest !== null && weight > priorBest + 0.01){
@@ -5134,24 +5239,30 @@ function openLogForm(exerciseId, exerciseName){
   }
 
   async function loadHistory(){
-    // The same exercise name can exist as multiple separate records (one per day
-    // it's been added to), each with its own isolated set history. Look up every
-    // record sharing this name for this user, and merge all of their sets together
-    // - otherwise history only ever reflects whichever single day's record you
-    // happened to open, silently missing everything logged against the others.
     const { data: userData } = await supabaseClient.auth.getUser();
-    const sameNameResult = await withTimeout(
-      supabaseClient.from('exercises').select('id').eq('user_id', userData.user.id).ilike('name', exerciseName),
-      15000
-    );
-    const allIds = (sameNameResult.__timeout || sameNameResult.error)
-      ? [exerciseId]
-      : (sameNameResult.data || []).map(r => r.id);
-    const idsToQuery = allIds.length ? allIds : [exerciseId];
+    const useMaster = getUseExerciseMasterFlag();
+    const idField = useMaster ? 'exercise_master_id' : 'exercise_id';
+    let idsToQuery = [exerciseId];
+    if (!useMaster){
+      // The same exercise name can exist as multiple separate records (one per day
+      // it's been added to), each with its own isolated set history. Look up every
+      // record sharing this name for this user, and merge all of their sets together
+      // - otherwise history only ever reflects whichever single day's record you
+      // happened to open, silently missing everything logged against the others.
+      // Not needed at all under the master structure - there's only one record.
+      const sameNameResult = await withTimeout(
+        supabaseClient.from('exercises').select('id').eq('user_id', userData.user.id).ilike('name', exerciseName),
+        15000
+      );
+      const allIds = (sameNameResult.__timeout || sameNameResult.error)
+        ? [exerciseId]
+        : (sameNameResult.data || []).map(r => r.id);
+      idsToQuery = allIds.length ? allIds : [exerciseId];
+    }
 
     let result = await withTimeout(
       supabaseClient.from('sets').select('id, weight, weight_unit, weight_type, reps, num_sets, notes, logged_at, location_id')
-        .in('exercise_id', idsToQuery).order('logged_at', { ascending: false }).limit(30),
+        .in(idField, idsToQuery).order('logged_at', { ascending: false }).limit(30),
       15000
     );
     let locationColumnAvailable = true;
@@ -5160,7 +5271,7 @@ function openLogForm(exerciseId, exerciseName){
       locationColumnAvailable = false;
       result = await withTimeout(
         supabaseClient.from('sets').select('id, weight, weight_unit, weight_type, reps, num_sets, notes, logged_at')
-          .in('exercise_id', idsToQuery).order('logged_at', { ascending: false }).limit(30),
+          .in(idField, idsToQuery).order('logged_at', { ascending: false }).limit(30),
         15000
       );
     }
