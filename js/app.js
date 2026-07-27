@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.73';
+const APP_VERSION = 'Beta 5.74';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1319,11 +1319,22 @@ async function openLinkSetsToMasterScreen(){
     const errors = [];
     for (const { setId, masterId } of toLink){
       const { error } = await supabaseClient.from('sets').update({ exercise_master_id: masterId }).eq('id', setId);
-      if (error) errors.push(`${setId}: ${error.message}`);
+      if (error) errors.push({ setId, message: error.message });
       else linked++;
     }
+    if (errors.length){
+      body.innerHTML = `
+        <div class="small" style="padding:12px 18px; color:var(--good);">✓ ${linked} sets linked successfully.</div>
+        <div class="small" style="padding:0 18px 8px 18px; color:#E8492A;">${errors.length} failed - exact reason for each:</div>
+        ${errors.map(e => `<div class="proposal-card" style="margin:0 18px 8px 18px; background:var(--panel); border:1px solid #4a2f16; border-radius:10px; padding:12px 14px;">
+          <div class="small" style="color:var(--slate);">Set ID ${e.setId}</div>
+          <div class="small" style="color:#E8A33D; margin-top:4px;">${e.message}</div>
+        </div>`).join('')}
+      `;
+      return;
+    }
     overlay.remove();
-    alert(`Linked ${linked} sets.${errors.length ? `\n\n${errors.length} failed:\n${errors.slice(0,5).join('\n')}` : ''}\n\nEvery set's original exercise_id is unchanged.`);
+    alert(`Linked ${linked} sets. Every set's original exercise_id is unchanged.`);
   };
 }
 
@@ -1549,8 +1560,18 @@ async function openMigrateToMasterScreen(){
         else dayLinks++;
       }
     }
+    if (errors.length){
+      body.innerHTML = `
+        <div class="small" style="padding:12px 18px; color:var(--good);">✓ ${created} exercises created, ${dayLinks} day-links.</div>
+        <div class="small" style="padding:0 18px 8px 18px; color:#E8492A;">${errors.length} failed - exact reason for each:</div>
+        ${errors.map(e => `<div class="proposal-card" style="margin:0 18px 8px 18px; background:var(--panel); border:1px solid #4a2f16; border-radius:10px; padding:12px 14px;">
+          <div class="small" style="color:#E8A33D;">${e}</div>
+        </div>`).join('')}
+      `;
+      return;
+    }
     overlay.remove();
-    alert(`Created ${created} master exercises with ${dayLinks} day-links.${errors.length ? `\n\n${errors.length} error(s):\n${errors.slice(0,5).join('\n')}` : ''}\n\nYour original exercises table was not touched - the app is unaffected.`);
+    alert(`Created ${created} master exercises with ${dayLinks} day-links. Your original exercises table was not touched - the app is unaffected.`);
   };
 }
 
