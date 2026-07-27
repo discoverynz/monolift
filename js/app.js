@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.64';
+const APP_VERSION = 'Beta 5.65';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -2627,6 +2627,32 @@ function fineMuscleCategory(broadMuscle, exerciseName){
     if (n.includes('preacher') || n.includes('concentration') || n.includes('spider')) return 'Biceps (Short Head)';
     return 'Biceps';
   }
+  if (m === 'calves'){
+    // Knee position determines which calf muscle actually does the work -
+    // gastrocnemius crosses the knee so it's loaded with the leg straight
+    // (standing raises), soleus doesn't cross the knee so it takes over when
+    // the knee is bent (seated raises). This is standard, reliable convention.
+    if (n.includes('seated')) return 'Calves (Soleus)';
+    if (n.includes('standing') || n.includes('donkey') || n.includes('leg press calf')) return 'Calves (Gastrocnemius)';
+    return 'Calves';
+  }
+  if (m === 'forearms'){
+    // Matches the exact convention already used in the plan itself - curling
+    // the wrist works the flexors, extending/reversing it works the extensors.
+    if (n.includes('reverse') || n.includes('extensor') || n.includes('extension')) return 'Forearms (Extensors)';
+    if (n.includes('flexor') || n.includes('wrist curl') || n.includes('forearm curl') || n.includes('pushdown')) return 'Forearms (Flexors)';
+    return 'Forearms';
+  }
+  if (m === 'traps'){
+    if (n.includes('shrug')) return 'Traps (Upper)';
+    return 'Traps';
+  }
+  // Quadriceps, hamstrings, and glutes are deliberately left as broad
+  // categories - unlike the ones above, there's no reliable per-exercise-name
+  // signal for which specific head or muscle within these groups is being
+  // targeted (a "Leg Extension" doesn't reliably tell you rectus femoris vs
+  // vastus lateralis the way "seated calf raise" reliably tells you soleus).
+  // Forcing a guess here would be more likely to mislead than help.
   return cap(broadMuscle);
 }
 
@@ -2639,24 +2665,27 @@ function fineMuscleCategory(broadMuscle, exerciseName){
 const MUSCLE_SORT_REGION = {
   'Upper Chest':'Chest', 'Mid Chest':'Chest', 'Lower Chest':'Chest', 'Chest':'Chest',
   'Front Delts':'Shoulders', 'Side Delts':'Shoulders', 'Rear Delts':'Shoulders', 'Shoulders':'Shoulders',
-  'Lats':'Back', 'Upper Back':'Back', 'Middle back':'Back', 'Lower back':'Back', 'Traps':'Back',
+  'Lats':'Back', 'Upper Back':'Back', 'Middle back':'Back', 'Lower back':'Back', 'Traps':'Back', 'Traps (Upper)':'Back',
   'Biceps':'Arms', 'Biceps (Long Head)':'Arms', 'Biceps (Short Head)':'Arms', 'Brachialis':'Arms',
-  'Triceps':'Arms', 'Triceps (Long Head)':'Arms', 'Triceps (Lateral Head)':'Arms', 'Forearms':'Arms',
-  'Quadriceps':'Legs', 'Hamstrings':'Legs', 'Glutes':'Legs', 'Calves':'Legs', 'Adductors':'Legs', 'Abductors':'Legs',
+  'Triceps':'Arms', 'Triceps (Long Head)':'Arms', 'Triceps (Lateral Head)':'Arms',
+  'Forearms':'Arms', 'Forearms (Flexors)':'Arms', 'Forearms (Extensors)':'Arms',
+  'Quadriceps':'Legs', 'Hamstrings':'Legs', 'Glutes':'Legs', 'Adductors':'Legs', 'Abductors':'Legs',
+  'Calves':'Legs', 'Calves (Gastrocnemius)':'Legs', 'Calves (Soleus)':'Legs',
   'Abdominals':'Core', 'Neck':'Neck'
 };
 // True anatomical top-to-bottom order, not alphabetical within a region -
 // neck and traps sit at the top of the body, calves at the bottom.
 const MUSCLE_ANATOMICAL_ORDER = [
-  'Neck', 'Traps',
+  'Neck', 'Traps (Upper)', 'Traps',
   'Front Delts', 'Side Delts', 'Rear Delts', 'Shoulders',
   'Upper Chest', 'Mid Chest', 'Lower Chest', 'Chest',
   'Lats', 'Upper Back', 'Middle back', 'Lower back',
   'Biceps (Long Head)', 'Biceps (Short Head)', 'Biceps', 'Brachialis',
-  'Triceps (Long Head)', 'Triceps (Lateral Head)', 'Triceps', 'Forearms',
+  'Triceps (Long Head)', 'Triceps (Lateral Head)', 'Triceps',
+  'Forearms (Flexors)', 'Forearms (Extensors)', 'Forearms',
   'Abdominals',
   'Glutes', 'Quadriceps', 'Hamstrings', 'Adductors', 'Abductors',
-  'Calves'
+  'Calves (Gastrocnemius)', 'Calves (Soleus)', 'Calves'
 ];
 function muscleSortKey(label){
   const idx = MUSCLE_ANATOMICAL_ORDER.indexOf(label);
@@ -2737,13 +2766,16 @@ async function openPicker(initialTab, jumpToMuscle){
         groupExercisesByChoice(deduped, groupBy, splitMode),
         loadExerciseDB()
       ]);
+      const todayNames = new Set(all.filter(ex => ex.weekday === state.selectedDay).map(ex => ex.name.toLowerCase()));
 
       function renderExerciseRow(ex){
         const match = matchExercise(ex.name, db);
         const muscles = match ? muscleSubtitle(match.primaryMuscles, match.secondaryMuscles) : '';
         const mech = classifyMechanic(match);
         const mechTag = mech ? `<span style="font-size:9px; padding:2px 5px; border-radius:4px; margin-left:5px; background:${mech.value==='compound'?'rgba(255,107,26,0.15)':'rgba(122,150,220,0.15)'}; color:${mech.value==='compound'?'#FF6B1A':'#7BA6C9'}; opacity:${mech.guessed?0.75:1};">${mech.guessed?'~':''}${mech.value==='compound'?'Compound':'Isolation'}</span>` : '';
-        return `<div class="pick-row" data-id="${ex.id}" data-name="${ex.name}"><div><div class="ex-name">${ex.name}${mechTag}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}</div><div class="chev">›</div></div>`;
+        const alreadyToday = todayNames.has(ex.name.toLowerCase())
+          ? `<span style="font-size:9px; padding:2px 6px; border-radius:4px; margin-left:5px; background:rgba(143,191,122,0.15); color:var(--good);">✓ On ${DAY_NAMES[state.selectedDay]}</span>` : '';
+        return `<div class="pick-row" data-id="${ex.id}" data-name="${ex.name}"><div><div class="ex-name">${ex.name}${mechTag}${alreadyToday}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}</div><div class="chev">›</div></div>`;
       }
 
       let html = '';
@@ -2851,16 +2883,19 @@ async function openPicker(initialTab, jumpToMuscle){
       let html = '';
       const presentKeys = orderedKeys.filter(k => (grouped[k]||[]).length);
       const flatOrder = []; // display order across every visible category, for swipe nav
+      const todayNames = new Set(all.filter(ex => ex.weekday === state.selectedDay).map(ex => ex.name.toLowerCase()));
 
       function renderDbRow(e){
         flatOrder.push({ name: e.name, equipment: e.equipment });
         const star = POPULAR_EXERCISES.has(e.name)
           ? `<span title="Popular staple" style="color:#F0C542; margin-left:5px;">★</span>` : '';
+        const alreadyToday = todayNames.has(e.name.toLowerCase())
+          ? `<span style="font-size:9px; padding:2px 6px; border-radius:4px; margin-left:5px; background:rgba(143,191,122,0.15); color:var(--good);">✓ On ${DAY_NAMES[state.selectedDay]}</span>` : '';
         const muscles = muscleSubtitle(e.primaryMuscles, e.secondaryMuscles);
         const mech = classifyMechanic(e);
         const mechTag = mech ? `<span style="font-size:9px; padding:2px 5px; border-radius:4px; margin-left:5px; background:${mech.value==='compound'?'rgba(255,107,26,0.15)':'rgba(122,150,220,0.15)'}; color:${mech.value==='compound'?'#FF6B1A':'#7BA6C9'}; opacity:${mech.guessed?0.75:1};">${mech.guessed?'~':''}${mech.value==='compound'?'Compound':'Isolation'}</span>` : '';
         const equipLine = [cap(e.equipment), cap(e.level)].filter(Boolean).join(' · ');
-        return `<div class="pick-row db-pick" data-name="${e.name}" data-equip="${e.equipment||''}"><div><div class="ex-name">${e.name}${star}${mechTag}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}${equipLine ? `<div class="small" style="color:var(--slate); opacity:0.7; font-size:10.5px;">${equipLine}</div>` : ''}</div><div class="chev">›</div></div>`;
+        return `<div class="pick-row db-pick" data-name="${e.name}" data-equip="${e.equipment||''}"><div><div class="ex-name">${e.name}${star}${mechTag}${alreadyToday}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}${equipLine ? `<div class="small" style="color:var(--slate); opacity:0.7; font-size:10.5px;">${equipLine}</div>` : ''}</div><div class="chev">›</div></div>`;
       }
 
       presentKeys.forEach(cat => {
