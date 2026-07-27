@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.70';
+const APP_VERSION = 'Beta 5.71';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1226,6 +1226,10 @@ function openPlanSubPage(){
         <div><div style="color:#E8A33D;">Verify New Data Matches Old (Rebuild - Stage 4a)</div><div class="small" style="color:var(--slate); margin-top:2px;">Day-by-day comparison before anything live gets switched over</div></div>
         <div class="chev" style="margin-top:2px;">›</div>
       </div>
+      <div class="me-item" id="subLinkSetsBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+        <div><div style="color:#E8A33D;">Link Sets to Exercise Master (Rebuild - Stage 4b)</div><div class="small" style="color:var(--slate); margin-top:2px;">Additive-only - links every set to the new structure without touching its original link</div></div>
+        <div class="chev" style="margin-top:2px;">›</div>
+      </div>
       ${localStorage.getItem('zealift_reorg_snapshot') ? `<div class="me-item" id="subRevertReorgBtn"><div style="color:#E8A33D;">Revert Last Reorganization</div><div class="chev">›</div></div>` : ''}
     </div>`;
   document.body.appendChild(overlay);
@@ -1240,8 +1244,75 @@ function openPlanSubPage(){
   overlay.querySelector('#subMigrateMasterBtn').onclick = openMigrateToMasterScreen;
   overlay.querySelector('#subExportBackupBtn').onclick = openExportFullBackupScreen;
   overlay.querySelector('#subVerifyBtn').onclick = openVerifyMigrationScreen;
+  overlay.querySelector('#subLinkSetsBtn').onclick = openLinkSetsToMasterScreen;
   const subRevertBtn = overlay.querySelector('#subRevertReorgBtn');
   if (subRevertBtn) subRevertBtn.onclick = revertLastReorganization;
+}
+
+async function openLinkSetsToMasterScreen(){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeLinkSets">✕</button><h1>Link Sets to Exercise Master</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll" id="linkSetsBody"><div class="small" style="padding:20px 18px; color:var(--slate);">Reading everything…</div></div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeLinkSets').onclick = () => overlay.remove();
+
+  const { data: userData } = await supabaseClient.auth.getUser();
+  const uid = userData.user.id;
+  const body = overlay.querySelector('#linkSetsBody');
+
+  const [oldExResult, masterResult, setsResult] = await Promise.all([
+    withTimeout(supabaseClient.from('exercises').select('id, name').eq('user_id', uid), 15000),
+    withTimeout(supabaseClient.from('exercise_master').select('id, name').eq('user_id', uid), 15000),
+    withTimeout(supabaseClient.from('sets').select('id, exercise_id, exercise_master_id').eq('user_id', uid), 15000)
+  ]);
+  if (oldExResult.__timeout || oldExResult.error || masterResult.__timeout || masterResult.error || setsResult.__timeout || setsResult.error){
+    body.innerHTML = `<div class="empty-state" style="padding:30px 18px;">Could not read one of the tables needed. Nothing was touched - try again.</div>`;
+    return;
+  }
+
+  const oldNameById = {};
+  (oldExResult.data || []).forEach(ex => { oldNameById[ex.id] = ex.name.toLowerCase(); });
+  const masterIdByName = {};
+  (masterResult.data || []).forEach(m => { masterIdByName[m.name.toLowerCase()] = m.id; });
+
+  const allSets = setsResult.data || [];
+  const toLink = [];
+  const unmatched = [];
+  const alreadyLinked = [];
+  allSets.forEach(s => {
+    if (s.exercise_master_id){ alreadyLinked.push(s); return; }
+    const name = oldNameById[s.exercise_id];
+    const masterId = name ? masterIdByName[name] : null;
+    if (masterId) toLink.push({ setId: s.id, masterId });
+    else unmatched.push(s);
+  });
+
+  body.innerHTML = `
+    <div class="small" style="padding:12px 18px; color:var(--slate); line-height:1.6;">Only ever writes to the new exercise_master_id column - the original exercise_id on every set is never touched or removed. ${allSets.length} total sets found.</div>
+    <div class="proposal-card" style="margin:0 18px 10px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px;">
+      <div class="small" style="color:var(--good);">✓ ${toLink.length} sets ready to link</div>
+      ${alreadyLinked.length ? `<div class="small" style="color:var(--slate); margin-top:4px;">${alreadyLinked.length} already linked from a prior run</div>` : ''}
+      ${unmatched.length ? `<div class="small" style="color:#E8492A; margin-top:4px;">✗ ${unmatched.length} sets could not be matched to any master exercise - these need investigating before this is safe to fully rely on</div>` : ''}
+    </div>
+    ${unmatched.length ? '' : `<button class="save-btn" id="confirmLinkSetsBtn" style="margin:0 18px 20px 18px;">Link ${toLink.length} Sets</button>`}
+  `;
+  if (unmatched.length) return;
+
+  body.querySelector('#confirmLinkSetsBtn').onclick = async () => {
+    const btn = body.querySelector('#confirmLinkSetsBtn');
+    btn.textContent = 'Linking…';
+    let linked = 0;
+    const errors = [];
+    for (const { setId, masterId } of toLink){
+      const { error } = await supabaseClient.from('sets').update({ exercise_master_id: masterId }).eq('id', setId);
+      if (error) errors.push(`${setId}: ${error.message}`);
+      else linked++;
+    }
+    overlay.remove();
+    alert(`Linked ${linked} sets.${errors.length ? `\n\n${errors.length} failed:\n${errors.slice(0,5).join('\n')}` : ''}\n\nEvery set's original exercise_id is unchanged.`);
+  };
 }
 
 async function openVerifyMigrationScreen(){
