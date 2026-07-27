@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.69';
+const APP_VERSION = 'Beta 5.70';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1222,6 +1222,10 @@ function openPlanSubPage(){
         <div><div style="color:#E8A33D;">Export Full Backup (Rebuild - Stage 3)</div><div class="small" style="color:var(--slate); margin-top:2px;">A real downloadable file with everything - before Stage 4 touches anything live</div></div>
         <div class="chev" style="margin-top:2px;">›</div>
       </div>
+      <div class="me-item" id="subVerifyBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+        <div><div style="color:#E8A33D;">Verify New Data Matches Old (Rebuild - Stage 4a)</div><div class="small" style="color:var(--slate); margin-top:2px;">Day-by-day comparison before anything live gets switched over</div></div>
+        <div class="chev" style="margin-top:2px;">›</div>
+      </div>
       ${localStorage.getItem('zealift_reorg_snapshot') ? `<div class="me-item" id="subRevertReorgBtn"><div style="color:#E8A33D;">Revert Last Reorganization</div><div class="chev">›</div></div>` : ''}
     </div>`;
   document.body.appendChild(overlay);
@@ -1235,8 +1239,71 @@ function openPlanSubPage(){
   overlay.querySelector('#subRefreshMuscleBtn').onclick = openRefreshMuscleCategoriesScreen;
   overlay.querySelector('#subMigrateMasterBtn').onclick = openMigrateToMasterScreen;
   overlay.querySelector('#subExportBackupBtn').onclick = openExportFullBackupScreen;
+  overlay.querySelector('#subVerifyBtn').onclick = openVerifyMigrationScreen;
   const subRevertBtn = overlay.querySelector('#subRevertReorgBtn');
   if (subRevertBtn) subRevertBtn.onclick = revertLastReorganization;
+}
+
+async function openVerifyMigrationScreen(){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeVerify">✕</button><h1>Verify New Data Matches Old</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll" id="verifyBody"><div class="small" style="padding:20px 18px; color:var(--slate);">Comparing every day…</div></div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeVerify').onclick = () => overlay.remove();
+
+  const { data: userData } = await supabaseClient.auth.getUser();
+  const uid = userData.user.id;
+  const body = overlay.querySelector('#verifyBody');
+
+  const [oldResult, masterResult, daysResult] = await Promise.all([
+    withTimeout(supabaseClient.from('exercises').select('name, weekday').eq('user_id', uid).eq('active', true), 15000),
+    withTimeout(supabaseClient.from('exercise_master').select('id, name').eq('user_id', uid), 15000),
+    withTimeout(supabaseClient.from('exercise_days').select('exercise_master_id, weekday').eq('user_id', uid), 15000)
+  ]);
+  if (oldResult.__timeout || oldResult.error || masterResult.__timeout || masterResult.error || daysResult.__timeout || daysResult.error){
+    body.innerHTML = `<div class="empty-state" style="padding:30px 18px;">Could not read one of the tables needed to compare. Nothing was touched - try again.</div>`;
+    return;
+  }
+
+  const oldByDay = {};
+  (oldResult.data || []).forEach(ex => { (oldByDay[ex.weekday] = oldByDay[ex.weekday] || new Set()).add(ex.name.toLowerCase()); });
+
+  const masterNameById = {};
+  (masterResult.data || []).forEach(m => { masterNameById[m.id] = m.name; });
+  const newByDay = {};
+  (daysResult.data || []).forEach(d => {
+    const name = masterNameById[d.exercise_master_id];
+    if (!name) return;
+    (newByDay[d.weekday] = newByDay[d.weekday] || new Set()).add(name.toLowerCase());
+  });
+
+  let allMatch = true;
+  const rows = [];
+  for (let wd = 0; wd < 7; wd++){
+    const oldSet = oldByDay[wd] || new Set();
+    const newSet = newByDay[wd] || new Set();
+    const missing = [...oldSet].filter(n => !newSet.has(n));
+    const extra = [...newSet].filter(n => !oldSet.has(n));
+    const match = missing.length === 0 && extra.length === 0;
+    if (!match) allMatch = false;
+    rows.push({ day: DAY_NAMES[wd], oldCount: oldSet.size, newCount: newSet.size, match, missing, extra });
+  }
+
+  body.innerHTML = `
+    <div class="small" style="padding:12px 18px; color:${allMatch ? 'var(--good)' : '#E8492A'}; line-height:1.6;">${allMatch ? '✓ Every day matches exactly. Safe to move forward with switching the live app over.' : '✗ Found a mismatch - do not switch anything live over until this is resolved.'}</div>
+    ${rows.map(r => `
+      <div class="proposal-card" style="margin:0 18px 10px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div class="ex-name" style="font-size:13px;">${r.day}</div>
+          <div class="small" style="color:${r.match ? 'var(--good)' : '#E8492A'};">${r.match ? '✓ match' : '✗ mismatch'} (${r.oldCount} old / ${r.newCount} new)</div>
+        </div>
+        ${r.missing.length ? `<div class="small" style="color:#E8492A; margin-top:4px;">Missing from new: ${r.missing.join(', ')}</div>` : ''}
+        ${r.extra.length ? `<div class="small" style="color:#E8492A; margin-top:4px;">Extra in new: ${r.extra.join(', ')}</div>` : ''}
+      </div>
+    `).join('')}
+  `;
 }
 
 async function openExportFullBackupScreen(){
