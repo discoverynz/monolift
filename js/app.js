@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.80';
+const APP_VERSION = 'Beta 5.81';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1265,6 +1265,54 @@ function openLocationSubPage(){
   overlay.querySelector('#subManageLocationsBtn').onclick = () => openManageLocationsScreen();
 }
 
+function openRebuildToolsSubPage(){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeRebuildSubPage">✕</button><h1>Rebuild Tools</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll">
+      <div class="small" style="padding:0 18px 14px 18px; color:var(--slate); line-height:1.5;">In-progress migration to a proper exercise data structure - one real exercise instead of a separate copy per day. All of this is safe and reversible; nothing here can lose data.</div>
+      <div class="me-item" id="subMigrateMasterBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+        <div><div>Migrate to Exercise Master</div><div class="small" style="color:var(--slate); margin-top:2px;">Stage 2 - writes to new tables, never touches your current data</div></div>
+        <div class="chev" style="margin-top:2px;">›</div>
+      </div>
+      <div class="me-item" id="subExportBackupBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+        <div><div>Export Full Backup</div><div class="small" style="color:var(--slate); margin-top:2px;">Stage 3 - a real downloadable file with everything</div></div>
+        <div class="chev" style="margin-top:2px;">›</div>
+      </div>
+      <div class="me-item" id="subVerifyBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+        <div><div>Verify New Data Matches Old</div><div class="small" style="color:var(--slate); margin-top:2px;">Stage 4a - day-by-day comparison</div></div>
+        <div class="chev" style="margin-top:2px;">›</div>
+      </div>
+      <div class="me-item" id="subLinkSetsBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+        <div><div>Link Sets to Exercise Master</div><div class="small" style="color:var(--slate); margin-top:2px;">Stage 4b - links every set to the new structure</div></div>
+        <div class="chev" style="margin-top:2px;">›</div>
+      </div>
+      <div style="margin:12px 18px 12px 18px; background:var(--panel); border:1px solid #4a2f16; border-radius:10px; padding:14px;">
+        <div class="ex-name" style="font-size:13px; color:#E8A33D;">Use New Exercise Structure</div>
+        <div class="small" style="color:var(--slate); margin-top:4px; line-height:1.5;">Stage 4c - switches Track and History to read and write through exercise_master. Turning this off takes effect immediately, no app update needed.</div>
+        <div id="masterFlagToggle" style="margin-top:10px;"></div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeRebuildSubPage').onclick = () => overlay.remove();
+  overlay.querySelector('#subMigrateMasterBtn').onclick = openMigrateToMasterScreen;
+  overlay.querySelector('#subExportBackupBtn').onclick = openExportFullBackupScreen;
+  overlay.querySelector('#subVerifyBtn').onclick = openVerifyMigrationScreen;
+  overlay.querySelector('#subLinkSetsBtn').onclick = openLinkSetsToMasterScreen;
+  function renderMasterFlagToggle(){
+    const on = getUseExerciseMasterFlag();
+    const toggleArea = overlay.querySelector('#masterFlagToggle');
+    toggleArea.innerHTML = `<div class="chip-row">
+      <div class="chip ${!on?'active':''}" id="masterFlagOff">OFF (current app)</div>
+      <div class="chip ${on?'active':''}" id="masterFlagOn" style="${on?'background:#E8A33D; color:var(--ink);':''}">ON (new structure)</div>
+    </div>`;
+    toggleArea.querySelector('#masterFlagOff').onclick = () => { setUseExerciseMasterFlag(false); renderMasterFlagToggle(); if (state.currentTab === 'track') renderTrack(); };
+    toggleArea.querySelector('#masterFlagOn').onclick = () => { setUseExerciseMasterFlag(true); renderMasterFlagToggle(); if (state.currentTab === 'track') renderTrack(); };
+  }
+  renderMasterFlagToggle();
+}
+
 function openPlanSubPage(){
   const overlay = document.createElement('div');
   overlay.className = 'overlay-screen';
@@ -1287,26 +1335,9 @@ function openPlanSubPage(){
         <div><div>Tag Workouts</div><div class="small" style="color:var(--slate); margin-top:2px;">Push, pull, upper, lower - what Reorganize uses to build a split automatically</div></div>
         <div class="chev" style="margin-top:2px;">›</div>
       </div>
-      <div class="me-item" id="subMigrateMasterBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
-        <div><div style="color:#E8A33D;">Migrate to Exercise Master (Rebuild - Stage 2)</div><div class="small" style="color:var(--slate); margin-top:2px;">Safe, additive-only - writes to new tables, never touches your current data</div></div>
+      <div class="me-item" id="subRebuildToolsBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+        <div><div style="color:#E8A33D;">Rebuild Tools</div><div class="small" style="color:var(--slate); margin-top:2px;">In-progress data structure migration - safe, in-progress, reversible</div></div>
         <div class="chev" style="margin-top:2px;">›</div>
-      </div>
-      <div class="me-item" id="subExportBackupBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
-        <div><div style="color:#E8A33D;">Export Full Backup (Rebuild - Stage 3)</div><div class="small" style="color:var(--slate); margin-top:2px;">A real downloadable file with everything - before Stage 4 touches anything live</div></div>
-        <div class="chev" style="margin-top:2px;">›</div>
-      </div>
-      <div class="me-item" id="subVerifyBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
-        <div><div style="color:#E8A33D;">Verify New Data Matches Old (Rebuild - Stage 4a)</div><div class="small" style="color:var(--slate); margin-top:2px;">Day-by-day comparison before anything live gets switched over</div></div>
-        <div class="chev" style="margin-top:2px;">›</div>
-      </div>
-      <div class="me-item" id="subLinkSetsBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
-        <div><div style="color:#E8A33D;">Link Sets to Exercise Master (Rebuild - Stage 4b)</div><div class="small" style="color:var(--slate); margin-top:2px;">Additive-only - links every set to the new structure without touching its original link</div></div>
-        <div class="chev" style="margin-top:2px;">›</div>
-      </div>
-      <div style="margin:0 18px 12px 18px; background:var(--panel); border:1px solid #4a2f16; border-radius:10px; padding:14px;">
-        <div class="ex-name" style="font-size:13px; color:#E8A33D;">Use New Exercise Structure (Rebuild - Stage 4c)</div>
-        <div class="small" style="color:var(--slate); margin-top:4px; line-height:1.5;">Switches Track and History over to read and write through exercise_master. Turning this off again takes effect immediately - no app update needed.</div>
-        <div id="masterFlagToggle" style="margin-top:10px;"></div>
       </div>
       ${localStorage.getItem('zealift_reorg_snapshot') ? `<div class="me-item" id="subRevertReorgBtn"><div style="color:#E8A33D;">Revert Last Reorganization</div><div class="chev">›</div></div>` : ''}
     </div>`;
@@ -1316,21 +1347,7 @@ function openPlanSubPage(){
   overlay.querySelector('#subSwapDaysBtn').onclick = openSwapDaysForm;
   overlay.querySelector('#subRedoWeekBtn').onclick = () => showOnboarding('setup');
   overlay.querySelector('#subScanSplitTagsBtn').onclick = openSplitTagReview;
-  overlay.querySelector('#subMigrateMasterBtn').onclick = openMigrateToMasterScreen;
-  overlay.querySelector('#subExportBackupBtn').onclick = openExportFullBackupScreen;
-  overlay.querySelector('#subVerifyBtn').onclick = openVerifyMigrationScreen;
-  overlay.querySelector('#subLinkSetsBtn').onclick = openLinkSetsToMasterScreen;
-  function renderMasterFlagToggle(){
-    const on = getUseExerciseMasterFlag();
-    const toggleArea = overlay.querySelector('#masterFlagToggle');
-    toggleArea.innerHTML = `<div class="chip-row">
-      <div class="chip ${!on?'active':''}" id="masterFlagOff">OFF (current app)</div>
-      <div class="chip ${on?'active':''}" id="masterFlagOn" style="${on?'background:#E8A33D; color:var(--ink);':''}">ON (new structure)</div>
-    </div>`;
-    toggleArea.querySelector('#masterFlagOff').onclick = () => { setUseExerciseMasterFlag(false); renderMasterFlagToggle(); if (state.currentTab === 'track') renderTrack(); };
-    toggleArea.querySelector('#masterFlagOn').onclick = () => { setUseExerciseMasterFlag(true); renderMasterFlagToggle(); if (state.currentTab === 'track') renderTrack(); };
-  }
-  renderMasterFlagToggle();
+  overlay.querySelector('#subRebuildToolsBtn').onclick = openRebuildToolsSubPage;
   const subRevertBtn = overlay.querySelector('#subRevertReorgBtn');
   if (subRevertBtn) subRevertBtn.onclick = revertLastReorganization;
 }
