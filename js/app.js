@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.65';
+const APP_VERSION = 'Beta 5.66';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1210,6 +1210,10 @@ function openPlanSubPage(){
         <div><div>Fix Alt Groups</div><div class="small" style="color:var(--slate); margin-top:2px;">Clean up groups scattered across days or named after one</div></div>
         <div class="chev" style="margin-top:2px;">›</div>
       </div>
+      <div class="me-item" id="subRefreshMuscleBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+        <div><div>Refresh Muscle Categories</div><div class="small" style="color:var(--slate); margin-top:2px;">Let newer, more specific auto-detection replace old broad-only overrides</div></div>
+        <div class="chev" style="margin-top:2px;">›</div>
+      </div>
       ${localStorage.getItem('zealift_reorg_snapshot') ? `<div class="me-item" id="subRevertReorgBtn"><div style="color:#E8A33D;">Revert Last Reorganization</div><div class="chev">›</div></div>` : ''}
     </div>`;
   document.body.appendChild(overlay);
@@ -1220,8 +1224,85 @@ function openPlanSubPage(){
   overlay.querySelector('#subScanSplitTagsBtn').onclick = openSplitTagReview;
   overlay.querySelector('#subDupeCleanBtn').onclick = openDuplicateCleanupScreen;
   overlay.querySelector('#subFixAltsBtn').onclick = openFixAltGroupsScreen;
+  overlay.querySelector('#subRefreshMuscleBtn').onclick = openRefreshMuscleCategoriesScreen;
   const subRevertBtn = overlay.querySelector('#subRevertReorgBtn');
   if (subRevertBtn) subRevertBtn.onclick = revertLastReorganization;
+}
+
+async function openRefreshMuscleCategoriesScreen(){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeRefreshMuscle">✕</button><h1>Refresh Muscle Categories</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll" id="refreshMuscleBody"><div class="small" style="padding:20px 18px; color:var(--slate);">Scanning…</div></div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeRefreshMuscle').onclick = () => overlay.remove();
+
+  const { data: userData } = await supabaseClient.auth.getUser();
+  const [exResult, db] = await Promise.all([
+    withTimeout(supabaseClient.from('exercises').select('id, name, muscle_override').eq('user_id', userData.user.id).eq('active', true), 15000),
+    loadExerciseDB()
+  ]);
+  const all = exResult.__timeout || exResult.error ? [] : (exResult.data || []);
+  // These are exactly the broad-only categories that existed before this
+  // session added subdivision for Triceps, Biceps, Calves, Forearms, and
+  // Traps. An override that matches one of these exactly almost certainly
+  // predates the more specific options ever existing, rather than being a
+  // deliberate choice to avoid them - so it's worth offering to refresh.
+  const broadOnlyLabels = new Set(['Chest','Shoulders','Lats','Upper Back','Middle back','Lower back','Traps','Biceps','Triceps','Forearms','Quadriceps','Hamstrings','Glutes','Calves','Adductors','Abductors','Abdominals','Neck']);
+  const byName = {};
+  all.forEach(ex => { if (!byName[ex.name.toLowerCase()]) byName[ex.name.toLowerCase()] = ex; });
+  const candidates = [];
+  Object.values(byName).forEach(ex => {
+    if (!ex.muscle_override || !broadOnlyLabels.has(ex.muscle_override)) return;
+    const match = matchExercise(ex.name, db);
+    const muscle = match && match.primaryMuscles && match.primaryMuscles[0];
+    if (!muscle) return;
+    // Only a candidate if the override is exactly the exercise's own natural
+    // broad category with no customization at all - a deliberately different
+    // override (like a curl manually set to Shoulders) is real personalization
+    // and must never be touched, regardless of what auto-detection would say.
+    if (cap(muscle) !== ex.muscle_override) return;
+    const wouldBe = fineMuscleCategory(muscle, ex.name);
+    if (wouldBe && wouldBe !== ex.muscle_override) candidates.push({ ex, from: ex.muscle_override, to: wouldBe });
+  });
+
+  const body = overlay.querySelector('#refreshMuscleBody');
+  if (!candidates.length){
+    body.innerHTML = `<div class="empty-state" style="padding:30px 18px;">Nothing to refresh - either everything's already auto-detected, or your overrides are genuinely custom choices, not just old broad categories.</div>`;
+    return;
+  }
+  body.innerHTML = `
+    <div class="small" style="padding:12px 18px; color:var(--slate); line-height:1.6;">${candidates.length} exercise${candidates.length===1?' has':'s have'} a manually-set muscle category that predates more specific options existing. Clearing these lets the newer, more specific auto-detection take over - anything left unchecked stays exactly as it is.</div>
+    ${candidates.map((c, i) => `
+      <div class="pick-row" data-i="${i}" style="align-items:flex-start; padding-top:10px; padding-bottom:10px;">
+        <div><div class="ex-name" style="font-size:13px;">${c.ex.name}</div><div class="small" style="color:var(--slate); margin-top:2px;">${c.from} → ${c.to}</div></div>
+        <div class="check-circle refresh-check active">${ICON_CHECK}</div>
+      </div>
+    `).join('')}
+    <button class="save-btn" id="confirmRefreshMuscleBtn" style="margin:20px 18px 20px 18px;">Refresh Selected</button>
+  `;
+  const included = new Set(candidates.map((c,i) => i));
+  body.querySelectorAll('.pick-row[data-i]').forEach(row => {
+    row.onclick = () => {
+      const i = parseInt(row.dataset.i, 10);
+      const check = row.querySelector('.refresh-check');
+      if (included.has(i)){ included.delete(i); check.classList.remove('active'); check.style.opacity = '0.25'; }
+      else { included.add(i); check.classList.add('active'); check.style.opacity = '1'; }
+    };
+  });
+
+  body.querySelector('#confirmRefreshMuscleBtn').onclick = async () => {
+    const btn = body.querySelector('#confirmRefreshMuscleBtn');
+    btn.textContent = 'Refreshing…';
+    for (const i of included){
+      const c = candidates[i];
+      await supabaseClient.from('exercises').update({ muscle_override: null }).ilike('name', c.ex.name).eq('user_id', userData.user.id);
+    }
+    overlay.remove();
+    alert(`Refreshed ${included.size} exercise${included.size===1?'':'s'}.`);
+    if (state.currentTab === 'track') renderTrack();
+  };
 }
 
 async function openFixAltGroupsScreen(){
