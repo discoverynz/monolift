@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.81';
+const APP_VERSION = 'Beta 5.82';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -113,12 +113,22 @@ async function quickAddStarter(name, category, weekday){
     15000
   );
   if (!existingResult.__timeout && !existingResult.error && existingResult.data){ renderTrack(); return; }
-  const { error } = await insertExerciseSafely({ user_id: userData.user.id, name, category, weekday, alt_group_id: null });
+  const { error } = await createExerciseForToday({ user_id: userData.user.id, name, category, weekday, alt_group_id: null });
   if (error){ alert(error.message); return; }
   renderTrack();
 }
 
-function getGroupByPref(){ return localStorage.getItem('zealift_group_by') || 'equipment'; }
+function getGroupByPref(){
+  // Track only ever supports equipment/muscle - if a stale 'split' value is
+  // sitting in the old shared key (from before this was separated out), fall
+  // back to equipment rather than silently sorting by an option Track's own
+  // toggle can't even display as selected.
+  const v = localStorage.getItem('zealift_group_by_track') || localStorage.getItem('zealift_group_by');
+  return (v === 'equipment' || v === 'muscle') ? v : 'equipment';
+}
+function setGroupByPref(v){ localStorage.setItem('zealift_group_by_track', v); }
+function getPickerGroupByPref(){ return localStorage.getItem('zealift_group_by_picker') || 'equipment'; }
+function setPickerGroupByPref(v){ localStorage.setItem('zealift_group_by_picker', v); }
 function getSplitModePref(){ return localStorage.getItem('zealift_split_mode') || 'ppl'; }
 function setSplitModePref(v){ localStorage.setItem('zealift_split_mode', v); }
 function getSplitSubGroupPref(){ return localStorage.getItem('zealift_split_subgroup') || 'equipment'; }
@@ -129,7 +139,6 @@ function getSplitSubGroupPref(){ return localStorage.getItem('zealift_split_subg
 function getUseExerciseMasterFlag(){ return localStorage.getItem('zealift_use_exercise_master') === 'true'; }
 function setUseExerciseMasterFlag(v){ localStorage.setItem('zealift_use_exercise_master', v ? 'true' : 'false'); }
 function setSplitSubGroupPref(v){ localStorage.setItem('zealift_split_subgroup', v); }
-function setGroupByPref(v){ localStorage.setItem('zealift_group_by', v); }
 
 // Groups a list of {name, category, ...} exercises either by their stored equipment
 // category, or by primary muscle looked up dynamically against the cached exercise DB —
@@ -916,6 +925,41 @@ async function insertExerciseSafely(payload){
     }
   }
   return { data: null, error: result.error, wasExisting: false };
+}
+
+// The one place any "add this exercise to this day" flow should go through.
+// Under the old structure this is just insertExerciseSafely. Under the new
+// structure, it finds-or-creates the master record by name, then links it to
+// the requested day - critical, since every creation flow used to insert
+// old-style per-day rows unconditionally, and passing that id into the log
+// form under the new structure caused a foreign key violation the moment
+// someone tried to save a set, since that id doesn't exist in exercise_master.
+async function createExerciseForToday(payload){
+  if (!getUseExerciseMasterFlag()) return insertExerciseSafely(payload);
+
+  const existingMaster = await withTimeout(
+    supabaseClient.from('exercise_master').select('id').eq('user_id', payload.user_id).ilike('name', payload.name).maybeSingle(),
+    15000
+  );
+  let masterId;
+  if (!existingMaster.__timeout && !existingMaster.error && existingMaster.data){
+    masterId = existingMaster.data.id;
+  } else {
+    const { data: inserted, error } = await supabaseClient.from('exercise_master').insert({
+      user_id: payload.user_id, name: payload.name, category: payload.category,
+      alt_group_id: payload.alt_group_id || null, push_pull: payload.push_pull || null,
+      upper_lower: payload.upper_lower || null, location_ids: payload.location_ids || null
+    }).select();
+    if (error || !inserted || !inserted[0]) return { data: null, error: error || { message: 'Could not create exercise' }, wasExisting: false };
+    masterId = inserted[0].id;
+  }
+  const dayResult = await supabaseClient.from('exercise_days').insert({
+    user_id: payload.user_id, exercise_master_id: masterId, weekday: payload.weekday
+  });
+  // A unique-violation here just means this exercise is already on this day -
+  // not a real error, the exercise still exists and is still usable.
+  if (dayResult.error && dayResult.error.code !== '23505') return { data: null, error: dayResult.error, wasExisting: false };
+  return { data: [{ id: masterId, name: payload.name, category: payload.category }], error: null, wasExisting: !!dayResult.error };
 }
 
 function getCurrentLocationId(){
@@ -2507,7 +2551,7 @@ async function openSuggestionPreview(name, category, navList){
       openLogForm(existingResult.data.id, name);
       return;
     }
-    const { error } = await insertExerciseSafely({ user_id: userData.user.id, name, category, weekday: state.selectedDay, alt_group_id: null });
+    const { error } = await createExerciseForToday({ user_id: userData.user.id, name, category, weekday: state.selectedDay, alt_group_id: null });
     if (error){ alert(error.message); return; }
     overlay.remove();
     state.currentTab = 'track';
@@ -3052,21 +3096,43 @@ function openEditLocationForm(exerciseId, exerciseName){
 }
 
 function confirmRemoveExercise(exerciseId, exerciseName){
+  const useMaster = getUseExerciseMasterFlag();
   const overlay = document.createElement('div');
   overlay.style = 'position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:20; display:flex; align-items:center; justify-content:center;';
   overlay.innerHTML = `
-    <div style="background:var(--panel); border-radius:16px; padding:22px; width:280px; text-align:center;">
+    <div style="background:var(--panel); border-radius:16px; padding:22px; width:300px; text-align:center;">
       <div style="font-family:'Oswald', sans-serif; font-size:16px; margin-bottom:8px;">Remove Exercise?</div>
-      <div style="font-size:13px; color:var(--slate); margin-bottom:18px;">"${exerciseName}" will be hidden from this day. Your past logged sets are kept.</div>
+      <div style="font-size:13px; color:var(--slate); margin-bottom:14px;">"${exerciseName}" will be hidden from this day. Your past logged sets are kept.</div>
+      <div id="deleteEntirelyRow" style="display:flex; align-items:flex-start; gap:8px; text-align:left; padding:10px 12px; background:var(--ink); border-radius:10px; margin-bottom:16px; cursor:pointer;">
+        <div class="check-circle" id="deleteEntirelyCheck" style="opacity:0.3; margin-top:1px; flex-shrink:0;">${ICON_CHECK}</div>
+        <div style="font-size:11.5px; color:var(--slate); line-height:1.4;">Also permanently delete all logged history for this exercise${useMaster ? ' - since it uses the new shared structure, this removes it everywhere, not just today' : ''}. Cannot be undone.</div>
+      </div>
       <div style="display:flex; gap:10px;">
         <button id="cancelRemove" style="flex:1; padding:11px; border-radius:10px; background:var(--ink); color:var(--chalk); font-size:13px;">Cancel</button>
         <button id="confirmRemove" style="flex:1; padding:11px; border-radius:10px; background:var(--flame); color:var(--ink); font-weight:600; font-size:13px;">Remove</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
+  let deleteEntirely = false;
+  overlay.querySelector('#deleteEntirelyRow').onclick = () => {
+    deleteEntirely = !deleteEntirely;
+    overlay.querySelector('#deleteEntirelyCheck').style.opacity = deleteEntirely ? '1' : '0.3';
+  };
   overlay.querySelector('#cancelRemove').onclick = () => overlay.remove();
   overlay.querySelector('#confirmRemove').onclick = async () => {
     overlay.remove();
+    if (deleteEntirely){
+      if (useMaster){
+        await supabaseClient.from('sets').delete().eq('exercise_master_id', exerciseId);
+        await supabaseClient.from('exercise_days').delete().eq('exercise_master_id', exerciseId);
+        await supabaseClient.from('exercise_master').delete().eq('id', exerciseId);
+      } else {
+        await supabaseClient.from('sets').delete().eq('exercise_id', exerciseId);
+        await supabaseClient.from('exercises').delete().eq('id', exerciseId);
+      }
+      renderTrack();
+      return;
+    }
     await supabaseClient.from('exercises').update({ active: false }).eq('id', exerciseId);
     showUndoToast(exerciseName, async () => {
       await supabaseClient.from('exercises').update({ active: true }).eq('id', exerciseId);
@@ -3325,7 +3391,7 @@ function groupDatabaseExercises(list, groupBy, splitMode){
 }
 
 async function openPicker(initialTab, jumpToMuscle){
-  if (jumpToMuscle) setGroupByPref('muscle');
+  if (jumpToMuscle) setPickerGroupByPref('muscle');
   const overlay = document.createElement('div');
   overlay.className = 'overlay-screen';
   overlay.innerHTML = `
@@ -3362,7 +3428,7 @@ async function openPicker(initialTab, jumpToMuscle){
         if (!byName[key] || ex.weekday < byName[key].weekday) byName[key] = ex;
       });
       const deduped = Object.values(byName).filter(ex => ex.name.toLowerCase().includes(f));
-      const groupBy = getGroupByPref();
+      const groupBy = getPickerGroupByPref();
       const splitMode = getSplitModePref();
       const splitSubGroup = getSplitSubGroupPref();
       const [{ grouped, orderedKeys }, db] = await Promise.all([
@@ -3404,7 +3470,7 @@ async function openPicker(initialTab, jumpToMuscle){
       }
       body.querySelector('#pickerGroupToggle').innerHTML = pickerGroupByToggleHtml(groupBy, splitMode, splitSubGroup);
       body.querySelectorAll('.groupby-chip').forEach(chip => {
-        chip.onclick = () => { setGroupByPref(chip.dataset.groupby); renderList(body.querySelector('#pickerSearch').value); };
+        chip.onclick = () => { setPickerGroupByPref(chip.dataset.groupby); renderList(body.querySelector('#pickerSearch').value); };
       });
       body.querySelectorAll('.splitmode-chip').forEach(chip => {
         chip.onclick = () => { setSplitModePref(chip.dataset.splitmode); renderList(body.querySelector('#pickerSearch').value); };
@@ -3432,7 +3498,7 @@ async function openPicker(initialTab, jumpToMuscle){
             return;
           }
           const { data: userData } = await supabaseClient.auth.getUser();
-          const { data: inserted, error } = await insertExerciseSafely({
+          const { data: inserted, error } = await createExerciseForToday({
             user_id: userData.user.id, name: picked.name, category: picked.category,
             weekday: state.selectedDay, alt_group_id: null
           });
@@ -3479,7 +3545,7 @@ async function openPicker(initialTab, jumpToMuscle){
     function renderDbList(filter){
       const f = (filter || '').toLowerCase();
       const filtered = db.filter(e => e.name.toLowerCase().includes(f));
-      const groupBy = getGroupByPref();
+      const groupBy = getPickerGroupByPref();
       const splitMode = getSplitModePref();
       const splitSubGroup = getSplitSubGroupPref();
       const { grouped, orderedKeys } = groupDatabaseExercises(filtered, groupBy, splitMode);
@@ -3520,7 +3586,7 @@ async function openPicker(initialTab, jumpToMuscle){
       });
       body.querySelector('#dbGroupToggle').innerHTML = pickerGroupByToggleHtml(groupBy, splitMode, splitSubGroup);
       body.querySelectorAll('.groupby-chip').forEach(chip => {
-        chip.onclick = () => { setGroupByPref(chip.dataset.groupby); renderDbList(body.querySelector('#dbSearch').value); };
+        chip.onclick = () => { setPickerGroupByPref(chip.dataset.groupby); renderDbList(body.querySelector('#dbSearch').value); };
       });
       body.querySelectorAll('.splitmode-chip').forEach(chip => {
         chip.onclick = () => { setSplitModePref(chip.dataset.splitmode); renderDbList(body.querySelector('#dbSearch').value); };
@@ -4582,7 +4648,7 @@ async function openPlanReorganizer(){
           if (isFullBodyRepeat){
             const sample = allExercises.find(e => e.name === it.name);
             if (!sample) continue;
-            await insertExerciseSafely({
+            await createExerciseForToday({
               user_id: userData.user.id, name: sample.name, category: sample.category,
               weekday: dp.dayIdx, alt_group_id: clearAlt ? null : sample.alt_group_id,
               push_pull: sample.push_pull, upper_lower: sample.upper_lower, location_ids: sample.location_ids
@@ -4849,7 +4915,7 @@ async function openNewExerciseForm(){
       openLogForm(existingResult.data.id, name);
       return;
     }
-    const { error } = await insertExerciseSafely({
+    const { error } = await createExerciseForToday({
       user_id: userData.user.id, name, category: selectedCategory, weekday: selectedDay,
       alt_group_id: pickedAltGroup ? pickedAltGroup.id : null,
       push_pull: selectedPushPull, upper_lower: selectedUpperLower, location_ids: selectedLocationIds
@@ -5519,7 +5585,7 @@ function openLogForm(exerciseId, exerciseName){
     const setsVal = document.getElementById('setsInput').value;
     const repsVal = document.getElementById('repsInput').value;
     const notesVal = document.getElementById('notesInput').value.trim();
-    if (!weightRaw && !setsVal && !repsVal){ alert('Enter at least one value — weight, time, sets, or reps.'); return; }
+    if (!weightRaw && !setsVal && !repsVal){ alert("Enter at least one value to save a set — weight, time, sets, or reps. If you just want this exercise sitting on today's list ready to log later, tap ✕ to close instead - it's already there, no set required."); return; }
     const weight = weightRaw ? parseFloat(weightRaw) : null;
     const insertedId = await saveEntry(weight, unit, weightType, repsVal ? parseInt(repsVal,10) : null, setsVal ? parseInt(setsVal,10) : null, notesVal);
     if (insertedId){
