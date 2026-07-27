@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.84';
+const APP_VERSION = 'Beta 5.85';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -4527,7 +4527,7 @@ async function openPlanReorganizer(){
     // them needs doing in a session, not all), then balance whatever's left
     // against a realistic session size instead of pre-including every single
     // matching exercise - which is how a Push day ends up with 39 items.
-    const SESSION_TARGET = 8;
+    const SESSION_TARGET = 12;
     const swapChoices = {}; // "dayIdx|slotIndex" -> chosen name, if swapped from the default representative
     dayPlans.forEach(dp => {
       if (dp.isCustom) return;
