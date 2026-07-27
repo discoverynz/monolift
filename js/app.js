@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.82';
+const APP_VERSION = 'Beta 5.83';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1383,6 +1383,10 @@ function openPlanSubPage(){
         <div><div style="color:#E8A33D;">Rebuild Tools</div><div class="small" style="color:var(--slate); margin-top:2px;">In-progress data structure migration - safe, in-progress, reversible</div></div>
         <div class="chev" style="margin-top:2px;">›</div>
       </div>
+      <div class="me-item" id="subWipeAltsBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+        <div><div style="color:#E8492A;">Wipe &amp; Rebuild Alt Groups</div><div class="small" style="color:var(--slate); margin-top:2px;">Clear everything and start over, reviewed day by day</div></div>
+        <div class="chev" style="margin-top:2px;">›</div>
+      </div>
       ${localStorage.getItem('zealift_reorg_snapshot') ? `<div class="me-item" id="subRevertReorgBtn"><div style="color:#E8A33D;">Revert Last Reorganization</div><div class="chev">›</div></div>` : ''}
     </div>`;
   document.body.appendChild(overlay);
@@ -1392,6 +1396,7 @@ function openPlanSubPage(){
   overlay.querySelector('#subRedoWeekBtn').onclick = () => showOnboarding('setup');
   overlay.querySelector('#subScanSplitTagsBtn').onclick = openSplitTagReview;
   overlay.querySelector('#subRebuildToolsBtn').onclick = openRebuildToolsSubPage;
+  overlay.querySelector('#subWipeAltsBtn').onclick = openWipeAltGroupsScreen;
   const subRevertBtn = overlay.querySelector('#subRevertReorgBtn');
   if (subRevertBtn) subRevertBtn.onclick = revertLastReorganization;
 }
@@ -2036,6 +2041,45 @@ async function openRetagLocationFromNotesScreen(){
     alert(`Retagged ${updated} sets by location.`);
     if (state.currentTab === 'track') renderTrack();
   });
+}
+
+async function openWipeAltGroupsScreen(){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeWipeAlts">✕</button><h1>Wipe &amp; Rebuild Alt Groups</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll" id="wipeAltsBody"><div class="small" style="padding:20px 18px; color:var(--slate);">Checking current alt groups…</div></div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeWipeAlts').onclick = () => overlay.remove();
+
+  const { data: userData } = await supabaseClient.auth.getUser();
+  const uid = userData.user.id;
+  const body = overlay.querySelector('#wipeAltsBody');
+
+  const [groupsResult, exResult] = await Promise.all([
+    withTimeout(supabaseClient.from('alt_groups').select('id, name').eq('user_id', uid), 15000),
+    withTimeout(supabaseClient.from('exercises').select('id').eq('user_id', uid).not('alt_group_id', 'is', null), 15000)
+  ]);
+  const groups = groupsResult.__timeout || groupsResult.error ? [] : (groupsResult.data || []);
+  const taggedCount = exResult.__timeout || exResult.error ? 0 : (exResult.data || []).length;
+
+  body.innerHTML = `
+    <div class="small" style="padding:12px 18px; color:var(--slate); line-height:1.6;">This clears every alt group assignment - a genuine restart, not an attempt to fix the existing mess in place. ${groups.length} group${groups.length===1?'':'s'} and ${taggedCount} tagged exercise${taggedCount===1?'':'s'} found right now.<br><br>After wiping, go to each day and use Auto-Group Alts to rebuild - it'll propose clusters based on muscle and movement, and you review, rename, or reject each one before anything is applied. Nothing gets forced together automatically.</div>
+    <button class="save-btn" id="confirmWipeBtn" style="margin:0 18px 20px 18px; background:#E8492A;">Wipe All ${groups.length} Groups</button>
+  `;
+
+  body.querySelector('#confirmWipeBtn').onclick = async () => {
+    if (!confirm(`This clears alt group tags from ${taggedCount} exercises. Nothing else is touched - names, weights, history, all stay exactly as they are. Continue?`)) return;
+    const btn = body.querySelector('#confirmWipeBtn');
+    btn.textContent = 'Wiping…';
+    const useMaster = getUseExerciseMasterFlag();
+    const table = useMaster ? 'exercise_master' : 'exercises';
+    await supabaseClient.from(table).update({ alt_group_id: null }).eq('user_id', uid).not('alt_group_id', 'is', null);
+    await supabaseClient.from('alt_groups').delete().eq('user_id', uid);
+    overlay.remove();
+    alert(`Wiped. Go to each day and use Auto-Group Alts (long-press any exercise) to rebuild, one day at a time.`);
+    if (state.currentTab === 'track') renderTrack();
+  };
 }
 
 async function openManageLocationsScreen(){
