@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.75';
+const APP_VERSION = 'Beta 5.76';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1257,12 +1257,17 @@ function openLocationSubPage(){
         <div><div>Manage Locations</div><div class="small" style="color:var(--slate); margin-top:2px;">Rename or delete a location</div></div>
         <div class="chev" style="margin-top:2px;">›</div>
       </div>
+      <div class="me-item" id="subRetagBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+        <div><div>Retag Location From Notes</div><div class="small" style="color:var(--slate); margin-top:2px;">Bulk-fix past sets: Functional Fitness unless notes mention Smales</div></div>
+        <div class="chev" style="margin-top:2px;">›</div>
+      </div>
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#closeLocSubPage').onclick = () => overlay.remove();
   overlay.querySelector('#subDefaultLocationBtn').onclick = () => openDefaultLocationPicker();
   overlay.querySelector('#subBulkLocationBtn').onclick = () => openBulkLocationAssign();
   overlay.querySelector('#subManageLocationsBtn').onclick = () => openManageLocationsScreen();
+  overlay.querySelector('#subRetagBtn').onclick = () => openRetagLocationFromNotesScreen();
 }
 
 function openPlanSubPage(){
@@ -1917,6 +1922,79 @@ function openReorganizeChoice(){
   overlay.querySelector('#closeReorgChoice').onclick = () => overlay.remove();
   overlay.querySelector('#reorgWholeWeekRow').onclick = () => { overlay.remove(); openPlanReorganizer(); };
   overlay.querySelector('#reorgOneDayRow').onclick = () => { overlay.remove(); openChangeSingleDay(); };
+}
+
+async function openRetagLocationFromNotesScreen(){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeRetag">✕</button><h1>Retag Location From Notes</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll" id="retagBody"><div class="small" style="padding:20px 18px; color:var(--slate);">Reading your locations and set history…</div></div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeRetag').onclick = () => overlay.remove();
+
+  const { data: userData } = await supabaseClient.auth.getUser();
+  const uid = userData.user.id;
+  const body = overlay.querySelector('#retagBody');
+
+  const [locResult, setsResult] = await Promise.all([
+    withTimeout(supabaseClient.from('locations').select('id, name').eq('user_id', uid), 15000),
+    withTimeout(supabaseClient.from('sets').select('id, notes, location_id').eq('user_id', uid), 15000)
+  ]);
+  if (locResult.__timeout || locResult.error || setsResult.__timeout || setsResult.error){
+    body.innerHTML = `<div class="empty-state" style="padding:30px 18px;">Could not read your locations or set history. Nothing was touched - try again.</div>`;
+    return;
+  }
+  const locations = locResult.data || [];
+  const smalesLoc = locations.find(l => /smales/i.test(l.name));
+  const funcFitLoc = locations.find(l => /functional\s*fitness/i.test(l.name));
+  if (!smalesLoc || !funcFitLoc){
+    body.innerHTML = `<div class="empty-state" style="padding:30px 18px;">Could not find both locations by name - need one matching "Smales" and one matching "Functional Fitness". ${!smalesLoc ? 'No Smales location found. ' : ''}${!funcFitLoc ? 'No Functional Fitness location found.' : ''} Nothing was touched.</div>`;
+    return;
+  }
+
+  const allSets = setsResult.data || [];
+  const toSmales = [];
+  const toFuncFit = [];
+  allSets.forEach(s => {
+    const targetId = /smales/i.test(s.notes || '') ? smalesLoc.id : funcFitLoc.id;
+    if (s.location_id === targetId) return; // already correct, nothing to do
+    if (targetId === smalesLoc.id) toSmales.push(s); else toFuncFit.push(s);
+  });
+
+  body.innerHTML = `
+    <div class="small" style="padding:12px 18px; color:var(--slate); line-height:1.6;">${allSets.length} total logged sets found. Every set gets tagged ${funcFitLoc.name}, unless its notes mention Smales in some form, in which case it gets tagged ${smalesLoc.name} - matching how you used to log it. Only the location tag changes - weight, date, and notes are untouched.</div>
+    <div class="proposal-card" style="margin:0 18px 14px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px;">
+      <div class="small" style="color:var(--good);">${toSmales.length} sets to be tagged ${smalesLoc.name}</div>
+      <div class="small" style="color:var(--good); margin-top:4px;">${toFuncFit.length} sets to be tagged ${funcFitLoc.name}</div>
+      <div class="small" style="color:var(--slate); margin-top:4px;">${allSets.length - toSmales.length - toFuncFit.length} already correctly tagged, no change needed</div>
+    </div>
+    ${(toSmales.length + toFuncFit.length) ? `<button class="save-btn" id="confirmRetagBtn" style="margin:0 18px 20px 18px;">Retag ${toSmales.length + toFuncFit.length} Sets</button>` : ''}
+  `;
+
+  body.querySelector('#confirmRetagBtn') && (body.querySelector('#confirmRetagBtn').onclick = async () => {
+    const btn = body.querySelector('#confirmRetagBtn');
+    btn.textContent = 'Retagging…';
+    let updated = 0;
+    const errors = [];
+    for (const s of [...toSmales, ...toFuncFit]){
+      const targetId = toSmales.includes(s) ? smalesLoc.id : funcFitLoc.id;
+      const { error } = await supabaseClient.from('sets').update({ location_id: targetId }).eq('id', s.id);
+      if (error) errors.push({ setId: s.id, message: error.message });
+      else updated++;
+    }
+    if (errors.length){
+      body.innerHTML = `
+        <div class="small" style="padding:12px 18px; color:var(--good);">✓ ${updated} sets retagged successfully.</div>
+        <div class="small" style="padding:0 18px 8px 18px; color:#E8492A;">${errors.length} failed:</div>
+        ${errors.map(e => `<div class="proposal-card" style="margin:0 18px 8px 18px; background:var(--panel); border:1px solid #4a2f16; border-radius:10px; padding:12px 14px;"><div class="small" style="color:#E8A33D;">Set ${e.setId}: ${e.message}</div></div>`).join('')}
+      `;
+      return;
+    }
+    overlay.remove();
+    alert(`Retagged ${updated} sets by location.`);
+    if (state.currentTab === 'track') renderTrack();
+  });
 }
 
 async function openManageLocationsScreen(){
@@ -5171,18 +5249,6 @@ function openLogForm(exerciseId, exerciseName){
   if (navPrev) overlay.querySelector('#prevExerciseBtn').onclick = () => { overlay.remove(); openLogForm(navPrev.id, navPrev.name); };
   if (navNext) overlay.querySelector('#nextExerciseBtn').onclick = () => { overlay.remove(); openLogForm(navNext.id, navNext.name); };
 
-  // Swipe left/right to page through exercises, same direction convention as the arrows.
-  let touchStartX = null;
-  overlay.addEventListener('touchstart', (e) => { touchStartX = e.touches[0].clientX; }, { passive: true });
-  overlay.addEventListener('touchend', (e) => {
-    if (touchStartX === null) return;
-    const dx = e.changedTouches[0].clientX - touchStartX;
-    touchStartX = null;
-    if (Math.abs(dx) < 70) return; // require a deliberate swipe, not an incidental scroll drag
-    if (dx < 0 && navNext){ overlay.remove(); openLogForm(navNext.id, navNext.name); }
-    else if (dx > 0 && navPrev){ overlay.remove(); openLogForm(navPrev.id, navPrev.name); }
-  }, { passive: true });
-
   overlay.querySelectorAll('.unit-toggle button').forEach(b => {
     b.onclick = () => { overlay.querySelectorAll('.unit-toggle button').forEach(x=>x.classList.remove('active')); b.classList.add('active'); unit = b.dataset.u; };
   });
@@ -5384,7 +5450,7 @@ function openLogForm(exerciseId, exerciseName){
           <div style="font-size:11px; color:var(--slate); text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">📍 ${locName}</div>
           <div class="log-weight" style="text-align:right;">${formatSetValue(s, true)}</div>
         </div>
-        ${s.notes ? `<div style="font-size:11px; color:var(--slate); font-style:italic;">${s.notes}</div>` : ''}
+        ${s.notes ? `<div style="font-size:11px; color:var(--slate); margin-top:2px;"><span style="opacity:0.7;">Notes:</span> <span style="font-style:italic;">${s.notes}</span></div>` : ''}
       </div>`;
     }).join('');
     list.querySelectorAll('.log-row[data-id]').forEach(row => {
