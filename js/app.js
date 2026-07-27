@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.67';
+const APP_VERSION = 'Beta 5.68';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1239,11 +1239,32 @@ async function openMigrateToMasterScreen(){
   overlay.className = 'overlay-screen';
   overlay.innerHTML = `
     <div class="form-header"><button id="closeMigrate">✕</button><h1>Migrate to Exercise Master</h1><div style="width:18px;"></div></div>
-    <div class="overlay-scroll" id="migrateBody"><div class="small" style="padding:20px 18px; color:var(--slate);">Reading your current exercises…</div></div>`;
+    <div class="overlay-scroll">
+      <div id="migrateStatus" style="margin:12px 18px 0 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px;"><div class="small" style="color:var(--slate);">Checking current status…</div></div>
+      <div id="migrateBody"><div class="small" style="padding:20px 18px; color:var(--slate);">Reading your current exercises…</div></div>
+    </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#closeMigrate').onclick = () => overlay.remove();
 
   const { data: userData } = await supabaseClient.auth.getUser();
+
+  // Live status check - what's actually in the new tables right now, not a
+  // number to remember from a dismissed alert.
+  const statusArea = overlay.querySelector('#migrateStatus');
+  const [masterCountResult, daysCountResult] = await Promise.all([
+    withTimeout(supabaseClient.from('exercise_master').select('id, name').eq('user_id', userData.user.id), 15000),
+    withTimeout(supabaseClient.from('exercise_days').select('id').eq('user_id', userData.user.id), 15000)
+  ]);
+  if (masterCountResult.__timeout || masterCountResult.error){
+    statusArea.innerHTML = `<div class="small" style="color:#E8492A;">Could not check current status: ${masterCountResult.error ? masterCountResult.error.message : 'timed out'}. If this says the table doesn't exist, Stage 1's SQL migration hasn't been run yet.</div>`;
+  } else {
+    const masterRows = masterCountResult.data || [];
+    const dayRows = daysCountResult.__timeout || daysCountResult.error ? [] : (daysCountResult.data || []);
+    statusArea.innerHTML = masterRows.length
+      ? `<div class="ex-name" style="font-size:13px; margin-bottom:4px; color:var(--good);">✓ Currently migrated: ${masterRows.length} exercises, ${dayRows.length} day-links</div><div class="small" style="color:var(--slate);">${masterRows.slice(0,5).map(m=>m.name).join(', ')}${masterRows.length>5 ? `, +${masterRows.length-5} more` : ''}</div>`
+      : `<div class="small" style="color:var(--slate);">Nothing migrated yet.</div>`;
+  }
+
   const exResult = await withTimeout(
     supabaseClient.from('exercises').select('id, name, category, weekday, alt_group_id, push_pull, upper_lower, muscle_override, location_ids').eq('user_id', userData.user.id).eq('active', true),
     15000
