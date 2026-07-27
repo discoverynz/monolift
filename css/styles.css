@@ -85,8 +85,8 @@ input:focus, button:focus{ outline:none; }
 .chip{ font-size:14px; padding:7px 12px; border-radius:20px; background:var(--panel); color:var(--slate); }
 .chip.active{ background:var(--flame); color:var(--ink); font-weight:600; }
 .pick-row{ display:flex; justify-content:space-between; align-items:center; padding:13px 18px; border-bottom:1px solid var(--line); }
-.save-btn{ margin:20px 18px 0 18px; background:var(--flame); color:var(--ink); text-align:center; padding:13px; border-radius:12px;
-  font-weight:600; font-family:'Oswald', sans-serif; text-transform:uppercase; letter-spacing:0.5px; }
+.save-btn{ display:block; margin:20px 18px 0 18px; background:var(--flame); color:var(--ink); text-align:center; padding:14px;
+  font-weight:600; font-family:'Oswald', sans-serif; font-size:15px; text-transform:uppercase; letter-spacing:0.5px; border-radius:12px; }
 .save-btn:disabled{ opacity:0.5; }
 
 /* ---------- Pass 2: alt badges, search, action rows ---------- */
