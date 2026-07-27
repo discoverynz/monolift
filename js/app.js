@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.79';
+const APP_VERSION = 'Beta 5.80';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1257,17 +1257,12 @@ function openLocationSubPage(){
         <div><div>Manage Locations</div><div class="small" style="color:var(--slate); margin-top:2px;">Rename or delete a location</div></div>
         <div class="chev" style="margin-top:2px;">›</div>
       </div>
-      <div class="me-item" id="subRetagBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
-        <div><div>Retag Location From Notes</div><div class="small" style="color:var(--slate); margin-top:2px;">Bulk-fix past sets: Functional Fitness unless notes mention Smales</div></div>
-        <div class="chev" style="margin-top:2px;">›</div>
-      </div>
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#closeLocSubPage').onclick = () => overlay.remove();
   overlay.querySelector('#subDefaultLocationBtn').onclick = () => openDefaultLocationPicker();
   overlay.querySelector('#subBulkLocationBtn').onclick = () => openBulkLocationAssign();
   overlay.querySelector('#subManageLocationsBtn').onclick = () => openManageLocationsScreen();
-  overlay.querySelector('#subRetagBtn').onclick = () => openRetagLocationFromNotesScreen();
 }
 
 function openPlanSubPage(){
@@ -1290,18 +1285,6 @@ function openPlanSubPage(){
       </div>
       <div class="me-item" id="subScanSplitTagsBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
         <div><div>Tag Workouts</div><div class="small" style="color:var(--slate); margin-top:2px;">Push, pull, upper, lower - what Reorganize uses to build a split automatically</div></div>
-        <div class="chev" style="margin-top:2px;">›</div>
-      </div>
-      <div class="me-item" id="subDupeCleanBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
-        <div><div>Clean Up Duplicates</div><div class="small" style="color:var(--slate); margin-top:2px;">Find and merge the same exercise showing up more than once on a day</div></div>
-        <div class="chev" style="margin-top:2px;">›</div>
-      </div>
-      <div class="me-item" id="subFixAltsBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
-        <div><div>Fix Alt Groups</div><div class="small" style="color:var(--slate); margin-top:2px;">Clean up groups scattered across days or named after one</div></div>
-        <div class="chev" style="margin-top:2px;">›</div>
-      </div>
-      <div class="me-item" id="subRefreshMuscleBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
-        <div><div>Refresh Muscle Categories</div><div class="small" style="color:var(--slate); margin-top:2px;">Let newer, more specific auto-detection replace old broad-only overrides</div></div>
         <div class="chev" style="margin-top:2px;">›</div>
       </div>
       <div class="me-item" id="subMigrateMasterBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
@@ -1333,9 +1316,6 @@ function openPlanSubPage(){
   overlay.querySelector('#subSwapDaysBtn').onclick = openSwapDaysForm;
   overlay.querySelector('#subRedoWeekBtn').onclick = () => showOnboarding('setup');
   overlay.querySelector('#subScanSplitTagsBtn').onclick = openSplitTagReview;
-  overlay.querySelector('#subDupeCleanBtn').onclick = openDuplicateCleanupScreen;
-  overlay.querySelector('#subFixAltsBtn').onclick = openFixAltGroupsScreen;
-  overlay.querySelector('#subRefreshMuscleBtn').onclick = openRefreshMuscleCategoriesScreen;
   overlay.querySelector('#subMigrateMasterBtn').onclick = openMigrateToMasterScreen;
   overlay.querySelector('#subExportBackupBtn').onclick = openExportFullBackupScreen;
   overlay.querySelector('#subVerifyBtn').onclick = openVerifyMigrationScreen;
