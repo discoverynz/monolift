@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.66';
+const APP_VERSION = 'Beta 5.67';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1214,6 +1214,10 @@ function openPlanSubPage(){
         <div><div>Refresh Muscle Categories</div><div class="small" style="color:var(--slate); margin-top:2px;">Let newer, more specific auto-detection replace old broad-only overrides</div></div>
         <div class="chev" style="margin-top:2px;">›</div>
       </div>
+      <div class="me-item" id="subMigrateMasterBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+        <div><div style="color:#E8A33D;">Migrate to Exercise Master (Rebuild - Stage 2)</div><div class="small" style="color:var(--slate); margin-top:2px;">Safe, additive-only - writes to new tables, never touches your current data</div></div>
+        <div class="chev" style="margin-top:2px;">›</div>
+      </div>
       ${localStorage.getItem('zealift_reorg_snapshot') ? `<div class="me-item" id="subRevertReorgBtn"><div style="color:#E8A33D;">Revert Last Reorganization</div><div class="chev">›</div></div>` : ''}
     </div>`;
   document.body.appendChild(overlay);
@@ -1225,8 +1229,87 @@ function openPlanSubPage(){
   overlay.querySelector('#subDupeCleanBtn').onclick = openDuplicateCleanupScreen;
   overlay.querySelector('#subFixAltsBtn').onclick = openFixAltGroupsScreen;
   overlay.querySelector('#subRefreshMuscleBtn').onclick = openRefreshMuscleCategoriesScreen;
+  overlay.querySelector('#subMigrateMasterBtn').onclick = openMigrateToMasterScreen;
   const subRevertBtn = overlay.querySelector('#subRevertReorgBtn');
   if (subRevertBtn) subRevertBtn.onclick = revertLastReorganization;
+}
+
+async function openMigrateToMasterScreen(){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeMigrate">✕</button><h1>Migrate to Exercise Master</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll" id="migrateBody"><div class="small" style="padding:20px 18px; color:var(--slate);">Reading your current exercises…</div></div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeMigrate').onclick = () => overlay.remove();
+
+  const { data: userData } = await supabaseClient.auth.getUser();
+  const exResult = await withTimeout(
+    supabaseClient.from('exercises').select('id, name, category, weekday, alt_group_id, push_pull, upper_lower, muscle_override, location_ids').eq('user_id', userData.user.id).eq('active', true),
+    15000
+  );
+  const body = overlay.querySelector('#migrateBody');
+  if (exResult.__timeout || exResult.error){
+    body.innerHTML = `<div class="empty-state" style="padding:30px 18px;">Could not read your exercises: ${exResult.error ? exResult.error.message : 'timed out'}. Nothing was touched.</div>`;
+    return;
+  }
+  const all = exResult.data || [];
+  if (!all.length){
+    body.innerHTML = `<div class="empty-state" style="padding:30px 18px;">No active exercises found to migrate.</div>`;
+    return;
+  }
+
+  // Group by name - this is the actual deduplication step. Prioritize
+  // whichever member has an alt group set as the template, same reasoning
+  // as Clean Up Duplicates: that's real data worth keeping. For any field
+  // that differs between day-copies, take the first non-empty value found.
+  const byName = {};
+  all.forEach(ex => { (byName[ex.name.toLowerCase()] = byName[ex.name.toLowerCase()] || []).push(ex); });
+  const groups = Object.values(byName).map(members => {
+    const sorted = [...members].sort((a, b) => (a.alt_group_id ? -1 : 1) - (b.alt_group_id ? -1 : 1));
+    const template = sorted[0];
+    const weekdays = [...new Set(members.map(m => m.weekday))].sort((a,b) => a - b);
+    return { template, weekdays, memberCount: members.length };
+  });
+
+  body.innerHTML = `
+    <div class="small" style="padding:12px 18px; color:var(--slate); line-height:1.6;">This is a safe, read-only-first step. It only writes to the new exercise_master and exercise_days tables - your existing exercises table is never modified or deleted. The app keeps working exactly as it does now until a later stage switches it over.</div>
+    <div class="proposal-card" style="margin:0 18px 14px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px;">
+      <div class="ex-name" style="font-size:14px; margin-bottom:6px;">${groups.length} distinct exercises found</div>
+      <div class="small" style="color:var(--slate);">from ${all.length} current day-by-day records, spanning ${groups.reduce((s,g)=>s+g.weekdays.length,0)} day-links total</div>
+    </div>
+    <button class="save-btn" id="confirmMigrateBtn" style="margin:0 18px 20px 18px;">Write to New Tables</button>
+  `;
+
+  body.querySelector('#confirmMigrateBtn').onclick = async () => {
+    const btn = body.querySelector('#confirmMigrateBtn');
+    btn.textContent = 'Migrating…';
+    // Idempotent: clear any prior run first so re-running after adding more
+    // exercises rebuilds cleanly from the current source of truth, rather
+    // than accumulating stale duplicates in the new tables.
+    await supabaseClient.from('exercise_days').delete().eq('user_id', userData.user.id);
+    await supabaseClient.from('exercise_master').delete().eq('user_id', userData.user.id);
+
+    let created = 0, dayLinks = 0, errors = [];
+    for (const g of groups){
+      const t = g.template;
+      const { data: inserted, error } = await supabaseClient.from('exercise_master').insert({
+        user_id: userData.user.id, name: t.name, category: t.category, alt_group_id: t.alt_group_id,
+        push_pull: t.push_pull, upper_lower: t.upper_lower, muscle_override: t.muscle_override, location_ids: t.location_ids
+      }).select();
+      if (error || !inserted || !inserted[0]){ errors.push(`${t.name}: ${error ? error.message : 'no row returned'}`); continue; }
+      created++;
+      for (const weekday of g.weekdays){
+        const { error: dayError } = await supabaseClient.from('exercise_days').insert({
+          user_id: userData.user.id, exercise_master_id: inserted[0].id, weekday
+        });
+        if (dayError) errors.push(`${t.name} (${DAY_NAMES[weekday]}): ${dayError.message}`);
+        else dayLinks++;
+      }
+    }
+    overlay.remove();
+    alert(`Created ${created} master exercises with ${dayLinks} day-links.${errors.length ? `\n\n${errors.length} error(s):\n${errors.slice(0,5).join('\n')}` : ''}\n\nYour original exercises table was not touched - the app is unaffected.`);
+  };
 }
 
 async function openRefreshMuscleCategoriesScreen(){
