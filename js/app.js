@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.72';
+const APP_VERSION = 'Beta 5.73';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1479,7 +1479,7 @@ async function openMigrateToMasterScreen(){
   }
 
   const exResult = await withTimeout(
-    supabaseClient.from('exercises').select('id, name, category, weekday, alt_group_id, push_pull, upper_lower, muscle_override, location_ids').eq('user_id', userData.user.id).eq('active', true),
+    supabaseClient.from('exercises').select('id, name, category, weekday, alt_group_id, push_pull, upper_lower, muscle_override, location_ids, active').eq('user_id', userData.user.id),
     15000
   );
   const body = overlay.querySelector('#migrateBody');
@@ -1489,25 +1489,33 @@ async function openMigrateToMasterScreen(){
   }
   const all = exResult.data || [];
   if (!all.length){
-    body.innerHTML = `<div class="empty-state" style="padding:30px 18px;">No active exercises found to migrate.</div>`;
+    body.innerHTML = `<div class="empty-state" style="padding:30px 18px;">No exercises found to migrate.</div>`;
     return;
   }
 
-  // Group by name - this is the actual deduplication step. Prioritize
-  // whichever member has an alt group set as the template, same reasoning
-  // as Clean Up Duplicates: that's real data worth keeping. For any field
-  // that differs between day-copies, take the first non-empty value found.
+  // Group by name - this is the actual deduplication step. Includes
+  // inactive/deactivated exercises too, since sets logged against them are
+  // still real history that needs somewhere to link to - only excluding
+  // them here was the actual reason some sets came back unmatched. Template
+  // selection prefers an active member with an alt group over an inactive
+  // one, since that's the most trustworthy source for current category/tags.
+  // Day-links, however, only ever come from active members - a deactivated
+  // exercise correctly gets a master record but no current day placement.
   const byName = {};
   all.forEach(ex => { (byName[ex.name.toLowerCase()] = byName[ex.name.toLowerCase()] || []).push(ex); });
   const groups = Object.values(byName).map(members => {
-    const sorted = [...members].sort((a, b) => (a.alt_group_id ? -1 : 1) - (b.alt_group_id ? -1 : 1));
+    const sorted = [...members].sort((a, b) => {
+      const aScore = (a.active ? 2 : 0) + (a.alt_group_id ? 1 : 0);
+      const bScore = (b.active ? 2 : 0) + (b.alt_group_id ? 1 : 0);
+      return bScore - aScore;
+    });
     const template = sorted[0];
-    const weekdays = [...new Set(members.map(m => m.weekday))].sort((a,b) => a - b);
+    const weekdays = [...new Set(members.filter(m => m.active).map(m => m.weekday))].sort((a,b) => a - b);
     return { template, weekdays, memberCount: members.length };
   });
 
   body.innerHTML = `
-    <div class="small" style="padding:12px 18px; color:var(--slate); line-height:1.6;">This is a safe, read-only-first step. It only writes to the new exercise_master and exercise_days tables - your existing exercises table is never modified or deleted. The app keeps working exactly as it does now until a later stage switches it over.</div>
+    <div class="small" style="padding:12px 18px; color:var(--slate); line-height:1.6;">This is a safe, read-only-first step. It only writes to the new exercise_master and exercise_days tables - your existing exercises table is never modified or deleted. The app keeps working exactly as it does now until a later stage switches it over. Inactive exercises get a master record too (so any real history logged against them still has somewhere to link), but no day-links, since they're not currently placed anywhere.</div>
     <div class="proposal-card" style="margin:0 18px 14px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px;">
       <div class="ex-name" style="font-size:14px; margin-bottom:6px;">${groups.length} distinct exercises found</div>
       <div class="small" style="color:var(--slate);">from ${all.length} current day-by-day records, spanning ${groups.reduce((s,g)=>s+g.weekdays.length,0)} day-links total</div>
