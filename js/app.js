@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.71';
+const APP_VERSION = 'Beta 5.72';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1263,17 +1263,17 @@ async function openLinkSetsToMasterScreen(){
   const body = overlay.querySelector('#linkSetsBody');
 
   const [oldExResult, masterResult, setsResult] = await Promise.all([
-    withTimeout(supabaseClient.from('exercises').select('id, name').eq('user_id', uid), 15000),
+    withTimeout(supabaseClient.from('exercises').select('id, name, active').eq('user_id', uid), 15000),
     withTimeout(supabaseClient.from('exercise_master').select('id, name').eq('user_id', uid), 15000),
-    withTimeout(supabaseClient.from('sets').select('id, exercise_id, exercise_master_id').eq('user_id', uid), 15000)
+    withTimeout(supabaseClient.from('sets').select('id, exercise_id, exercise_master_id, logged_at').eq('user_id', uid), 15000)
   ]);
   if (oldExResult.__timeout || oldExResult.error || masterResult.__timeout || masterResult.error || setsResult.__timeout || setsResult.error){
     body.innerHTML = `<div class="empty-state" style="padding:30px 18px;">Could not read one of the tables needed. Nothing was touched - try again.</div>`;
     return;
   }
 
-  const oldNameById = {};
-  (oldExResult.data || []).forEach(ex => { oldNameById[ex.id] = ex.name.toLowerCase(); });
+  const oldExById = {};
+  (oldExResult.data || []).forEach(ex => { oldExById[ex.id] = ex; });
   const masterIdByName = {};
   (masterResult.data || []).forEach(m => { masterIdByName[m.name.toLowerCase()] = m.id; });
 
@@ -1283,10 +1283,10 @@ async function openLinkSetsToMasterScreen(){
   const alreadyLinked = [];
   allSets.forEach(s => {
     if (s.exercise_master_id){ alreadyLinked.push(s); return; }
-    const name = oldNameById[s.exercise_id];
-    const masterId = name ? masterIdByName[name] : null;
+    const oldEx = oldExById[s.exercise_id];
+    const masterId = oldEx ? masterIdByName[oldEx.name.toLowerCase()] : null;
     if (masterId) toLink.push({ setId: s.id, masterId });
-    else unmatched.push(s);
+    else unmatched.push({ set: s, oldEx });
   });
 
   body.innerHTML = `
@@ -1294,8 +1294,20 @@ async function openLinkSetsToMasterScreen(){
     <div class="proposal-card" style="margin:0 18px 10px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px;">
       <div class="small" style="color:var(--good);">✓ ${toLink.length} sets ready to link</div>
       ${alreadyLinked.length ? `<div class="small" style="color:var(--slate); margin-top:4px;">${alreadyLinked.length} already linked from a prior run</div>` : ''}
-      ${unmatched.length ? `<div class="small" style="color:#E8492A; margin-top:4px;">✗ ${unmatched.length} sets could not be matched to any master exercise - these need investigating before this is safe to fully rely on</div>` : ''}
     </div>
+    ${unmatched.length ? `
+      <div class="small" style="padding:0 18px 8px 18px; color:#E8492A;">${unmatched.length} sets could not be matched - here's exactly why each one:</div>
+      ${unmatched.map(u => {
+        let reason;
+        if (!u.oldEx) reason = 'The exercise this set was logged against no longer exists at all - a genuinely orphaned reference.';
+        else if (u.oldEx.active === false) reason = `Exercise "${u.oldEx.name}" is inactive/deactivated, so it wasn't included when Stage 2 built the master list (which only looked at active exercises).`;
+        else reason = `Exercise "${u.oldEx.name}" is active but has no matching master record - Stage 2 may need re-running.`;
+        return `<div class="proposal-card" style="margin:0 18px 8px 18px; background:var(--panel); border:1px solid #4a2f16; border-radius:10px; padding:12px 14px;">
+          <div class="small" style="color:var(--slate);">Set logged ${u.set.logged_at || 'unknown date'}, exercise_id ${u.set.exercise_id}</div>
+          <div class="small" style="color:#E8A33D; margin-top:4px;">${reason}</div>
+        </div>`;
+      }).join('')}
+    ` : ''}
     ${unmatched.length ? '' : `<button class="save-btn" id="confirmLinkSetsBtn" style="margin:0 18px 20px 18px;">Link ${toLink.length} Sets</button>`}
   `;
   if (unmatched.length) return;
