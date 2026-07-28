@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.85';
+const APP_VERSION = 'Beta 5.86';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -494,6 +494,17 @@ function movementPatternOf(name){
 // should train the same muscle region the same way for the same purpose -
 // pairing a flat bench press with an incline press just because both are
 // "chest" is looser than what real programming calls interchangeable.
+// Same clustering signal proposeAltGroups uses (fine muscle + movement
+// pattern + mechanic) - reused here to hint "this looks like an alt for X"
+// in the reorganize overflow and the add-exercise picker, without relying on
+// formal alt_group_id tags, since those may not exist yet.
+function computeAltSignature(name, muscle, mechValue){
+  const pattern = movementPatternOf(name);
+  if (!pattern || !muscle) return null;
+  const fineMuscle = fineMuscleCategory(muscle, name);
+  return fineMuscle + '|' + pattern + '|' + (mechValue || 'unknown');
+}
+
 async function proposeAltGroups(dayExercises){
   const db = await loadExerciseDB();
   const ungrouped = dayExercises.filter(ex => !ex.alt_group_id);
@@ -3487,6 +3498,14 @@ async function openPicker(initialTab, jumpToMuscle){
         loadExerciseDB()
       ]);
       const todayNames = new Set(all.filter(ex => ex.weekday === state.selectedDay).map(ex => ex.name.toLowerCase()));
+      const todaySignatures = {}; // signature -> exercise name, for exercises already on today
+      all.filter(ex => ex.weekday === state.selectedDay).forEach(ex => {
+        const m = matchExercise(ex.name, db);
+        const muscle = m && m.primaryMuscles && m.primaryMuscles[0];
+        const mech = classifyMechanic(m);
+        const sig = computeAltSignature(ex.name, muscle, mech ? mech.value : null);
+        if (sig && !todaySignatures[sig]) todaySignatures[sig] = ex.name;
+      });
 
       function renderExerciseRow(ex){
         const match = matchExercise(ex.name, db);
@@ -3495,7 +3514,10 @@ async function openPicker(initialTab, jumpToMuscle){
         const mechTag = mech ? `<span style="font-size:9px; padding:2px 5px; border-radius:4px; margin-left:5px; background:${mech.value==='compound'?'rgba(255,107,26,0.15)':'rgba(122,150,220,0.15)'}; color:${mech.value==='compound'?'#FF6B1A':'#7BA6C9'}; opacity:${mech.guessed?0.75:1};">${mech.guessed?'~':''}${mech.value==='compound'?'Compound':'Isolation'}</span>` : '';
         const alreadyToday = todayNames.has(ex.name.toLowerCase())
           ? `<span style="font-size:9px; padding:2px 6px; border-radius:4px; margin-left:5px; background:rgba(143,191,122,0.15); color:var(--good);">✓ On ${DAY_NAMES[state.selectedDay]}</span>` : '';
-        return `<div class="pick-row" data-id="${ex.id}" data-name="${ex.name}"><div><div class="ex-name">${ex.name}${mechTag}${alreadyToday}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}</div><div class="chev">›</div></div>`;
+        const sig = computeAltSignature(ex.name, match && match.primaryMuscles && match.primaryMuscles[0], mech ? mech.value : null);
+        const altHint = (!alreadyToday && sig && todaySignatures[sig] && todaySignatures[sig] !== ex.name)
+          ? `<div class="small" style="color:var(--slate); opacity:0.7; font-style:italic; margin-top:1px;">alt for ${todaySignatures[sig]}</div>` : '';
+        return `<div class="pick-row" data-id="${ex.id}" data-name="${ex.name}"><div><div class="ex-name">${ex.name}${mechTag}${alreadyToday}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}${altHint}</div><div class="chev">›</div></div>`;
       }
 
       let html = '';
@@ -3604,6 +3626,14 @@ async function openPicker(initialTab, jumpToMuscle){
       const presentKeys = orderedKeys.filter(k => (grouped[k]||[]).length);
       const flatOrder = []; // display order across every visible category, for swipe nav
       const todayNames = new Set(all.filter(ex => ex.weekday === state.selectedDay).map(ex => ex.name.toLowerCase()));
+      const todaySignatures = {};
+      all.filter(ex => ex.weekday === state.selectedDay).forEach(ex => {
+        const m = matchExercise(ex.name, db);
+        const muscle = m && m.primaryMuscles && m.primaryMuscles[0];
+        const mech = classifyMechanic(m);
+        const sig = computeAltSignature(ex.name, muscle, mech ? mech.value : null);
+        if (sig && !todaySignatures[sig]) todaySignatures[sig] = ex.name;
+      });
 
       function renderDbRow(e){
         flatOrder.push({ name: e.name, equipment: e.equipment });
@@ -3615,7 +3645,10 @@ async function openPicker(initialTab, jumpToMuscle){
         const mech = classifyMechanic(e);
         const mechTag = mech ? `<span style="font-size:9px; padding:2px 5px; border-radius:4px; margin-left:5px; background:${mech.value==='compound'?'rgba(255,107,26,0.15)':'rgba(122,150,220,0.15)'}; color:${mech.value==='compound'?'#FF6B1A':'#7BA6C9'}; opacity:${mech.guessed?0.75:1};">${mech.guessed?'~':''}${mech.value==='compound'?'Compound':'Isolation'}</span>` : '';
         const equipLine = [cap(e.equipment), cap(e.level)].filter(Boolean).join(' · ');
-        return `<div class="pick-row db-pick" data-name="${e.name}" data-equip="${e.equipment||''}"><div><div class="ex-name">${e.name}${star}${mechTag}${alreadyToday}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}${equipLine ? `<div class="small" style="color:var(--slate); opacity:0.7; font-size:10.5px;">${equipLine}</div>` : ''}</div><div class="chev">›</div></div>`;
+        const sig = computeAltSignature(e.name, e.primaryMuscles && e.primaryMuscles[0], mech ? mech.value : null);
+        const altHint = (!alreadyToday && sig && todaySignatures[sig] && todaySignatures[sig] !== e.name)
+          ? `<div class="small" style="color:var(--slate); opacity:0.7; font-style:italic; margin-top:1px;">alt for ${todaySignatures[sig]}</div>` : '';
+        return `<div class="pick-row db-pick" data-name="${e.name}" data-equip="${e.equipment||''}"><div><div class="ex-name">${e.name}${star}${mechTag}${alreadyToday}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}${equipLine ? `<div class="small" style="color:var(--slate); opacity:0.7; font-size:10.5px;">${equipLine}</div>` : ''}${altHint}</div><div class="chev">›</div></div>`;
       }
 
       presentKeys.forEach(cat => {
@@ -4475,7 +4508,8 @@ async function openPlanReorganizer(){
       const muscle = match && match.primaryMuscles && match.primaryMuscles[0];
       const category = deriveSplitCategory(sample, splitType, muscle);
       const mech = classifyMechanic(match);
-      return { ...item, category, muscle, mechanic: mech ? mech.value : null, altGroupId: sample.alt_group_id, push_pull: sample.push_pull, upper_lower: sample.upper_lower };
+      const altSignature = computeAltSignature(item.name, muscle, mech ? mech.value : null);
+      return { ...item, category, muscle, mechanic: mech ? mech.value : null, altSignature, altGroupId: sample.alt_group_id, push_pull: sample.push_pull, upper_lower: sample.upper_lower };
     });
 
     const body = overlay.querySelector('#reorgPreviewBody');
@@ -4538,6 +4572,17 @@ async function openPlanReorganizer(){
       const { included, excluded } = selectBalancedSlots(allSlots, SESSION_TARGET);
       dp.slots = included;
       dp.excludedSlots = excluded;
+      // For the overflow list: which excluded items look like alts of
+      // something already included, using the same signal Auto-Alt uses -
+      // this works immediately even with no formal alt-group tags yet.
+      const includedBySignature = {};
+      included.forEach(slot => {
+        if (slot.representative.altSignature) includedBySignature[slot.representative.altSignature] = slot.representative.name;
+      });
+      dp.excludedSlots.forEach(slot => {
+        const sig = slot.representative.altSignature;
+        slot.altHintFor = sig ? includedBySignature[sig] || null : null;
+      });
     });
 
     body.innerHTML = `
@@ -4565,7 +4610,7 @@ async function openPlanReorganizer(){
               <div class="pick-row reorg-show-more" data-day="${dp.dayIdx}" style="cursor:pointer;"><div class="ex-name" style="color:var(--slate); font-size:11.5px;">+ ${dp.excludedSlots.length} more matching exercises</div></div>
               <div class="reorg-excluded-list" data-day="${dp.dayIdx}" style="display:none;">
                 ${dp.excludedSlots.map((slot, si) => `<div class="reorg-excluded-item" data-day="${dp.dayIdx}" data-name="${slot.representative.name}" style="display:flex; justify-content:space-between; align-items:center; padding:7px 14px; font-size:12px; color:var(--slate);">
-                  <span>${slot.representative.name}</span>
+                  <span>${slot.representative.name}${slot.altHintFor ? ` <span style="font-size:10px; color:var(--slate); opacity:0.7; font-style:italic;">(alt for ${slot.altHintFor})</span>` : ''}</span>
                   <span class="reorg-add" style="color:var(--flame); font-size:11px;">+ add</span>
                 </div>`).join('')}
               </div>
