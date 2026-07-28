@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.86';
+const APP_VERSION = 'Beta 5.87';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -3506,6 +3506,18 @@ async function openPicker(initialTab, jumpToMuscle){
         const sig = computeAltSignature(ex.name, muscle, mech ? mech.value : null);
         if (sig && !todaySignatures[sig]) todaySignatures[sig] = ex.name;
       });
+      // Cross-reference within the picker's own list too, not just against
+      // what's already on today - alphabetical order decides which one is
+      // "the original" and which ones get flagged as alts of it, so this is
+      // stable regardless of which category happens to render first.
+      const listSignatures = {};
+      [...deduped].sort((a,b) => a.name.localeCompare(b.name)).forEach(ex => {
+        const m = matchExercise(ex.name, db);
+        const muscle = m && m.primaryMuscles && m.primaryMuscles[0];
+        const mech = classifyMechanic(m);
+        const sig = computeAltSignature(ex.name, muscle, mech ? mech.value : null);
+        if (sig && !listSignatures[sig]) listSignatures[sig] = ex.name;
+      });
 
       function renderExerciseRow(ex){
         const match = matchExercise(ex.name, db);
@@ -3515,8 +3527,11 @@ async function openPicker(initialTab, jumpToMuscle){
         const alreadyToday = todayNames.has(ex.name.toLowerCase())
           ? `<span style="font-size:9px; padding:2px 6px; border-radius:4px; margin-left:5px; background:rgba(143,191,122,0.15); color:var(--good);">✓ On ${DAY_NAMES[state.selectedDay]}</span>` : '';
         const sig = computeAltSignature(ex.name, match && match.primaryMuscles && match.primaryMuscles[0], mech ? mech.value : null);
-        const altHint = (!alreadyToday && sig && todaySignatures[sig] && todaySignatures[sig] !== ex.name)
-          ? `<div class="small" style="color:var(--slate); opacity:0.7; font-style:italic; margin-top:1px;">alt for ${todaySignatures[sig]}</div>` : '';
+        const todayHintName = (!alreadyToday && sig && todaySignatures[sig] && todaySignatures[sig] !== ex.name) ? todaySignatures[sig] : null;
+        const listHintName = (!todayHintName && sig && listSignatures[sig] && listSignatures[sig] !== ex.name) ? listSignatures[sig] : null;
+        const altHint = todayHintName
+          ? `<div class="small" style="color:var(--slate); opacity:0.7; font-style:italic; margin-top:1px;">alt for ${todayHintName} (on ${DAY_NAMES[state.selectedDay]})</div>`
+          : listHintName ? `<div class="small" style="color:var(--slate); opacity:0.7; font-style:italic; margin-top:1px;">alt for ${listHintName}</div>` : '';
         return `<div class="pick-row" data-id="${ex.id}" data-name="${ex.name}"><div><div class="ex-name">${ex.name}${mechTag}${alreadyToday}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}${altHint}</div><div class="chev">›</div></div>`;
       }
 
@@ -3634,6 +3649,14 @@ async function openPicker(initialTab, jumpToMuscle){
         const sig = computeAltSignature(ex.name, muscle, mech ? mech.value : null);
         if (sig && !todaySignatures[sig]) todaySignatures[sig] = ex.name;
       });
+      // Cross-reference within the filtered list itself too - muscle data is
+      // already right there on each entry, no extra lookup needed.
+      const listSignatures = {};
+      [...filtered].sort((a,b) => a.name.localeCompare(b.name)).forEach(e => {
+        const mech = classifyMechanic(e);
+        const sig = computeAltSignature(e.name, e.primaryMuscles && e.primaryMuscles[0], mech ? mech.value : null);
+        if (sig && !listSignatures[sig]) listSignatures[sig] = e.name;
+      });
 
       function renderDbRow(e){
         flatOrder.push({ name: e.name, equipment: e.equipment });
@@ -3646,8 +3669,11 @@ async function openPicker(initialTab, jumpToMuscle){
         const mechTag = mech ? `<span style="font-size:9px; padding:2px 5px; border-radius:4px; margin-left:5px; background:${mech.value==='compound'?'rgba(255,107,26,0.15)':'rgba(122,150,220,0.15)'}; color:${mech.value==='compound'?'#FF6B1A':'#7BA6C9'}; opacity:${mech.guessed?0.75:1};">${mech.guessed?'~':''}${mech.value==='compound'?'Compound':'Isolation'}</span>` : '';
         const equipLine = [cap(e.equipment), cap(e.level)].filter(Boolean).join(' · ');
         const sig = computeAltSignature(e.name, e.primaryMuscles && e.primaryMuscles[0], mech ? mech.value : null);
-        const altHint = (!alreadyToday && sig && todaySignatures[sig] && todaySignatures[sig] !== e.name)
-          ? `<div class="small" style="color:var(--slate); opacity:0.7; font-style:italic; margin-top:1px;">alt for ${todaySignatures[sig]}</div>` : '';
+        const todayHintName = (!alreadyToday && sig && todaySignatures[sig] && todaySignatures[sig] !== e.name) ? todaySignatures[sig] : null;
+        const listHintName = (!todayHintName && sig && listSignatures[sig] && listSignatures[sig] !== e.name) ? listSignatures[sig] : null;
+        const altHint = todayHintName
+          ? `<div class="small" style="color:var(--slate); opacity:0.7; font-style:italic; margin-top:1px;">alt for ${todayHintName} (on ${DAY_NAMES[state.selectedDay]})</div>`
+          : listHintName ? `<div class="small" style="color:var(--slate); opacity:0.7; font-style:italic; margin-top:1px;">alt for ${listHintName}</div>` : '';
         return `<div class="pick-row db-pick" data-name="${e.name}" data-equip="${e.equipment||''}"><div><div class="ex-name">${e.name}${star}${mechTag}${alreadyToday}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}${equipLine ? `<div class="small" style="color:var(--slate); opacity:0.7; font-size:10.5px;">${equipLine}</div>` : ''}${altHint}</div><div class="chev">›</div></div>`;
       }
 
