@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.106';
+const APP_VERSION = 'Beta 5.107';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -19,8 +19,9 @@ function addCustomCategory(name){
 // created on another device that this one hasn't cached yet).
 async function getAllCategories(){
   const { data: userData } = await supabaseClient.auth.getUser();
+  const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
   const result = await withTimeout(
-    supabaseClient.from('exercises').select('category').eq('user_id', userData.user.id),
+    supabaseClient.from(table).select('category').eq('user_id', userData.user.id),
     15000
   );
   const inUse = result.__timeout || result.error ? [] : (result.data || []).map(r => r.category).filter(Boolean);
@@ -108,11 +109,9 @@ function getStarterExercises(dayTypeLabel){
 }
 async function quickAddStarter(name, category, weekday){
   const { data: userData } = await supabaseClient.auth.getUser();
-  const existingResult = await withTimeout(
-    supabaseClient.from('exercises').select('id').eq('user_id', userData.user.id).eq('weekday', weekday).ilike('name', name).eq('active', true).maybeSingle(),
-    15000
-  );
-  if (!existingResult.__timeout && !existingResult.error && existingResult.data){ renderTrack(); return; }
+  const compatEx = await fetchAllExercisesCompat(userData.user.id);
+  const existingMatch = compatEx.find(ex => ex.weekday === weekday && ex.name.toLowerCase() === name.toLowerCase());
+  if (existingMatch){ renderTrack(); return; }
   const { error } = await createExerciseForToday({ user_id: userData.user.id, name, category, weekday, alt_group_id: null });
   if (error){ alert(error.message); return; }
   renderTrack();
@@ -1348,8 +1347,9 @@ async function showAltGroupHistory(groupId, groupName){
   document.body.appendChild(overlay);
   overlay.querySelector('#closeAltHist').onclick = () => overlay.remove();
 
+  const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
   const exResult = await withTimeout(
-    supabaseClient.from('exercises').select('id, name').eq('alt_group_id', groupId),
+    supabaseClient.from(table).select('id, name').eq('alt_group_id', groupId),
     15000
   );
   const members = exResult.__timeout || exResult.error ? [] : (exResult.data || []);
@@ -1360,9 +1360,10 @@ async function showAltGroupHistory(groupId, groupName){
   }
   const memberIds = members.map(m => m.id);
   const nameById = Object.fromEntries(members.map(m => [m.id, m.name]));
+  const idField = getUseExerciseMasterFlag() ? 'exercise_master_id' : 'exercise_id';
   const setsResult = await withTimeout(
-    supabaseClient.from('sets').select('id, exercise_id, weight, weight_unit, weight_type, reps, num_sets, notes, logged_at')
-      .in('exercise_id', memberIds).order('logged_at', { ascending: false }).limit(60),
+    supabaseClient.from('sets').select('id, exercise_id, exercise_master_id, weight, weight_unit, weight_type, reps, num_sets, notes, logged_at')
+      .in(idField, memberIds).order('logged_at', { ascending: false }).limit(60),
     15000
   );
   const sets = setsResult.__timeout || setsResult.error ? [] : (setsResult.data || []);
@@ -1376,7 +1377,7 @@ async function showAltGroupHistory(groupId, groupName){
         <div class="log-date">${s.logged_at}</div>
         <div class="log-weight">${formatSetValue(s, true)}</div>
       </div>
-      <div class="small" style="color:var(--slate);">${nameById[s.exercise_id] || 'Unknown exercise'}</div>
+      <div class="small" style="color:var(--slate);">${nameById[s.exercise_master_id || s.exercise_id] || 'Unknown exercise'}</div>
     </div>`).join('');
 }
 
@@ -2247,7 +2248,7 @@ async function openWipeAltGroupsScreen(){
 
   const [groupsResult, exResult] = await Promise.all([
     withTimeout(supabaseClient.from('alt_groups').select('id, name').eq('user_id', uid), 15000),
-    withTimeout(supabaseClient.from('exercises').select('id').eq('user_id', uid).not('alt_group_id', 'is', null), 15000)
+    withTimeout(supabaseClient.from(getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises').select('id').eq('user_id', uid).not('alt_group_id', 'is', null), 15000)
   ]);
   const groups = groupsResult.__timeout || groupsResult.error ? [] : (groupsResult.data || []);
   const taggedCount = exResult.__timeout || exResult.error ? 0 : (exResult.data || []).length;
@@ -2381,10 +2382,11 @@ async function openManageLocationsScreen(){
           // Clear this location from every exercise's location_ids first, so
           // nothing points at a deleted row.
           const { data: userData } = await supabaseClient.auth.getUser();
-          const exResult = await withTimeout(supabaseClient.from('exercises').select('id, location_ids').eq('user_id', userData.user.id), 15000);
+          const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+          const exResult = await withTimeout(supabaseClient.from(table).select('id, location_ids').eq('user_id', userData.user.id), 15000);
           const affected = (exResult.data || []).filter(ex => (ex.location_ids || []).includes(btn.dataset.id));
           for (const ex of affected){
-            await supabaseClient.from('exercises').update({ location_ids: ex.location_ids.filter(id => id !== btn.dataset.id) }).eq('id', ex.id);
+            await supabaseClient.from(table).update({ location_ids: ex.location_ids.filter(id => id !== btn.dataset.id) }).eq('id', ex.id);
           }
           await supabaseClient.from('locations').delete().eq('id', btn.dataset.id);
           render();
@@ -2838,14 +2840,12 @@ async function openSuggestionPreview(name, category, navList){
     // re-adding after it resurfaces) inserted a brand new record every time
     // with no check for one already existing today. Now checks first, same
     // as the other add-exercise flow already does correctly.
-    const existingResult = await withTimeout(
-      supabaseClient.from('exercises').select('id').eq('user_id', userData.user.id).eq('weekday', state.selectedDay).ilike('name', name).eq('active', true).maybeSingle(),
-      15000
-    );
-    if (!existingResult.__timeout && !existingResult.error && existingResult.data){
+    const compatEx = await fetchAllExercisesCompat(userData.user.id);
+    const existingMatch = compatEx.find(ex => ex.weekday === state.selectedDay && ex.name.toLowerCase() === name.toLowerCase());
+    if (existingMatch){
       overlay.remove();
       state.currentTab = 'track';
-      openLogForm(existingResult.data.id, name);
+      openLogForm(existingMatch.masterId || existingMatch.id, name);
       return;
     }
     const { error } = await createExerciseForToday({ user_id: userData.user.id, name, category, weekday: state.selectedDay, alt_group_id: null });
@@ -2898,11 +2898,9 @@ async function renderTrack(){
     if (state.suggestionsCache[cacheKey]){
       suggestions = state.suggestionsCache[cacheKey];
     } else {
-      const libResult = await withTimeout(
-        supabaseClient.from('exercises').select('name').eq('active', true),
-        15000
-      );
-      const fullLibrary = libResult.__timeout || libResult.error ? state.exercises : (libResult.data || []);
+      const { data: userData } = await supabaseClient.auth.getUser();
+      const compatEx = await fetchAllExercisesCompat(userData.user.id);
+      const fullLibrary = compatEx.length ? compatEx.map(ex => ({ name: ex.name })) : state.exercises;
       suggestions = await getSuggestedExercises(dayTypeLabel, fullLibrary);
       state.suggestionsCache[cacheKey] = suggestions;
     }
@@ -3012,7 +3010,8 @@ async function renderTrack(){
         onConfirm: async (newName) => {
           if (newName === oldName) return;
           const { data: userData } = await supabaseClient.auth.getUser();
-          const { error } = await supabaseClient.from('exercises')
+          const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+          const { error } = await supabaseClient.from(table)
             .update({ category: newName }).eq('user_id', userData.user.id).eq('category', oldName);
           if (error){ alert(error.message); return; }
           addCustomCategory(newName);
@@ -3132,7 +3131,13 @@ function openRenameExerciseForm(exerciseId, exerciseName){
     await withButtonLoading(overlay.querySelector('#saveRenameBtn'), 'Renaming…', async () => {
       const { data: userData } = await supabaseClient.auth.getUser();
       let error;
-      if (scope === 'everywhere'){
+      if (getUseExerciseMasterFlag()){
+        // Only one shared record exists per exercise under the new structure,
+        // so there's no "everywhere vs just this day" distinction to make -
+        // renaming it always affects every day it's placed on, since it's
+        // genuinely the same underlying record either way.
+        ({ error } = await supabaseClient.from('exercise_master').update({ name: newName }).eq('id', exerciseId));
+      } else if (scope === 'everywhere'){
         // Rename all rows sharing the old name (an exercise can exist on multiple days), so history stays consistent.
         ({ error } = await supabaseClient.from('exercises')
           .update({ name: newName })
@@ -3164,7 +3169,8 @@ function openEditAltGroupForm(exerciseId, exerciseName){
   overlay.querySelector('#closeAlt').onclick = () => overlay.remove();
   const area = overlay.querySelector('#altEditArea');
   pickAltGroup(area, async (picked) => {
-    await supabaseClient.from('exercises').update({ alt_group_id: picked ? picked.id : null }).eq('id', exerciseId);
+    const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+    await supabaseClient.from(table).update({ alt_group_id: picked ? picked.id : null }).eq('id', exerciseId);
     overlay.remove();
     if (state.currentTab === 'track') renderTrack();
   });
@@ -3190,6 +3196,12 @@ function openEditMuscleForm(exerciseId, exerciseName){
   overlay.querySelector('#closeMuscleEdit').onclick = () => overlay.remove();
 
   async function apply(muscleOverride){
+    if (getUseExerciseMasterFlag()){
+      await supabaseClient.from('exercise_master').update({ muscle_override: muscleOverride }).eq('id', exerciseId);
+      overlay.remove();
+      if (state.currentTab === 'track') renderTrack();
+      return;
+    }
     const { data: userData } = await supabaseClient.auth.getUser();
     const sameNameResult = await withTimeout(
       supabaseClient.from('exercises').select('id').eq('user_id', userData.user.id).ilike('name', exerciseName),
@@ -3226,7 +3238,7 @@ function openEditCategoryForm(exerciseId, exerciseName){
   (async () => {
     const [cats, exResult] = await Promise.all([
       getAllCategories(),
-      withTimeout(supabaseClient.from('exercises').select('category').eq('id', exerciseId).maybeSingle(), 15000)
+      withTimeout(supabaseClient.from(getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises').select('category').eq('id', exerciseId).maybeSingle(), 15000)
     ]);
     selectedCategory = (exResult.__timeout || exResult.error || !exResult.data) ? null : exResult.data.category;
     const row = overlay.querySelector('#editCatChipRow');
@@ -3246,6 +3258,12 @@ function openEditCategoryForm(exerciseId, exerciseName){
   overlay.querySelector('#saveCatBtn').onclick = async () => {
     if (!selectedCategory) return;
     await withButtonLoading(overlay.querySelector('#saveCatBtn'), 'Saving…', async () => {
+      if (getUseExerciseMasterFlag()){
+        await supabaseClient.from('exercise_master').update({ category: selectedCategory }).eq('id', exerciseId);
+        overlay.remove();
+        if (state.currentTab === 'track') renderTrack();
+        return;
+      }
       const { data: userData } = await supabaseClient.auth.getUser();
       const sameNameResult = await withTimeout(
         supabaseClient.from('exercises').select('id').eq('user_id', userData.user.id).ilike('name', exerciseName),
@@ -3282,7 +3300,7 @@ function openEditTagsForm(exerciseId, exerciseName){
   let pushPull = null, upperLower = null, locationIds = [];
   (async () => {
     const [exResult, locs] = await Promise.all([
-      withTimeout(supabaseClient.from('exercises').select('push_pull, upper_lower, location_ids').eq('id', exerciseId).maybeSingle(), 15000),
+      withTimeout(supabaseClient.from(getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises').select('push_pull, upper_lower, location_ids').eq('id', exerciseId).maybeSingle(), 15000),
       loadLocations()
     ]);
     const data = exResult.__timeout || exResult.error || !exResult.data ? {} : exResult.data;
@@ -3325,7 +3343,8 @@ function openEditTagsForm(exerciseId, exerciseName){
   }
 
   overlay.querySelector('#saveTagsBtn').onclick = async () => { await withButtonLoading(overlay.querySelector('#saveTagsBtn'), 'Saving…', async () => {
-    await supabaseClient.from('exercises').update({ push_pull: pushPull, upper_lower: upperLower, location_ids: locationIds }).eq('id', exerciseId);
+    const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+    await supabaseClient.from(table).update({ push_pull: pushPull, upper_lower: upperLower, location_ids: locationIds }).eq('id', exerciseId);
     overlay.remove();
     if (state.currentTab === 'track') renderTrack();
   }); };
@@ -3349,7 +3368,7 @@ function openEditLocationForm(exerciseId, exerciseName){
   (async () => {
     const [locs, exResult] = await Promise.all([
       loadLocations(),
-      withTimeout(supabaseClient.from('exercises').select('location_ids').eq('id', exerciseId).maybeSingle(), 15000)
+      withTimeout(supabaseClient.from(getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises').select('location_ids').eq('id', exerciseId).maybeSingle(), 15000)
     ]);
     selectedIds = (exResult.__timeout || exResult.error || !exResult.data) ? [] : (exResult.data.location_ids || []);
     renderChips(locs);
@@ -3379,7 +3398,8 @@ function openEditLocationForm(exerciseId, exerciseName){
   }
 
   overlay.querySelector('#saveLocBtn').onclick = async () => { await withButtonLoading(overlay.querySelector('#saveLocBtn'), 'Saving…', async () => {
-    await supabaseClient.from('exercises').update({ location_ids: selectedIds }).eq('id', exerciseId);
+    const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+    await supabaseClient.from(table).update({ location_ids: selectedIds }).eq('id', exerciseId);
     overlay.remove();
     if (state.currentTab === 'track') renderTrack();
   }); };
@@ -3464,6 +3484,16 @@ function confirmRemoveExercise(exerciseId, exerciseName){
         await supabaseClient.from('sets').delete().eq('exercise_id', exerciseId);
         await supabaseClient.from('exercises').delete().eq('id', exerciseId);
       }
+      renderTrack();
+      return;
+    }
+    if (useMaster){
+      await supabaseClient.from('exercise_days').delete().eq('exercise_master_id', exerciseId).eq('weekday', state.selectedDay);
+      showUndoToast(exerciseName, async () => {
+        const { data: userData } = await supabaseClient.auth.getUser();
+        await supabaseClient.from('exercise_days').insert({ user_id: userData.user.id, exercise_master_id: exerciseId, weekday: state.selectedDay });
+        renderTrack();
+      });
       renderTrack();
       return;
     }
@@ -4207,18 +4237,17 @@ async function openAutoAltReview(){
 // ---------- SPLIT TAG SCANNER ----------
 async function proposeSplitTags(){
   const { data: userData } = await supabaseClient.auth.getUser();
-  const [exResult, db] = await Promise.all([
-    withTimeout(supabaseClient.from('exercises').select('id, name, push_pull, upper_lower').eq('user_id', userData.user.id), 15000),
+  const [all, db] = await Promise.all([
+    fetchAllExercisesCompat(userData.user.id),
     loadExerciseDB()
   ]);
-  const all = exResult.__timeout || exResult.error ? [] : (exResult.data || []);
   // Work on distinct names - a name missing a tag on ANY of its records counts
   // as needing review, and the fix applies to every record sharing that name.
   const byName = {};
   all.forEach(ex => {
     const key = ex.name.toLowerCase();
     if (!byName[key]) byName[key] = { name: ex.name, ids: [], hasPP: false, hasUL: false };
-    byName[key].ids.push(ex.id);
+    byName[key].ids.push(ex.masterId || ex.id);
     if (ex.push_pull) byName[key].hasPP = true;
     if (ex.upper_lower) byName[key].hasUL = true;
   });
@@ -4294,11 +4323,12 @@ async function openSplitTagReview(){
       const btn = body.querySelector('#confirmSplitBtn');
       btn.textContent = 'Applying…';
       const toApply = proposals.filter(p => p.included && (p.pushPull || p.upperLower));
+      const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
       let successCount = 0;
       const errors = [];
       for (const p of toApply){
         for (const id of p.ids){
-          const { error } = await supabaseClient.from('exercises').update({ push_pull: p.pushPull, upper_lower: p.upperLower }).eq('id', id);
+          const { error } = await supabaseClient.from(table).update({ push_pull: p.pushPull, upper_lower: p.upperLower }).eq('id', id);
           if (error){ errors.push(`${p.name}: ${error.message}`); }
           else { successCount++; }
         }
@@ -4352,15 +4382,11 @@ async function openBulkLocationAssign(){
     body.innerHTML = `<div class="small" style="padding:16px 18px; color:var(--slate);">Loading exercises…</div>`;
 
     const { data: userData } = await supabaseClient.auth.getUser();
-    const exResult = await withTimeout(
-      supabaseClient.from('exercises').select('id, name, category, location_ids').eq('user_id', userData.user.id),
-      15000
-    );
-    const all = exResult.__timeout || exResult.error ? [] : (exResult.data || []);
+    const all = await fetchAllExercisesCompat(userData.user.id);
     const byName = {};
     all.forEach(ex => {
       if (!byName[ex.name]) byName[ex.name] = { ids: [], category: ex.category || 'Other', alreadyHere: (ex.location_ids||[]).includes(locId) };
-      byName[ex.name].ids.push(ex.id);
+      byName[ex.name].ids.push(ex.masterId || ex.id);
     });
     const names = Object.keys(byName).sort();
     const checked = new Set(names.filter(n => byName[n].alreadyHere));
@@ -4416,15 +4442,16 @@ async function openBulkLocationAssign(){
           const was = originallyChecked.has(n);
           if (isChecked === was) continue; // unchanged, nothing to write
           const item = byName[n];
+          const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
           for (const id of item.ids){
-            const exRow = all.find(e => e.id === id);
+            const exRow = all.find(e => (e.masterId || e.id) === id);
             const existing = (exRow && exRow.location_ids) || [];
             // Only ever touches this one location's membership - every other
             // location already tagged on this exercise is left exactly as-is.
             const updated = isChecked
               ? [...new Set([...existing, locId])]
               : existing.filter(id2 => id2 !== locId);
-            const { error } = await supabaseClient.from('exercises').update({ location_ids: updated }).eq('id', id);
+            const { error } = await supabaseClient.from(table).update({ location_ids: updated }).eq('id', id);
             if (error){ errors.push(`${n}: ${error.message}`); }
             else { successCount++; }
           }
@@ -4447,18 +4474,19 @@ async function openBulkLocationAssign(){
 // ---------- PLAN BACKUPS ----------
 async function createPlanBackup(name){
   const { data: userData } = await supabaseClient.auth.getUser();
-  let exResult;
+  let exercises;
   try {
-    exResult = await withTimeout(
-      supabaseClient.from('exercises').select('id, name, category, weekday, alt_group_id, push_pull, upper_lower, location_ids').eq('user_id', userData.user.id).eq('active', true),
-      15000
-    );
+    exercises = await fetchAllExercisesCompat(userData.user.id);
   } catch(e) {
     return { backup: null, errorMessage: 'Could not read your exercises: ' + e.message };
   }
-  if (exResult.__timeout) return { backup: null, errorMessage: 'Timed out reading your exercises.' };
-  if (exResult.error) return { backup: null, errorMessage: 'Could not read your exercises: ' + exResult.error.message };
-  const exercises = exResult.data || [];
+  // Snapshot the stable identity (master id under the new structure, since a
+  // day-link id is ephemeral and won't mean anything after a later
+  // reorganization) alongside weekday and every other tag.
+  exercises = exercises.map(ex => ({
+    id: ex.masterId || ex.id, name: ex.name, category: ex.category, weekday: ex.weekday,
+    alt_group_id: ex.alt_group_id, push_pull: ex.push_pull, upper_lower: ex.upper_lower, location_ids: ex.location_ids
+  }));
 
   // The insert can genuinely fail at the network level on mobile (not just
   // resolve with an error field) - "TypeError: Load failed" is Safari's raw
@@ -4500,6 +4528,23 @@ async function loadPlanBackups(){
 // summary honestly reports what happened either way.
 async function restorePlanBackup(backup){
   const { data: userData } = await supabaseClient.auth.getUser();
+  if (getUseExerciseMasterFlag()){
+    const masterResult = await withTimeout(
+      supabaseClient.from('exercise_master').select('id').eq('user_id', userData.user.id), 15000
+    );
+    const currentIds = new Set((masterResult.data || []).map(e => e.id));
+    let restored = 0, skipped = 0;
+    for (const ex of backup.snapshot){
+      if (!currentIds.has(ex.id)){ skipped++; continue; }
+      await supabaseClient.from('exercise_master').update({
+        category: ex.category, alt_group_id: ex.alt_group_id,
+        push_pull: ex.push_pull, upper_lower: ex.upper_lower, location_ids: ex.location_ids
+      }).eq('id', ex.id);
+      await moveExerciseToDay({ masterId: ex.id, ids: [] }, ex.weekday, false);
+      restored++;
+    }
+    return { restored, skipped };
+  }
   const currentResult = await withTimeout(
     supabaseClient.from('exercises').select('id').eq('user_id', userData.user.id),
     15000
@@ -6060,7 +6105,7 @@ function openLogForm(exerciseId, exerciseName){
     // Chart in one standard unit so mixed kg/lb entries plot coherently:
     // lb for Plate-Loaded (most common there), kg for everything else.
     const exResult = await withTimeout(
-      supabaseClient.from('exercises').select('category').eq('id', exerciseId).maybeSingle(),
+      supabaseClient.from(getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises').select('category').eq('id', exerciseId).maybeSingle(),
       15000
     );
     const category = (exResult.__timeout || exResult.error || !exResult.data) ? '' : exResult.data.category;
@@ -6162,7 +6207,7 @@ function openLogForm(exerciseId, exerciseName){
   (async () => {
     const [result, allLocations] = await Promise.all([
       withTimeout(
-        supabaseClient.from('exercises').select('category, push_pull, upper_lower, location_ids').eq('id', exerciseId).maybeSingle(),
+        supabaseClient.from(getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises').select('category, push_pull, upper_lower, location_ids').eq('id', exerciseId).maybeSingle(),
         15000
       ),
       loadLocations()
@@ -6817,20 +6862,21 @@ function pplBarsHtml(pplTally){
 async function tallyLoggedThisWeek(){
   const { data: userData } = await supabaseClient.auth.getUser();
   const since = new Date(Date.now() - 6*86400000).toISOString().slice(0,10);
-  const [exResult, setResult, db] = await Promise.all([
-    withTimeout(supabaseClient.from('exercises').select('id, name').eq('user_id', userData.user.id), 15000),
-    withTimeout(supabaseClient.from('sets').select('exercise_id, num_sets, logged_at').gte('logged_at', since), 15000),
+  const useMaster = getUseExerciseMasterFlag();
+  const idField = useMaster ? 'exercise_master_id' : 'exercise_id';
+  const [exercises, setResult, db] = await Promise.all([
+    fetchAllExercisesCompat(userData.user.id),
+    withTimeout(supabaseClient.from('sets').select('exercise_id, exercise_master_id, num_sets, logged_at').gte('logged_at', since), 15000),
     loadExerciseDB()
   ]);
-  const exercises = exResult.__timeout || exResult.error ? [] : (exResult.data || []);
   const sets = setResult.__timeout || setResult.error ? [] : (setResult.data || []);
   const exById = {};
-  exercises.forEach(ex => { exById[ex.id] = ex.name; });
+  exercises.forEach(ex => { exById[ex.masterId || ex.id] = ex.name; });
 
   const tally = {};
   BALANCE_MUSCLES.forEach(m => tally[m] = 0);
   sets.forEach(s => {
-    const name = exById[s.exercise_id];
+    const name = exById[useMaster ? s.exercise_master_id : s.exercise_id];
     if (!name) return;
     const m = matchExercise(name, db);
     const muscle = m && m.primaryMuscles && m.primaryMuscles[0];
@@ -6841,11 +6887,11 @@ async function tallyLoggedThisWeek(){
 
 async function tallyFullPlan(){
   const { data: userData } = await supabaseClient.auth.getUser();
-  const [exResult, db] = await Promise.all([
-    withTimeout(supabaseClient.from('exercises').select('id, name').eq('user_id', userData.user.id).eq('active', true), 15000),
+  const [allExercises, db] = await Promise.all([
+    fetchAllExercisesCompat(userData.user.id),
     loadExerciseDB()
   ]);
-  const exercises = exResult.__timeout || exResult.error ? [] : (exResult.data || []);
+  const exercises = allExercises.filter(ex => ex.weekday !== null && ex.weekday !== undefined);
 
   const tally = {};
   BALANCE_MUSCLES.forEach(m => tally[m] = 0);
@@ -7001,16 +7047,15 @@ async function renderBalance(mode, view){
 async function getDayStats(weekday){
   const { data: userData } = await supabaseClient.auth.getUser();
   if (!userData || !userData.user) return { weekday, label: DAY_TYPES[weekday], exerciseCount: 0, setCount: 0 };
-  const exResult = await withTimeout(
-    supabaseClient.from('exercises').select('id').eq('user_id', userData.user.id).eq('weekday', weekday).eq('active', true),
-    15000
-  );
-  const exercises = exResult.__timeout || exResult.error ? [] : (exResult.data || []);
+  const useMaster = getUseExerciseMasterFlag();
+  const allExercises = await fetchAllExercisesCompat(userData.user.id);
+  const exercises = allExercises.filter(ex => ex.weekday === weekday);
   let setCount = 0;
   if (exercises.length > 0){
-    const ids = exercises.map(e => e.id);
+    const ids = exercises.map(e => useMaster ? e.masterId : e.id);
+    const idField = useMaster ? 'exercise_master_id' : 'exercise_id';
     const setResult = await withTimeout(
-      supabaseClient.from('sets').select('id', { count: 'exact', head: true }).in('exercise_id', ids),
+      supabaseClient.from('sets').select('id', { count: 'exact', head: true }).in(idField, ids),
       15000
     );
     setCount = setResult.__timeout || setResult.error ? 0 : (setResult.count || 0);
@@ -7082,18 +7127,20 @@ function openSwapDaysForm(){
 async function performDaySwap(dayA, dayB){
   const { data: userData } = await supabaseClient.auth.getUser();
   const uid = userData.user.id;
+  const useMaster = getUseExerciseMasterFlag();
+  const table = useMaster ? 'exercise_days' : 'exercises';
 
   // Capture exact row IDs first, since updating by weekday-match would lose track of
   // which rows belonged to which day once the first update runs.
   const [resA, resB] = await Promise.all([
-    supabaseClient.from('exercises').select('id').eq('user_id', uid).eq('weekday', dayA),
-    supabaseClient.from('exercises').select('id').eq('user_id', uid).eq('weekday', dayB)
+    supabaseClient.from(table).select('id').eq('user_id', uid).eq('weekday', dayA),
+    supabaseClient.from(table).select('id').eq('user_id', uid).eq('weekday', dayB)
   ]);
   const idsA = (resA.data || []).map(r => r.id);
   const idsB = (resB.data || []).map(r => r.id);
 
-  if (idsA.length > 0) await supabaseClient.from('exercises').update({ weekday: dayB }).in('id', idsA);
-  if (idsB.length > 0) await supabaseClient.from('exercises').update({ weekday: dayA }).in('id', idsB);
+  if (idsA.length > 0) await supabaseClient.from(table).update({ weekday: dayB }).in('id', idsA);
+  if (idsB.length > 0) await supabaseClient.from(table).update({ weekday: dayA }).in('id', idsB);
 
   const [dtA, dtB] = await Promise.all([
     supabaseClient.from('day_types').select('label').eq('user_id', uid).eq('weekday', dayA).maybeSingle(),
