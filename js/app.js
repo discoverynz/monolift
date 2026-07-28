@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.105';
+const APP_VERSION = 'Beta 5.106';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -3738,11 +3738,8 @@ async function openPicker(initialTab, jumpToMuscle){
   document.body.appendChild(overlay);
   overlay.querySelector('#closePicker').onclick = () => { removeSideIndex(); overlay.remove(); };
 
-  const result = await withTimeout(
-    supabaseClient.from('exercises').select('id, name, category, weekday, alt_group_id, push_pull, upper_lower').eq('active', true),
-    15000
-  );
-  const all = result.__timeout || result.error ? [] : (result.data || []);
+  const { data: userData } = await supabaseClient.auth.getUser();
+  const all = await fetchAllExercisesCompat(userData.user.id);
 
   function renderMineTab(){
     removeSideIndex();
@@ -3804,7 +3801,7 @@ async function openPicker(initialTab, jumpToMuscle){
         const altHint = todayHintName
           ? `<div class="small" style="color:var(--slate); opacity:0.7; font-style:italic; margin-top:1px;">alt for ${todayHintName} (on ${DAY_NAMES[state.selectedDay]})</div>`
           : listHintName ? `<div class="small" style="color:var(--slate); opacity:0.7; font-style:italic; margin-top:1px;">alt for ${listHintName}</div>` : '';
-        return `<div class="pick-row" data-id="${ex.id}" data-name="${ex.name}"><div><div class="ex-name">${ex.name}${mechTag}${alreadyToday}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}${altHint}</div><div class="chev">›</div></div>`;
+        return `<div class="pick-row" data-id="${ex.masterId || ex.id}" data-name="${ex.name}"><div><div class="ex-name">${ex.name}${mechTag}${alreadyToday}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}${altHint}</div><div class="chev">›</div></div>`;
       }
 
       let html = '';
@@ -3861,7 +3858,7 @@ async function openPicker(initialTab, jumpToMuscle){
         el.addEventListener('pointercancel', cancel);
         el.onclick = async () => {
           if (longPressed) return;
-          const picked = all.find(ex => ex.id === el.dataset.id);
+          const picked = all.find(ex => (ex.masterId || ex.id) === el.dataset.id);
           overlay.remove();
           if (!picked || picked.weekday === state.selectedDay){
             openLogForm(el.dataset.id, el.dataset.name);
@@ -3869,7 +3866,7 @@ async function openPicker(initialTab, jumpToMuscle){
           }
           const existingToday = all.find(ex => ex.weekday === state.selectedDay && ex.name.toLowerCase() === picked.name.toLowerCase());
           if (existingToday){
-            openLogForm(existingToday.id, existingToday.name);
+            openLogForm(existingToday.masterId || existingToday.id, existingToday.name);
             return;
           }
           const { data: userData } = await supabaseClient.auth.getUser();
@@ -5538,16 +5535,14 @@ async function openNewExerciseForm(){
     if (!name) return;
     await withButtonLoading(overlay.querySelector('#saveExerciseBtn'), 'Saving…', async () => {
       const { data: userData } = await supabaseClient.auth.getUser();
-      const existingResult = await withTimeout(
-        supabaseClient.from('exercises').select('id').eq('user_id', userData.user.id).eq('weekday', selectedDay).ilike('name', name).eq('active', true).maybeSingle(),
-        15000
-      );
-      if (!existingResult.__timeout && !existingResult.error && existingResult.data){
+      const compatEx = await fetchAllExercisesCompat(userData.user.id);
+      const existingMatch = compatEx.find(ex => ex.weekday === selectedDay && ex.name.toLowerCase() === name.toLowerCase());
+      if (existingMatch){
         alert(`"${name}" already exists on ${DAY_NAMES[selectedDay]} - opening it instead of creating a duplicate.`);
         overlay.remove();
         state.selectedDay = selectedDay;
         state.currentTab = 'track';
-        openLogForm(existingResult.data.id, name);
+        openLogForm(existingMatch.id, name);
         return;
       }
       const { error } = await createExerciseForToday({
