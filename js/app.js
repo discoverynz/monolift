@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.96';
+const APP_VERSION = 'Beta 5.97';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -5045,12 +5045,14 @@ async function openPlanReorganizer(){
       // full-body day gets real duplicate records instead of silently
       // stealing the same exercise away from the day before it.
       let fullBodyDaysSeen = 0;
+      const touchedNames = new Set(); // every exercise explicitly moved or created this run
 
       for (const dp of dayPlans){
         if (dp.isCustom){
           for (const name of customSelections[dp.dayIdx]){
             const match = namedList.find(n => n.name === name);
             if (!match) continue;
+            touchedNames.add(name);
             const clearAlt = match.altGroupId && altGroupsToClear.has(match.altGroupId);
             for (const id of match.ids){
               const payload = { weekday: dp.dayIdx };
@@ -5069,6 +5071,7 @@ async function openPlanReorganizer(){
           if (excluded.has(String(dp.dayIdx) + '|' + resolvedName)) continue;
           const it = namedList.find(n => n.name === resolvedName);
           if (!it) continue;
+          touchedNames.add(resolvedName);
           const clearAlt = it.altGroupId && altGroupsToClear.has(it.altGroupId);
           if (isFullBodyRepeat){
             const sample = allExercises.find(e => e.name === it.name);
@@ -5086,6 +5089,20 @@ async function openPlanReorganizer(){
             }
           }
         }
+      }
+
+      // Cleanup pass: an exercise sitting on a day that's being reorganized,
+      // but that never matched any category anywhere in the new split (so it
+      // was never touched above), would otherwise be silently stranded on
+      // its old weekday - exactly how a repurposed day (Wednesday going from
+      // Chest to Legs, say) ends up still showing old chest exercises
+      // alongside the new leg ones. Deactivated rather than deleted, so nothing
+      // is lost and it can be manually re-added if it was actually wanted.
+      const reorganizedDayIdxs = new Set(dayPlans.filter(dp => !dp.isCustom && dayAssignments[dp.dayIdx]).map(dp => dp.dayIdx));
+      for (const ex of allExercises){
+        if (!reorganizedDayIdxs.has(ex.weekday)) continue;
+        if (touchedNames.has(ex.name)) continue;
+        await supabaseClient.from('exercises').update({ active: false }).eq('id', ex.id);
       }
 
       // Sync the day's header label to match its new category - otherwise
