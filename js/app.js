@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.100';
+const APP_VERSION = 'Beta 5.101';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1041,20 +1041,24 @@ async function fetchAllExercisesCompat(uid){
 // lives on exercise_days while alt_group_id lives on exercise_master, so
 // these need to be two separate calls against two different tables.
 async function moveExerciseToDay(item, newWeekday, clearAlt){
+  const results = [];
   if (!getUseExerciseMasterFlag()){
     for (const id of item.ids){
       const payload = { weekday: newWeekday };
       if (clearAlt) payload.alt_group_id = null;
-      await supabaseClient.from('exercises').update(payload).eq('id', id);
+      const { data, error } = await supabaseClient.from('exercises').update(payload).eq('id', id).select();
+      results.push({ id, ok: !error && data && data.length > 0, error: error ? error.message : (!data || !data.length ? 'update matched zero rows' : null) });
     }
-    return;
+    return results;
   }
   for (const id of item.ids){
-    await supabaseClient.from('exercise_days').update({ weekday: newWeekday }).eq('id', id);
+    const { data, error } = await supabaseClient.from('exercise_days').update({ weekday: newWeekday }).eq('id', id).select();
+    results.push({ id, ok: !error && data && data.length > 0, error: error ? error.message : (!data || !data.length ? 'update matched zero rows' : null) });
   }
   if (clearAlt && item.masterId){
     await supabaseClient.from('exercise_master').update({ alt_group_id: null }).eq('id', item.masterId);
   }
+  return results;
 }
 
 // Removes an exercise from a specific day - old structure soft-deactivates
@@ -1063,10 +1067,11 @@ async function moveExerciseToDay(item, newWeekday, clearAlt){
 // itself may still be legitimately placed on other days.
 async function removeExerciseFromDay(exerciseRow){
   if (!getUseExerciseMasterFlag()){
-    await supabaseClient.from('exercises').update({ active: false }).eq('id', exerciseRow.id);
-    return;
+    const { data, error } = await supabaseClient.from('exercises').update({ active: false }).eq('id', exerciseRow.id).select();
+    return { ok: !error && data && data.length > 0, error: error ? error.message : (!data || !data.length ? 'update matched zero rows' : null) };
   }
-  await supabaseClient.from('exercise_days').delete().eq('id', exerciseRow.id);
+  const { data, error } = await supabaseClient.from('exercise_days').delete().eq('id', exerciseRow.id).select();
+  return { ok: !error && data && data.length > 0, error: error ? error.message : (!data || !data.length ? 'delete matched zero rows' : null) };
 }
 
 async function createExerciseForToday(payload){
@@ -1522,6 +1527,10 @@ function openPlanSubPage(){
         <div><div style="color:#E8492A;">Wipe &amp; Rebuild Alt Groups</div><div class="small" style="color:var(--slate); margin-top:2px;">Clear everything and start over, reviewed day by day</div></div>
         <div class="chev" style="margin-top:2px;">›</div>
       </div>
+      <div class="me-item" id="subClearDayBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+        <div><div style="color:#E8492A;">Clear a Day</div><div class="small" style="color:var(--slate); margin-top:2px;">Remove every exercise from one day - history is kept</div></div>
+        <div class="chev" style="margin-top:2px;">›</div>
+      </div>
       ${localStorage.getItem('zealift_reorg_snapshot') ? `<div class="me-item" id="subRevertReorgBtn"><div style="color:#E8A33D;">Revert Last Reorganization</div><div class="chev">›</div></div>` : ''}
     </div>`;
   document.body.appendChild(overlay);
@@ -1532,6 +1541,7 @@ function openPlanSubPage(){
   overlay.querySelector('#subScanSplitTagsBtn').onclick = openSplitTagReview;
   overlay.querySelector('#subRebuildToolsBtn').onclick = openRebuildToolsSubPage;
   overlay.querySelector('#subWipeAltsBtn').onclick = openWipeAltGroupsScreen;
+  overlay.querySelector('#subClearDayBtn').onclick = openClearDayScreen;
   const subRevertBtn = overlay.querySelector('#subRevertReorgBtn');
   if (subRevertBtn) subRevertBtn.onclick = revertLastReorganization;
 }
@@ -2216,6 +2226,66 @@ async function openWipeAltGroupsScreen(){
       });
     }, { title: 'Wipe All Alt Groups?', danger: true, confirmLabel: 'Wipe' });
   };
+}
+
+async function openClearDayScreen(){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeClearDay">✕</button><h1>Clear a Day</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll">
+      <div class="small" style="padding:8px 18px 16px 18px; color:var(--slate);">Removes every exercise from the day you pick. History for those exercises is untouched - this only clears what's showing on that day.</div>
+      <div class="chip-row" id="clearDayChips" style="padding:0 18px;">
+        ${DAY_NAMES.map((d, i) => `<div class="chip" data-day="${i}">${d}</div>`).join('')}
+      </div>
+      <div id="clearDayBody"></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeClearDay').onclick = () => overlay.remove();
+
+  overlay.querySelectorAll('#clearDayChips .chip').forEach(chip => {
+    chip.onclick = async () => {
+      overlay.querySelectorAll('#clearDayChips .chip').forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      const dayIdx = parseInt(chip.dataset.day, 10);
+      const body = overlay.querySelector('#clearDayBody');
+      body.innerHTML = `<div class="small" style="padding:16px 18px; color:var(--slate);">Checking ${DAY_NAMES[dayIdx]}…</div>`;
+
+      const { data: userData } = await supabaseClient.auth.getUser();
+      const allExercises = await fetchAllExercisesCompat(userData.user.id);
+      const onThisDay = allExercises.filter(ex => ex.weekday === dayIdx);
+
+      if (!onThisDay.length){
+        body.innerHTML = `<div class="empty-state" style="padding:24px 18px;">${DAY_NAMES[dayIdx]} is already empty.</div>`;
+        return;
+      }
+      body.innerHTML = `
+        <div style="margin:12px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px;">
+          <div class="ex-name" style="font-size:13px; margin-bottom:8px;">${onThisDay.length} exercise${onThisDay.length===1?'':'s'} on ${DAY_NAMES[dayIdx]}</div>
+          ${onThisDay.map(ex => `<div class="small" style="color:var(--slate); padding:2px 0;">• ${ex.name}</div>`).join('')}
+        </div>
+        <button class="save-btn" id="confirmClearDayBtn" style="margin:0 18px 20px 18px; background:#E8492A;">Clear ${DAY_NAMES[dayIdx]}</button>
+      `;
+      body.querySelector('#confirmClearDayBtn').onclick = () => {
+        showConfirmDialog(`Removes ${onThisDay.length} exercises from ${DAY_NAMES[dayIdx]}. Their logged history is kept.`, async () => {
+          await withButtonLoading(body.querySelector('#confirmClearDayBtn'), 'Clearing…', async () => {
+            const failures = [];
+            for (const ex of onThisDay){
+              const result = await removeExerciseFromDay(ex);
+              if (!result.ok) failures.push({ name: ex.name, error: result.error });
+            }
+            overlay.remove();
+            if (failures.length){
+              alert(`${onThisDay.length - failures.length} of ${onThisDay.length} cleared. ${failures.length} failed:\n${failures.map(f => `${f.name}: ${f.error}`).join('\n')}`);
+            } else {
+              alert(`${DAY_NAMES[dayIdx]} cleared.`);
+            }
+            if (state.currentTab === 'track') renderTrack();
+          });
+        }, { title: `Clear ${DAY_NAMES[dayIdx]}?`, danger: true, confirmLabel: 'Clear' });
+      };
+    };
+  });
 }
 
 async function openManageLocationsScreen(){
@@ -5095,6 +5165,7 @@ async function openPlanReorganizer(){
       // stealing the same exercise away from the day before it.
       let fullBodyDaysSeen = 0;
       const touchedNames = new Set(); // every exercise explicitly moved or created this run
+      const silentFailures = []; // writes that completed with no error but affected zero rows
 
       for (const dp of dayPlans){
         if (dp.isCustom){
@@ -5103,7 +5174,8 @@ async function openPlanReorganizer(){
             if (!match) continue;
             touchedNames.add(name);
             const clearAlt = match.altGroupId && altGroupsToClear.has(match.altGroupId);
-            await moveExerciseToDay(match, dp.dayIdx, clearAlt);
+            const moveResults = await moveExerciseToDay(match, dp.dayIdx, clearAlt);
+            moveResults.filter(r => !r.ok).forEach(r => silentFailures.push({ name, action: 'move to ' + dp.day, error: r.error }));
           }
           continue;
         }
@@ -5127,7 +5199,8 @@ async function openPlanReorganizer(){
               push_pull: sample.push_pull, upper_lower: sample.upper_lower, location_ids: sample.location_ids
             });
           } else {
-            await moveExerciseToDay(it, dp.dayIdx, clearAlt);
+            const moveResults = await moveExerciseToDay(it, dp.dayIdx, clearAlt);
+            moveResults.filter(r => !r.ok).forEach(r => silentFailures.push({ name: resolvedName, action: 'move to ' + dp.day, error: r.error }));
           }
         }
       }
@@ -5147,8 +5220,9 @@ async function openPlanReorganizer(){
         if (!reorganizedDayIdxs.has(ex.weekday)) continue;
         if (touchedNames.has(ex.name)) continue;
         try {
-          await removeExerciseFromDay(ex);
-          cleanedUp.push({ name: ex.name, fromDay: DAY_NAMES[ex.weekday] });
+          const result = await removeExerciseFromDay(ex);
+          if (result.ok) cleanedUp.push({ name: ex.name, fromDay: DAY_NAMES[ex.weekday] });
+          else silentFailures.push({ name: ex.name, action: 'remove from ' + DAY_NAMES[ex.weekday], error: result.error });
         } catch (e) {
           cleanupErrors.push({ name: ex.name, error: e.message });
         }
@@ -5178,11 +5252,12 @@ async function openPlanReorganizer(){
         report.style = 'position:fixed; inset:0; background:rgba(0,0,0,0.75); z-index:70; display:flex; align-items:center; justify-content:center; padding:20px;';
         report.innerHTML = `
           <div style="background:var(--panel); border-radius:16px; padding:20px; width:100%; max-width:340px; max-height:80vh; overflow-y:auto;">
-            <div style="font-family:'Oswald', sans-serif; font-size:16px; margin-bottom:12px;">What Actually Happened</div>
+            <div class="ex-name" style="font-size:14px; margin-bottom:4px;">What Actually Happened</div>
             <div class="small" style="color:var(--slate); margin-bottom:4px;">${touchedNames.size} exercise names moved or placed</div>
             <div class="small" style="color:${cleanedUp.length ? 'var(--good)' : 'var(--slate)'}; margin-bottom:${cleanupErrors.length ? '4px' : '12px'};">${cleanedUp.length} stale exercises removed from repurposed days${cleanedUp.length ? ':' : ''}</div>
             ${cleanedUp.length ? `<div style="max-height:150px; overflow-y:auto; margin-bottom:12px;">${cleanedUp.map(c => `<div class="small" style="color:var(--slate); padding:2px 0;">• ${c.name} (was on ${c.fromDay})</div>`).join('')}</div>` : ''}
             ${cleanupErrors.length ? `<div class="small" style="color:#E8492A; margin-bottom:4px;">${cleanupErrors.length} failed to clean up:</div><div style="max-height:120px; overflow-y:auto; margin-bottom:12px;">${cleanupErrors.map(c => `<div class="small" style="color:#E8A33D; padding:2px 0;">• ${c.name}: ${c.error}</div>`).join('')}</div>` : ''}
+            ${silentFailures.length ? `<div class="small" style="color:#E8492A; margin-bottom:4px; font-weight:600;">⚠ ${silentFailures.length} writes completed with no error but affected zero rows - this is the actual smoking gun if things still look wrong:</div><div style="max-height:150px; overflow-y:auto; margin-bottom:12px;">${silentFailures.map(f => `<div class="small" style="color:#E8A33D; padding:2px 0;">• ${f.name} - ${f.action}: ${f.error}</div>`).join('')}</div>` : `<div class="small" style="color:var(--good); margin-bottom:12px;">✓ Every write was verified to actually affect a row - no silent failures.</div>`}
             <button id="closeReorgReport" class="save-btn" style="margin-top:8px;">Close</button>
           </div>`;
         document.body.appendChild(report);
