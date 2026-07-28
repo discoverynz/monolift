@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.91';
+const APP_VERSION = 'Beta 5.92';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -435,7 +435,8 @@ function collapseAltGroups(items){
 // with no triceps) and prefers compound movements first within each region.
 // Anything not selected stays visible, just unchecked by default - never
 // removed, always one tap away from being added back.
-function selectBalancedSlots(slots, targetSize){
+function selectBalancedSlots(slots, targetSize, crossDayUsage){
+  crossDayUsage = crossDayUsage || { region: {}, name: {} };
   if (slots.length <= targetSize) return { included: slots, excluded: [] };
   const byRegion = {};
   slots.forEach(s => {
@@ -446,13 +447,28 @@ function selectBalancedSlots(slots, targetSize){
   Object.values(byRegion).forEach(list => {
     list.sort((a, b) => {
       const am = a.representative.mechanic, bm = b.representative.mechanic;
-      if (am === bm) return 0;
-      if (am === 'compound') return -1;
-      if (bm === 'compound') return 1;
-      return 0;
+      if (am !== bm){
+        if (am === 'compound') return -1;
+        if (bm === 'compound') return 1;
+      }
+      // Within a region, prefer whichever specific exercise has been used
+      // less across the days already processed this week - tracked per
+      // exercise name, not per signature, since multiple exercises sharing a
+      // signature would otherwise always look identically "used" and never
+      // actually get distinguished from each other here.
+      const aUse = crossDayUsage.name[a.representative.name.toLowerCase()] || 0;
+      const bUse = crossDayUsage.name[b.representative.name.toLowerCase()] || 0;
+      return aUse - bUse;
     });
   });
-  const regionKeys = Object.keys(byRegion);
+  // Regions used less across the week so far get priority in the round-robin,
+  // so an under-covered muscle group doesn't keep losing out to the same
+  // heavily-favored ones on every single day.
+  const regionKeys = Object.keys(byRegion).sort((a, b) => {
+    const aUse = crossDayUsage.region[a] || 0;
+    const bUse = crossDayUsage.region[b] || 0;
+    return aUse - bUse;
+  });
   const included = [];
   let idx = 0;
   while (included.length < targetSize && regionKeys.some(r => byRegion[r].length)){
@@ -4697,15 +4713,27 @@ async function openPlanReorganizer(){
     // matching exercise - which is how a Push day ends up with 39 items.
     const SESSION_TARGET = 12;
     const swapChoices = {}; // "dayIdx|slotIndex" -> chosen name, if swapped from the default representative
+    // Tracks how many times each muscle region and each specific exercise
+    // signature has been selected across days already processed - lets a
+    // custom split with real overlap (Push/Upper both touching chest, for
+    // instance) actually balance across the whole week instead of each day
+    // being decided in total isolation from every other day.
+    const crossDayUsage = { region: {}, name: {} };
     dayPlans.forEach(dp => {
       if (dp.isCustom) return;
       const itemsForCollapse = dp.items.map(it =>
         (it.altGroupId && altGroupsToClear.has(it.altGroupId)) ? { ...it, altGroupId: null } : it
       );
       const allSlots = collapseAltGroups(itemsForCollapse);
-      const { included, excluded } = selectBalancedSlots(allSlots, SESSION_TARGET);
+      const { included, excluded } = selectBalancedSlots(allSlots, SESSION_TARGET, crossDayUsage);
       dp.slots = included;
       dp.excludedSlots = excluded;
+      included.forEach(slot => {
+        const rep = slot.representative;
+        const region = rep.muscle ? fineMuscleCategory(rep.muscle, rep.name) : 'Other';
+        crossDayUsage.region[region] = (crossDayUsage.region[region] || 0) + 1;
+        crossDayUsage.name[rep.name.toLowerCase()] = (crossDayUsage.name[rep.name.toLowerCase()] || 0) + 1;
+      });
       // For the overflow list: which excluded items look like alts of
       // something already included, using the same signal Auto-Alt uses -
       // this works immediately even with no formal alt-group tags yet.
@@ -4719,8 +4747,29 @@ async function openPlanReorganizer(){
       });
     });
 
+    // Weekly balance summary - shown at the top of the preview so imbalances
+    // across the whole split are visible, not just per-day.
+    const weeklyRegionCounts = {};
+    dayPlans.forEach(dp => {
+      (dp.slots || []).forEach(slot => {
+        const rep = slot.representative;
+        const region = rep.muscle ? fineMuscleCategory(rep.muscle, rep.name) : 'Other';
+        weeklyRegionCounts[region] = (weeklyRegionCounts[region] || 0) + 1;
+      });
+    });
+
     body.innerHTML = `
       <div class="banner" style="margin:8px 18px 16px 18px; background:#251a12; border:1px solid #4a2f16; border-radius:10px; padding:12px 14px; font-size:11.5px; color:#E8A33D; line-height:1.5;">⚠ Nothing changes until you confirm below. Your current layout is saved automatically and can be restored with one tap from Me → Data if this isn't right.${altGroupsToClear.size ? ` ${altGroupsToClear.size} alt group${altGroupsToClear.size===1?'':'s'} would be scattered by this split, so ${altGroupsToClear.size===1?'it':'they'} will be cleared rather than forced together — use Auto-Group Alts afterward to rebuild ones that make sense here.` : ''}</div>
+      ${Object.keys(weeklyRegionCounts).length ? `
+      <div style="margin:0 18px 16px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px;">
+        <div class="ex-name" style="font-size:12px; margin-bottom:8px;">Weekly muscle coverage</div>
+        ${Object.entries(weeklyRegionCounts).sort((a,b) => MUSCLE_ANATOMICAL_ORDER.indexOf(a[0]) - MUSCLE_ANATOMICAL_ORDER.indexOf(b[0])).map(([region, count]) => `
+          <div style="display:flex; justify-content:space-between; align-items:center; padding:3px 0;">
+            <span class="small" style="color:var(--slate);">${region}</span>
+            <span class="small" style="color:${count <= 1 ? '#E8A33D' : 'var(--slate)'};">${count} session${count===1?'':'s'}${count<=1?' — light coverage':''}</span>
+          </div>
+        `).join('')}
+      </div>` : ''}
       ${dayPlans.map(dp => `
         <div class="day-card" data-day="${dp.dayIdx}" style="margin:0 18px 14px 18px; background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden;">
           <div style="padding:10px 14px; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--line);">
