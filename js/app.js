@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.89';
+const APP_VERSION = 'Beta 5.90';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -2739,7 +2739,6 @@ async function renderTrack(){
         </div>
         <div style="padding:8px 18px 0 18px; display:flex; gap:8px; flex-wrap:wrap;">
           <button id="toolbarTimerBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:var(--panel); border:1px solid var(--line); color:var(--slate);">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg>
             <span style="font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px;">TIMER</span>
           </button>
           ${state.exercises.some(ex => !ex.alt_group_id) ? `<button id="toolbarAutoGroupBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:var(--panel); border:1px solid var(--flame); color:var(--flame);">
@@ -2766,17 +2765,9 @@ async function renderTrack(){
   const timerBtn = document.getElementById('toolbarTimerBtn');
   if (timerBtn) timerBtn.onclick = () => openTimer();
   const autoGroupBtn = document.getElementById('toolbarAutoGroupBtn');
-  if (autoGroupBtn) autoGroupBtn.onclick = () => showPreCheckPopover(autoGroupBtn,
-    'Scan for Alt Groups?',
-    'Looks at today\'s exercises and suggests groupings. Nothing is created until you review and confirm on the next screen.',
-    () => openAutoAltReview()
-  );
+  if (autoGroupBtn) autoGroupBtn.onclick = () => openAutoAltReview();
   const hideCompletedBtn = document.getElementById('toolbarHideCompletedBtn');
-  if (hideCompletedBtn) hideCompletedBtn.onclick = () => showPreCheckPopover(hideCompletedBtn,
-    hideCompleted ? 'Show completed exercises again?' : 'Hide completed exercises?',
-    null,
-    () => { setHideCompletedPref(!hideCompleted); renderTrack(); }
-  );
+  if (hideCompletedBtn) hideCompletedBtn.onclick = () => { setHideCompletedPref(!hideCompleted); renderTrack(); };
   document.querySelectorAll('.cat-rename-btn').forEach(btn => {
     btn.onclick = (e) => {
       e.stopPropagation();
@@ -3811,16 +3802,39 @@ async function openAutoAltReview(){
 
   const proposals = await proposeAltGroups(state.exercises);
   const body = overlay.querySelector('#autoAltBody');
-  if (!proposals.length){
-    body.innerHTML = `<div class="empty-state" style="padding:30px 18px;">No obvious groupings found among today's ungrouped exercises. This works best when a few exercises share both a muscle and a movement pattern (e.g. two different presses for chest).</div>`;
+  proposals.forEach((p, i) => { p.included = true; p.id = 'proposal-' + i; });
+
+  // For exercises that don't already have a same-day cluster, suggest real
+  // database exercises that share the same muscle+pattern+mechanic - a
+  // standalone exercise otherwise never gets an alt suggestion at all.
+  const clusteredIds = new Set();
+  proposals.forEach(p => p.members.forEach(m => clusteredIds.add(m.id)));
+  const standalone = state.exercises.filter(ex => !ex.alt_group_id && !clusteredIds.has(ex.id));
+  const todayNamesLower = new Set(state.exercises.map(ex => ex.name.toLowerCase()));
+  const db = await loadExerciseDB();
+  const suggestions = [];
+  standalone.forEach(ex => {
+    const match = matchExercise(ex.name, db);
+    const muscle = match && match.primaryMuscles && match.primaryMuscles[0];
+    const mech = classifyMechanic(match);
+    const sig = computeAltSignature(ex.name, muscle, mech ? mech.value : null);
+    if (!sig) return;
+    const candidates = db.filter(dbEx => {
+      if (todayNamesLower.has(dbEx.name.toLowerCase())) return false;
+      const dbMech = classifyMechanic(dbEx);
+      return computeAltSignature(dbEx.name, dbEx.primaryMuscles && dbEx.primaryMuscles[0], dbMech ? dbMech.value : null) === sig;
+    }).slice(0, 6);
+    if (candidates.length) suggestions.push({ id: 'sugg-' + ex.id, forExercise: ex, candidates, picked: null });
+  });
+
+  if (!proposals.length && !suggestions.length){
+    body.innerHTML = `<div class="empty-state" style="padding:30px 18px;">No obvious groupings or suggestions found among today's ungrouped exercises. This works best when exercises share both a muscle and a movement pattern (e.g. two different presses for chest).</div>`;
     return;
   }
 
-  proposals.forEach((p, i) => { p.included = true; p.id = 'proposal-' + i; });
-
   function render(){
     body.innerHTML = `
-      <div class="small" style="padding:12px 18px; color:var(--slate);">Review each group before confirming - nothing is applied yet. Rename, remove members, or skip a group entirely.</div>
+      <div class="small" style="padding:12px 18px; color:var(--slate);">Review before confirming - nothing is applied yet. Rename, remove members, or skip a group entirely.</div>
       ${proposals.map(p => `
         <div class="proposal-card" data-pid="${p.id}" style="margin:0 18px 14px 18px; background:var(--panel); border:1px solid var(--line); border-left:4px solid ${p.color}; border-radius:10px; padding:12px 14px; opacity:${p.included ? 1 : 0.45};">
           <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
@@ -3831,7 +3845,17 @@ async function openAutoAltReview(){
           ${p.members.map(m => `<div style="display:flex; justify-content:space-between; align-items:center; padding:5px 0;"><div class="ex-name" style="font-size:13px;">${m.name}</div><span class="proposal-remove-member" data-pid="${p.id}" data-mid="${m.id}" style="color:var(--slate); font-size:12px; padding:2px 6px;">✕</span></div>`).join('')}
         </div>
       `).join('')}
-      <button class="save-btn" id="confirmAutoAltBtn" style="margin:0 18px 20px 18px;">Apply Groups</button>
+      ${suggestions.length ? `<div class="small" style="padding:6px 18px 10px 18px; color:var(--slate);">These don't have a match on today's list yet - pick one to add it and group it with the original in one step.</div>` : ''}
+      ${suggestions.map(s => `
+        <div class="proposal-card" data-sid="${s.id}" style="margin:0 18px 14px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px;">
+          <div class="ex-name" style="font-size:13px; margin-bottom:8px;">${s.forExercise.name}</div>
+          <div class="chip-row" style="flex-wrap:wrap;">
+            <div class="chip suggestion-none ${!s.picked?'active':''}" data-sid="${s.id}">None</div>
+            ${s.candidates.map(c => `<div class="chip suggestion-pick ${s.picked===c.name?'active':''}" data-sid="${s.id}" data-name="${c.name}">${c.name}</div>`).join('')}
+          </div>
+        </div>
+      `).join('')}
+      <button class="save-btn" id="confirmAutoAltBtn" style="margin:0 18px 20px 18px;">Apply</button>
     `;
     body.querySelectorAll('.proposal-name-input').forEach(input => {
       input.oninput = () => { proposals.find(p => p.id === input.dataset.pid).suggestedName = input.value; };
@@ -3846,9 +3870,17 @@ async function openAutoAltReview(){
         render();
       };
     });
+    body.querySelectorAll('.suggestion-none').forEach(chip => {
+      chip.onclick = () => { suggestions.find(s => s.id === chip.dataset.sid).picked = null; render(); };
+    });
+    body.querySelectorAll('.suggestion-pick').forEach(chip => {
+      chip.onclick = () => { suggestions.find(s => s.id === chip.dataset.sid).picked = chip.dataset.name; render(); };
+    });
     body.querySelector('#confirmAutoAltBtn').onclick = async () => {
+      const btn = body.querySelector('#confirmAutoAltBtn');
+      btn.textContent = 'Applying…';
       const toApply = proposals.filter(p => p.included && p.members.length >= 2);
-      if (!toApply.length){ overlay.remove(); return; }
+      const toAddAsAlt = suggestions.filter(s => s.picked);
       const { data: userData } = await supabaseClient.auth.getUser();
       for (const p of toApply){
         const insertResult = await withTimeout(
@@ -3859,6 +3891,23 @@ async function openAutoAltReview(){
         if (!groupId) continue;
         for (const m of p.members){
           await supabaseClient.from('exercises').update({ alt_group_id: groupId }).eq('id', m.id);
+        }
+      }
+      for (const s of toAddAsAlt){
+        const insertResult = await withTimeout(
+          supabaseClient.from('alt_groups').insert({ user_id: userData.user.id, name: s.forExercise.name + ' Alt', color: ALT_COLORS[Math.floor(Math.random()*ALT_COLORS.length)] }).select(),
+          15000
+        );
+        const groupId = insertResult.__timeout || !insertResult.data ? null : insertResult.data[0].id;
+        if (!groupId) continue;
+        const category = s.candidates.find(c => c.name === s.picked);
+        const created = await createExerciseForToday({
+          user_id: userData.user.id, name: s.picked, category: category ? EQUIPMENT_TO_CATEGORY[category.equipment] || s.forExercise.category : s.forExercise.category,
+          weekday: state.selectedDay, alt_group_id: groupId
+        });
+        await supabaseClient.from('exercises').update({ alt_group_id: groupId }).eq('id', s.forExercise.id);
+        if (created.data && created.data[0] && getUseExerciseMasterFlag()){
+          await supabaseClient.from('exercise_master').update({ alt_group_id: groupId }).eq('id', created.data[0].id);
         }
       }
       overlay.remove();
