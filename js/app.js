@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.87';
+const APP_VERSION = 'Beta 5.88';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -3157,6 +3157,35 @@ function openEditLocationForm(exerciseId, exerciseName){
   };
 }
 
+async function confirmDeleteExerciseEntirely(exerciseName, onDeleted){
+  if (!confirm(`Permanently delete "${exerciseName}"? This removes it from every day and deletes all logged history for it. Cannot be undone.`)) return;
+  const { data: userData } = await supabaseClient.auth.getUser();
+  const uid = userData.user.id;
+  if (getUseExerciseMasterFlag()){
+    const masterResult = await withTimeout(
+      supabaseClient.from('exercise_master').select('id').eq('user_id', uid).ilike('name', exerciseName).maybeSingle(),
+      15000
+    );
+    if (!masterResult.__timeout && !masterResult.error && masterResult.data){
+      const id = masterResult.data.id;
+      await supabaseClient.from('sets').delete().eq('exercise_master_id', id);
+      await supabaseClient.from('exercise_days').delete().eq('exercise_master_id', id);
+      await supabaseClient.from('exercise_master').delete().eq('id', id);
+    }
+  } else {
+    const exResult = await withTimeout(
+      supabaseClient.from('exercises').select('id').eq('user_id', uid).ilike('name', exerciseName),
+      15000
+    );
+    const ids = (exResult.__timeout || exResult.error ? [] : exResult.data || []).map(e => e.id);
+    for (const id of ids){
+      await supabaseClient.from('sets').delete().eq('exercise_id', id);
+      await supabaseClient.from('exercises').delete().eq('id', id);
+    }
+  }
+  if (onDeleted) onDeleted();
+}
+
 function confirmRemoveExercise(exerciseId, exerciseName){
   const useMaster = getUseExerciseMasterFlag();
   const overlay = document.createElement('div');
@@ -3573,7 +3602,22 @@ async function openPicker(initialTab, jumpToMuscle){
         removeSideIndex();
       }
       body.querySelectorAll('.pick-row[data-id]').forEach(el => {
+        let pressTimer = null;
+        let longPressed = false;
+        const start = () => {
+          longPressed = false;
+          pressTimer = setTimeout(() => {
+            longPressed = true;
+            confirmDeleteExerciseEntirely(el.dataset.name, () => renderList(body.querySelector('#pickerSearch').value));
+          }, 550);
+        };
+        const cancel = () => { clearTimeout(pressTimer); };
+        el.addEventListener('pointerdown', start);
+        el.addEventListener('pointerup', cancel);
+        el.addEventListener('pointerleave', cancel);
+        el.addEventListener('pointercancel', cancel);
         el.onclick = async () => {
+          if (longPressed) return;
           const picked = all.find(ex => ex.id === el.dataset.id);
           overlay.remove();
           if (!picked || picked.weekday === state.selectedDay){
