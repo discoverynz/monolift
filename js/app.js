@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.107';
+const APP_VERSION = 'Beta 5.108';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -3488,7 +3488,12 @@ function confirmRemoveExercise(exerciseId, exerciseName){
       return;
     }
     if (useMaster){
-      await supabaseClient.from('exercise_days').delete().eq('exercise_master_id', exerciseId).eq('weekday', state.selectedDay);
+      const { data, error } = await supabaseClient.from('exercise_days').delete().eq('exercise_master_id', exerciseId).eq('weekday', state.selectedDay).select();
+      if (error || !data || !data.length){
+        alert(`Could not remove "${exerciseName}": ${error ? error.message : 'no matching row found for today - it may already be gone, or something is out of sync. Try refreshing the app.'}`);
+        renderTrack();
+        return;
+      }
       showUndoToast(exerciseName, async () => {
         const { data: userData } = await supabaseClient.auth.getUser();
         await supabaseClient.from('exercise_days').insert({ user_id: userData.user.id, exercise_master_id: exerciseId, weekday: state.selectedDay });
