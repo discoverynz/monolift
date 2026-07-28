@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.104';
+const APP_VERSION = 'Beta 5.105';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -6221,7 +6221,14 @@ function openLogForm(exerciseId, exerciseName){
     const setsVal = document.getElementById('setsInput').value;
     const repsVal = document.getElementById('repsInput').value;
     const notesVal = document.getElementById('notesInput').value.trim();
-    if (!weightRaw && !setsVal && !repsVal){ alert("Enter at least one value to save a set — weight, time, sets, or reps. If you just want this exercise sitting on today's list ready to log later, tap ✕ to close instead - it's already there, no set required."); return; }
+    if (!weightRaw && !setsVal && !repsVal){
+      // Nothing to save - the exercise is already sitting on today's list
+      // (added the moment it was picked), so just close cleanly instead of
+      // treating this like an error.
+      overlay.remove();
+      if (state.currentTab === 'track') renderTrack();
+      return;
+    }
     const weight = weightRaw ? parseFloat(weightRaw) : null;
     const insertedId = await withButtonLoading(overlay.querySelector('#saveSetBtn'), 'Saving…', () =>
       saveEntry(weight, unit, weightType, repsVal ? parseInt(repsVal,10) : null, setsVal ? parseInt(setsVal,10) : null, notesVal)
@@ -6232,6 +6239,19 @@ function openLogForm(exerciseId, exerciseName){
     }
   }
   overlay.querySelector('#saveSetBtn').onclick = handleSaveClick;
+  // Button label reflects what tapping it will actually do - "Add to Day" when
+  // there's nothing entered yet (exercise is already on the list either way,
+  // this just closes), "Save Set" the moment any value is entered.
+  function updateSaveBtnLabel(){
+    const btn = overlay.querySelector('#saveSetBtn');
+    const hasValue = document.getElementById('weightInput').value || document.getElementById('setsInput').value || document.getElementById('repsInput').value;
+    btn.textContent = hasValue ? 'Save Set' : 'Add to Day';
+  }
+  ['weightInput', 'setsInput', 'repsInput'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', updateSaveBtnLabel);
+  });
+  updateSaveBtnLabel();
 }
 
 // ---------- REST TIMER (standalone, manual) ----------
