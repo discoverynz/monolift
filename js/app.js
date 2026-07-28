@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.103';
+const APP_VERSION = 'Beta 5.104';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -497,6 +497,9 @@ function exerciseMatchesCategory(ex, muscle, category){
 
 function movementPatternOf(name){
   const n = name.toLowerCase();
+  if (n.includes('calf') || n.includes('calve')){
+    if (!n.includes('stretch') && !n.includes('walk')) return 'raise';
+  }
   return MOVEMENT_PATTERNS.find(p => n.includes(p)) || null;
 }
 
@@ -524,6 +527,13 @@ function computeAltSignature(name, muscle, mechValue){
 async function proposeAltGroups(dayExercises){
   const db = await loadExerciseDB();
   const ungrouped = dayExercises.filter(ex => !ex.alt_group_id);
+  // Broad muscle + movement pattern is the primary grouping signal - Standing
+  // Calf Raises, Seated Calf Machine, and Calf Raise Machine all genuinely
+  // read as interchangeable alternatives to someone picking between them,
+  // even though they technically emphasize gastrocnemius vs soleus
+  // differently. That fine-muscle distinction is useful for Track's display
+  // grouping, but grouping same-day exercises together matters more here
+  // than precision about exactly which head of a muscle each one targets.
   const buckets = {};
   ungrouped.forEach(ex => {
     const pattern = movementPatternOf(ex.name);
@@ -531,19 +541,16 @@ async function proposeAltGroups(dayExercises){
     const match = matchExercise(ex.name, db);
     const muscle = match && match.primaryMuscles && match.primaryMuscles[0];
     if (!muscle) return;
-    const fineMuscle = fineMuscleCategory(muscle, ex.name);
-    const mech = classifyMechanic(match);
-    const mechKey = mech ? mech.value : 'unknown';
-    const key = fineMuscle + '|' + pattern + '|' + mechKey;
+    const key = muscle + '|' + pattern;
     (buckets[key] = buckets[key] || []).push(ex);
   });
   return Object.entries(buckets)
     .filter(([, members]) => members.length >= 2)
     .map(([key, members], i) => {
-      const [fineMuscle] = key.split('|');
+      const [muscle] = key.split('|');
       return {
-        suggestedName: `${fineMuscle} Alt`,
-        muscle: fineMuscle,
+        suggestedName: `${cap(muscle)} Alt`,
+        muscle: cap(muscle),
         color: ALT_COLORS[i % ALT_COLORS.length],
         members
       };
