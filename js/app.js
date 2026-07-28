@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.90';
+const APP_VERSION = 'Beta 5.91';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -3882,6 +3882,8 @@ async function openAutoAltReview(){
       const toApply = proposals.filter(p => p.included && p.members.length >= 2);
       const toAddAsAlt = suggestions.filter(s => s.picked);
       const { data: userData } = await supabaseClient.auth.getUser();
+      const useMaster = getUseExerciseMasterFlag();
+      const memberTable = useMaster ? 'exercise_master' : 'exercises';
       for (const p of toApply){
         const insertResult = await withTimeout(
           supabaseClient.from('alt_groups').insert({ user_id: userData.user.id, name: p.suggestedName, color: p.color }).select(),
@@ -3890,7 +3892,7 @@ async function openAutoAltReview(){
         const groupId = insertResult.__timeout || !insertResult.data ? null : insertResult.data[0].id;
         if (!groupId) continue;
         for (const m of p.members){
-          await supabaseClient.from('exercises').update({ alt_group_id: groupId }).eq('id', m.id);
+          await supabaseClient.from(memberTable).update({ alt_group_id: groupId }).eq('id', m.id);
         }
       }
       for (const s of toAddAsAlt){
@@ -3905,7 +3907,7 @@ async function openAutoAltReview(){
           user_id: userData.user.id, name: s.picked, category: category ? EQUIPMENT_TO_CATEGORY[category.equipment] || s.forExercise.category : s.forExercise.category,
           weekday: state.selectedDay, alt_group_id: groupId
         });
-        await supabaseClient.from('exercises').update({ alt_group_id: groupId }).eq('id', s.forExercise.id);
+        await supabaseClient.from(memberTable).update({ alt_group_id: groupId }).eq('id', s.forExercise.id);
         if (created.data && created.data[0] && getUseExerciseMasterFlag()){
           await supabaseClient.from('exercise_master').update({ alt_group_id: groupId }).eq('id', created.data[0].id);
         }
