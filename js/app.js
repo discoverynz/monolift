@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.102';
+const APP_VERSION = 'Beta 5.103';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1022,17 +1022,34 @@ async function fetchAllExercisesCompat(uid){
     );
     return result.__timeout || result.error ? [] : (result.data || []);
   }
-  const result = await withTimeout(
-    supabaseClient.from('exercise_days').select('id, weekday, exercise_master(id, name, category, alt_group_id, push_pull, upper_lower, location_ids)').eq('user_id', uid),
-    15000
-  );
-  if (result.__timeout || result.error) return [];
-  return (result.data || []).filter(r => r.exercise_master).map(r => ({
-    id: r.id, masterId: r.exercise_master.id,
-    name: r.exercise_master.name, category: r.exercise_master.category, weekday: r.weekday,
-    alt_group_id: r.exercise_master.alt_group_id, push_pull: r.exercise_master.push_pull,
-    upper_lower: r.exercise_master.upper_lower, location_ids: r.exercise_master.location_ids
-  }));
+  // exercise_master is the full library - queried directly here, rather than
+  // discovered indirectly through exercise_days, since the reorganizer needs
+  // to know about every exercise the user has ever used to be able to place
+  // it somewhere, not just whatever happens to currently be on a day. An
+  // exercise with zero current placements (e.g. every day was just cleared)
+  // still needs to show up here, or the reorganizer has nothing to work with
+  // at all even though the exercise genuinely still exists.
+  const [masterResult, daysResult] = await Promise.all([
+    withTimeout(supabaseClient.from('exercise_master').select('id, name, category, alt_group_id, push_pull, upper_lower, location_ids').eq('user_id', uid), 15000),
+    withTimeout(supabaseClient.from('exercise_days').select('id, exercise_master_id, weekday').eq('user_id', uid), 15000)
+  ]);
+  if (masterResult.__timeout || masterResult.error) return [];
+  const masters = masterResult.data || [];
+  const days = daysResult.__timeout || daysResult.error ? [] : (daysResult.data || []);
+  const daysByMaster = {};
+  days.forEach(d => { (daysByMaster[d.exercise_master_id] = daysByMaster[d.exercise_master_id] || []).push(d); });
+
+  const compat = [];
+  masters.forEach(m => {
+    const placements = daysByMaster[m.id] || [];
+    const base = { masterId: m.id, name: m.name, category: m.category, alt_group_id: m.alt_group_id, push_pull: m.push_pull, upper_lower: m.upper_lower, location_ids: m.location_ids };
+    if (placements.length){
+      placements.forEach(p => compat.push({ ...base, id: p.id, weekday: p.weekday }));
+    } else {
+      compat.push({ ...base, id: null, weekday: null }); // not currently on any day, but still needs to be discoverable
+    }
+  });
+  return compat;
 }
 
 // Moves an exercise to a different day - under the old structure that's just
