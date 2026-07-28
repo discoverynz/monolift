@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.95';
+const APP_VERSION = 'Beta 5.96';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -951,6 +951,29 @@ async function loadExercisesFromMaster(){
 // once the action finishes either way. Meant to be used everywhere a button
 // triggers something that talks to the network, since without this a slow
 // connection makes it look like the tap did nothing at all.
+// Replaces native confirm() everywhere in the app - confirm() is
+// well-documented to be unreliable in standalone iOS PWA mode, sometimes
+// returning false immediately with no dialog ever shown at all, which
+// silently skips whatever came after it. This never depends on a native
+// browser dialog.
+function showConfirmDialog(message, onConfirm, opts){
+  opts = opts || {};
+  const overlay = document.createElement('div');
+  overlay.style = 'position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:60; display:flex; align-items:center; justify-content:center;';
+  overlay.innerHTML = `
+    <div style="background:var(--panel); border-radius:16px; padding:22px; width:300px; text-align:center;">
+      ${opts.title ? `<div style="font-family:'Oswald', sans-serif; font-size:16px; margin-bottom:8px;">${opts.title}</div>` : ''}
+      <div style="font-size:13px; color:var(--slate); margin-bottom:18px; line-height:1.5;">${message}</div>
+      <div style="display:flex; gap:10px;">
+        <button id="genericConfirmCancel" style="flex:1; padding:11px; border-radius:10px; background:var(--ink); color:var(--chalk); font-size:13px;">Cancel</button>
+        <button id="genericConfirmOk" style="flex:1; padding:11px; border-radius:10px; background:${opts.danger ? '#E8492A' : 'var(--flame)'}; color:${opts.danger ? 'white' : 'var(--ink)'}; font-weight:600; font-size:13px;">${opts.confirmLabel || 'Confirm'}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#genericConfirmCancel').onclick = () => overlay.remove();
+  overlay.querySelector('#genericConfirmOk').onclick = () => { overlay.remove(); onConfirm(); };
+}
+
 async function withButtonLoading(btn, loadingText, asyncFn){
   if (!btn) return asyncFn();
   const originalText = btn.textContent;
@@ -2125,17 +2148,18 @@ async function openWipeAltGroupsScreen(){
     <button class="save-btn" id="confirmWipeBtn" style="margin:0 18px 20px 18px; background:#E8492A;">Wipe All ${groups.length} Groups</button>
   `;
 
-  body.querySelector('#confirmWipeBtn').onclick = async () => {
-    if (!confirm(`This clears alt group tags from ${taggedCount} exercises. Nothing else is touched - names, weights, history, all stay exactly as they are. Continue?`)) return;
-    const btn = body.querySelector('#confirmWipeBtn');
-    btn.textContent = 'Wiping…';
-    const useMaster = getUseExerciseMasterFlag();
-    const table = useMaster ? 'exercise_master' : 'exercises';
-    await supabaseClient.from(table).update({ alt_group_id: null }).eq('user_id', uid).not('alt_group_id', 'is', null);
-    await supabaseClient.from('alt_groups').delete().eq('user_id', uid);
-    overlay.remove();
-    alert(`Wiped. Go to each day and use Auto-Group Alts (long-press any exercise) to rebuild, one day at a time.`);
-    if (state.currentTab === 'track') renderTrack();
+  body.querySelector('#confirmWipeBtn').onclick = () => {
+    showConfirmDialog(`This clears alt group tags from ${taggedCount} exercises. Nothing else is touched - names, weights, history, all stay exactly as they are.`, async () => {
+      await withButtonLoading(body.querySelector('#confirmWipeBtn'), 'Wiping…', async () => {
+        const useMaster = getUseExerciseMasterFlag();
+        const table = useMaster ? 'exercise_master' : 'exercises';
+        await supabaseClient.from(table).update({ alt_group_id: null }).eq('user_id', uid).not('alt_group_id', 'is', null);
+        await supabaseClient.from('alt_groups').delete().eq('user_id', uid);
+        overlay.remove();
+        alert(`Wiped. Go to each day and use Auto-Group Alts (long-press any exercise) to rebuild, one day at a time.`);
+        if (state.currentTab === 'track') renderTrack();
+      });
+    }, { title: 'Wipe All Alt Groups?', danger: true, confirmLabel: 'Wipe' });
   };
 }
 
@@ -2183,18 +2207,19 @@ async function openManageLocationsScreen(){
       };
     });
     listArea.querySelectorAll('.manage-loc-delete').forEach(btn => {
-      btn.onclick = async () => {
-        if (!confirm(`Delete "${btn.dataset.name}"? Exercises tagged to it will just lose that tag - nothing else is affected.`)) return;
-        // Clear this location from every exercise's location_ids first, so
-        // nothing points at a deleted row.
-        const { data: userData } = await supabaseClient.auth.getUser();
-        const exResult = await withTimeout(supabaseClient.from('exercises').select('id, location_ids').eq('user_id', userData.user.id), 15000);
-        const affected = (exResult.data || []).filter(ex => (ex.location_ids || []).includes(btn.dataset.id));
-        for (const ex of affected){
-          await supabaseClient.from('exercises').update({ location_ids: ex.location_ids.filter(id => id !== btn.dataset.id) }).eq('id', ex.id);
-        }
-        await supabaseClient.from('locations').delete().eq('id', btn.dataset.id);
-        render();
+      btn.onclick = () => {
+        showConfirmDialog(`Exercises tagged to "${btn.dataset.name}" will just lose that tag - nothing else is affected.`, async () => {
+          // Clear this location from every exercise's location_ids first, so
+          // nothing points at a deleted row.
+          const { data: userData } = await supabaseClient.auth.getUser();
+          const exResult = await withTimeout(supabaseClient.from('exercises').select('id, location_ids').eq('user_id', userData.user.id), 15000);
+          const affected = (exResult.data || []).filter(ex => (ex.location_ids || []).includes(btn.dataset.id));
+          for (const ex of affected){
+            await supabaseClient.from('exercises').update({ location_ids: ex.location_ids.filter(id => id !== btn.dataset.id) }).eq('id', ex.id);
+          }
+          await supabaseClient.from('locations').delete().eq('id', btn.dataset.id);
+          render();
+        }, { title: `Delete "${btn.dataset.name}"?`, danger: true, confirmLabel: 'Delete' });
       };
     });
   }
@@ -4382,15 +4407,21 @@ function openRestoreConfirmScreen(backup, listOverlay, onDone){
     overlay.querySelector('#alsoBackupCheck').style.color = alsoBackup ? 'var(--flame)' : 'var(--slate)';
   };
   overlay.querySelector('#confirmRestoreBtn').onclick = async () => {
+    const proceedWithRestore = async () => {
+      const { restored, skipped } = await restorePlanBackup(backup);
+      overlay.remove();
+      if (listOverlay) listOverlay.remove();
+      alert(`Restored ${restored} exercises.${skipped ? ' ' + skipped + ' from this backup no longer exist and were skipped.' : ''}`);
+      if (onDone) onDone();
+    };
     if (alsoBackup){
       const { backup: safetyBackup, errorMessage } = await createPlanBackup(`Before restoring "${backup.name}" — ${todayStr()}`);
-      if (!safetyBackup && !confirm(`Could not save the safety backup (${errorMessage}). Restore anyway with no way back?`)) return;
+      if (!safetyBackup){
+        showConfirmDialog(`Could not save the safety backup (${errorMessage}). Restore anyway with no way back?`, proceedWithRestore, { title: 'Safety Backup Failed', danger: true, confirmLabel: 'Restore Anyway' });
+        return;
+      }
     }
-    const { restored, skipped } = await restorePlanBackup(backup);
-    overlay.remove();
-    if (listOverlay) listOverlay.remove();
-    alert(`Restored ${restored} exercises.${skipped ? ' ' + skipped + ' from this backup no longer exist and were skipped.' : ''}`);
-    if (onDone) onDone();
+    await proceedWithRestore();
   };
 }
 
@@ -4470,11 +4501,12 @@ async function openBackupPlanScreen(){
       };
     });
     listArea.querySelectorAll('.backup-delete-btn').forEach(btn => {
-      btn.onclick = async (e) => {
+      btn.onclick = (e) => {
         e.stopPropagation();
-        if (!confirm('Delete this saved plan? This cannot be undone.')) return;
-        await supabaseClient.from('plan_backups').delete().eq('id', btn.dataset.id);
-        renderList();
+        showConfirmDialog('This cannot be undone.', async () => {
+          await supabaseClient.from('plan_backups').delete().eq('id', btn.dataset.id);
+          renderList();
+        }, { title: 'Delete This Saved Plan?', danger: true, confirmLabel: 'Delete' });
       };
     });
   }
@@ -5082,13 +5114,14 @@ async function revertLastReorganization(){
   const raw = localStorage.getItem('zealift_reorg_snapshot');
   if (!raw){ alert('No reorganization to revert.'); return; }
   const { snapshot } = JSON.parse(raw);
-  if (!confirm(`Restore ${snapshot.length} exercises to their previous days?`)) return;
-  for (const item of snapshot){
-    await supabaseClient.from('exercises').update({ weekday: item.weekday }).eq('id', item.id);
-  }
-  localStorage.removeItem('zealift_reorg_snapshot');
-  if (state.currentTab === 'track') renderTrack();
-  alert('Reverted.');
+  showConfirmDialog(`Restore ${snapshot.length} exercises to their previous days?`, async () => {
+    for (const item of snapshot){
+      await supabaseClient.from('exercises').update({ weekday: item.weekday }).eq('id', item.id);
+    }
+    localStorage.removeItem('zealift_reorg_snapshot');
+    if (state.currentTab === 'track') renderTrack();
+    alert('Reverted.');
+  }, { title: 'Revert Reorganization?', confirmLabel: 'Restore' });
 }
 
 async function pickAltGroup(container, onPicked){
@@ -5131,18 +5164,20 @@ async function pickAltGroup(container, onPicked){
       };
     });
     container.querySelectorAll('.alt-delete-btn').forEach(btn => {
-      btn.onclick = async (e) => {
+      btn.onclick = (e) => {
         e.stopPropagation();
-        if (!confirm(`Delete "${btn.dataset.name}"? Exercises in this group will keep their names but lose the alt-group link.`)) return;
-        const { data: userData } = await supabaseClient.auth.getUser();
-        // Clear the reference on every exercise pointing at this group first, so
-        // nothing is left referencing a group that no longer exists.
-        await supabaseClient.from('exercises').update({ alt_group_id: null }).eq('user_id', userData.user.id).eq('alt_group_id', btn.dataset.id);
-        const { error } = await supabaseClient.from('alt_groups').delete().eq('id', btn.dataset.id);
-        if (error){ alert(error.message); return; }
-        const idx = groups.findIndex(g => g.id === btn.dataset.id);
-        if (idx !== -1) groups.splice(idx, 1);
-        renderAlt(container.querySelector('#altSearch').value);
+        showConfirmDialog(`Exercises in "${btn.dataset.name}" will keep their names but lose the alt-group link.`, async () => {
+          const { data: userData } = await supabaseClient.auth.getUser();
+          const memberTable = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+          // Clear the reference on every exercise pointing at this group first, so
+          // nothing is left referencing a group that no longer exists.
+          await supabaseClient.from(memberTable).update({ alt_group_id: null }).eq('user_id', userData.user.id).eq('alt_group_id', btn.dataset.id);
+          const { error } = await supabaseClient.from('alt_groups').delete().eq('id', btn.dataset.id);
+          if (error){ alert(error.message); return; }
+          const idx = groups.findIndex(g => g.id === btn.dataset.id);
+          if (idx !== -1) groups.splice(idx, 1);
+          renderAlt(container.querySelector('#altSearch').value);
+        }, { title: `Delete "${btn.dataset.name}"?`, danger: true, confirmLabel: 'Delete' });
       };
     });
     const createRow = container.querySelector('#createAltRow');
