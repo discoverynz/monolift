@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.92';
+const APP_VERSION = 'Beta 5.93';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -382,7 +382,7 @@ function deriveSplitCategory(ex, splitType, muscle){
     return ex.push_pull || null;
   }
   if (splitType === 'upperlower') return ex.upper_lower || null;
-  if (splitType === 'muscle') return m || null;
+  if (splitType === 'muscle') return (m && RAW_MUSCLE_TO_REGION[m]) || null;
   if (splitType === 'arnold'){
     // Classic Arnold split: Chest+Back paired as opposing big-muscle supersets,
     // Shoulders+Arms paired together, Legs on their own - a genuinely different
@@ -4405,6 +4405,19 @@ async function openBackupPlanScreen(){
 }
 
 // ---------- PLAN REORGANIZER ----------
+// Broad region grouping used only by Bro Split's day-assignment screen - maps
+// the exercise database's raw primaryMuscles values to generic groupings
+// (Chest, Back, Arms, Legs, etc.) instead of showing every individual muscle
+// as its own separate option, and lets a day combine more than one region
+// (e.g. Chest + Triceps in one day, the classic bro-split combo).
+const RAW_MUSCLE_TO_REGION = {
+  chest: 'Chest', shoulders: 'Shoulders',
+  lats: 'Back', traps: 'Back', 'lower back': 'Back', 'middle back': 'Back',
+  biceps: 'Arms', triceps: 'Arms', forearms: 'Arms',
+  quadriceps: 'Legs', hamstrings: 'Legs', glutes: 'Legs', calves: 'Legs', adductors: 'Legs', abductors: 'Legs',
+  abdominals: 'Core', neck: 'Neck'
+};
+
 const SPLIT_TYPES = [
   { id:'ppl', label:'Push / Pull / Legs', desc:'The gym-bro classic. Push muscles one day, pull the next, legs when you\'re ready to suffer.', cats:['push','pull','legs','rest'] },
   { id:'upperlower', label:'Upper / Lower', desc:'Half your body today, the other half tomorrow. Efficient, no-nonsense.', cats:['upper','lower','rest'] },
@@ -4599,9 +4612,16 @@ async function openPlanReorganizer(){
       ]);
       const names = [...new Set((exResult.data||[]).map(e=>e.name))];
       const muscles = new Set();
-      names.forEach(n => { const m = matchExercise(n, db); if (m && m.primaryMuscles && m.primaryMuscles[0]) muscles.add(m.primaryMuscles[0]); });
+      const regions = new Set();
+      names.forEach(n => {
+        const m = matchExercise(n, db);
+        const muscle = m && m.primaryMuscles && m.primaryMuscles[0];
+        if (!muscle) return;
+        muscles.add(muscle);
+        if (RAW_MUSCLE_TO_REGION[muscle]) regions.add(RAW_MUSCLE_TO_REGION[muscle]);
+      });
       cats = splitType === 'muscle'
-        ? [...muscles, 'rest']
+        ? [...regions, 'rest']
         // Custom mixes every category from every other split together, so any
         // day can be Push, or Legs, or a specific muscle, or Chest & Back, or
         // Full Body, or fully manual - genuine mix and match, not locked to
@@ -4609,9 +4629,10 @@ async function openPlanReorganizer(){
         : ['push','pull','legs','upper','lower','chestback','shouldersarms','fullbody', ...muscles, 'rest'];
     }
 
+    const isBroSplit = splitType === 'muscle';
     const body = overlay.querySelector('.overlay-scroll');
     body.innerHTML = `
-      <div class="small" style="padding:8px 18px 16px 18px; color:var(--slate);">What should each day focus on? Pick "Rest" for days that shouldn't get anything assigned.</div>
+      <div class="small" style="padding:8px 18px 16px 18px; color:var(--slate);">What should each day focus on? Pick "Rest" for days that shouldn't get anything assigned.${isBroSplit ? ' Tap more than one to combine them on the same day (Chest + Triceps, for example).' : ''}</div>
       ${DAY_NAMES.map((d,i) => `
         <div class="field-label">${d.toUpperCase()}</div>
         <div class="chip-row" data-day="${i}">
@@ -4624,9 +4645,18 @@ async function openPlanReorganizer(){
     body.querySelectorAll('.chip-row[data-day]').forEach(row => {
       row.querySelectorAll('.chip').forEach(chip => {
         chip.onclick = () => {
-          row.querySelectorAll('.chip').forEach(c=>c.classList.remove('active'));
-          chip.classList.add('active');
-          dayAssignments[row.dataset.day] = chip.dataset.cat;
+          if (isBroSplit && chip.dataset.cat !== 'custom' && chip.dataset.cat !== 'rest'){
+            // Multi-select: toggle this region on/off, clearing Rest/Custom
+            // (which are mutually exclusive with picking real regions).
+            row.querySelectorAll('.chip[data-cat="rest"], .chip[data-cat="custom"]').forEach(c => c.classList.remove('active'));
+            chip.classList.toggle('active');
+            const picked = [...row.querySelectorAll('.chip.active')].map(c => c.dataset.cat);
+            dayAssignments[row.dataset.day] = picked.length ? picked : null;
+          } else {
+            row.querySelectorAll('.chip').forEach(c=>c.classList.remove('active'));
+            chip.classList.add('active');
+            dayAssignments[row.dataset.day] = chip.dataset.cat;
+          }
         };
       });
     });
@@ -4665,14 +4695,21 @@ async function openPlanReorganizer(){
     const body = overlay.querySelector('#reorgPreviewBody');
     const dayPlans = DAY_NAMES.map((d, i) => {
       const assignedCat = dayAssignments[i];
+      const isMulti = Array.isArray(assignedCat);
       const isCustom = assignedCat === 'custom';
       let items = [];
       if (assignedCat && assignedCat !== 'rest' && !isCustom){
-        items = splitType === 'custom'
-          ? namedList.filter(n => exerciseMatchesCategory(n, n.muscle, assignedCat))
-          : namedList.filter(n => n.category === assignedCat);
+        if (isMulti){
+          items = namedList.filter(n => assignedCat.includes(n.category));
+        } else {
+          items = splitType === 'custom'
+            ? namedList.filter(n => exerciseMatchesCategory(n, n.muscle, assignedCat))
+            : namedList.filter(n => n.category === assignedCat);
+        }
       }
-      const label = isCustom ? 'Custom' : (assignedCat ? (SPLIT_CATEGORY_LABELS[assignedCat] || cap(assignedCat)) : 'Not Assigned');
+      const label = isCustom ? 'Custom'
+        : isMulti ? assignedCat.map(c => SPLIT_CATEGORY_LABELS[c] || cap(c)).join(' & ')
+        : (assignedCat ? (SPLIT_CATEGORY_LABELS[assignedCat] || cap(assignedCat)) : 'Not Assigned');
       return { day: d, dayIdx: i, catLabel: label, isCustom, items };
     });
 
