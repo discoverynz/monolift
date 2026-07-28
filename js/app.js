@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.93';
+const APP_VERSION = 'Beta 5.94';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -946,6 +946,29 @@ async function loadExercisesFromMaster(){
 // missed, or a race condition, can't create a duplicate. A constraint
 // violation here means someone else already created the exact same row a
 // moment ago - not a real error, just fetch and reuse it.
+// Wraps any button's async action with immediate visual feedback - shows
+// interim text and disables the button the instant it's tapped, restores it
+// once the action finishes either way. Meant to be used everywhere a button
+// triggers something that talks to the network, since without this a slow
+// connection makes it look like the tap did nothing at all.
+async function withButtonLoading(btn, loadingText, asyncFn){
+  if (!btn) return asyncFn();
+  const originalText = btn.textContent;
+  const originalDisabled = btn.disabled;
+  btn.textContent = loadingText;
+  btn.disabled = true;
+  try {
+    return await asyncFn();
+  } finally {
+    // The button (or its whole overlay) may have already been removed from
+    // the DOM by the time this runs - only restore if it's still there.
+    if (document.body.contains(btn)){
+      btn.textContent = originalText;
+      btn.disabled = originalDisabled;
+    }
+  }
+}
+
 async function insertExerciseSafely(payload){
   const result = await supabaseClient.from('exercises').insert(payload).select();
   if (!result.error) return { data: result.data, error: null, wasExisting: false };
@@ -2255,10 +2278,12 @@ function openEditDayTypeForm(weekday, currentLabel){
   overlay.querySelector('#saveDTBtn').onclick = async () => {
     const label = document.getElementById('dayTypeInput').value.trim();
     if (!label) return;
-    const { data: userData } = await supabaseClient.auth.getUser();
-    await supabaseClient.from('day_types').upsert({ user_id: userData.user.id, weekday, label }, { onConflict: 'user_id,weekday' });
-    overlay.remove();
-    if (state.currentTab === 'track') renderTrack();
+    await withButtonLoading(overlay.querySelector('#saveDTBtn'), 'Saving…', async () => {
+      const { data: userData } = await supabaseClient.auth.getUser();
+      await supabaseClient.from('day_types').upsert({ user_id: userData.user.id, weekday, label }, { onConflict: 'user_id,weekday' });
+      overlay.remove();
+      if (state.currentTab === 'track') renderTrack();
+    });
   };
 }
 
@@ -2612,7 +2637,7 @@ async function openSuggestionPreview(name, category, navList){
   overlay.querySelector('#sugPreviewArea').innerHTML = renderGuideContent(match);
   attachGuideImageLightbox(overlay.querySelector('#sugPreviewArea'), match.images);
 
-  overlay.querySelector('#addSuggestionBtn').onclick = async () => {
+  overlay.querySelector('#addSuggestionBtn').onclick = async () => { await withButtonLoading(overlay.querySelector('#addSuggestionBtn'), 'Adding…', async () => {
     const { data: userData } = await supabaseClient.auth.getUser();
     // This was the actual source of same-day duplicates: tapping "+ Add" more
     // than once on the same suggestion (e.g. navigating back to it, or
@@ -2634,7 +2659,7 @@ async function openSuggestionPreview(name, category, navList){
     overlay.remove();
     state.currentTab = 'track';
     renderTrack();
-  };
+  }); };
 }
 
 async function renderTrack(){
@@ -2910,23 +2935,25 @@ function openRenameExerciseForm(exerciseId, exerciseName){
   overlay.querySelector('#saveRenameBtn').onclick = async () => {
     const newName = document.getElementById('renameInput').value.trim();
     if (!newName || newName === exerciseName){ overlay.remove(); return; }
-    const { data: userData } = await supabaseClient.auth.getUser();
-    let error;
-    if (scope === 'everywhere'){
-      // Rename all rows sharing the old name (an exercise can exist on multiple days), so history stays consistent.
-      ({ error } = await supabaseClient.from('exercises')
-        .update({ name: newName })
-        .eq('user_id', userData.user.id)
-        .eq('name', exerciseName));
-    } else {
-      // Just this one row, identified by id - other days keep the original name.
-      ({ error } = await supabaseClient.from('exercises')
-        .update({ name: newName })
-        .eq('id', exerciseId));
-    }
-    if (error){ alert(error.message); return; }
-    overlay.remove();
-    if (state.currentTab === 'track') renderTrack();
+    await withButtonLoading(overlay.querySelector('#saveRenameBtn'), 'Renaming…', async () => {
+      const { data: userData } = await supabaseClient.auth.getUser();
+      let error;
+      if (scope === 'everywhere'){
+        // Rename all rows sharing the old name (an exercise can exist on multiple days), so history stays consistent.
+        ({ error } = await supabaseClient.from('exercises')
+          .update({ name: newName })
+          .eq('user_id', userData.user.id)
+          .eq('name', exerciseName));
+      } else {
+        // Just this one row, identified by id - other days keep the original name.
+        ({ error } = await supabaseClient.from('exercises')
+          .update({ name: newName })
+          .eq('id', exerciseId));
+      }
+      if (error){ alert(error.message); return; }
+      overlay.remove();
+      if (state.currentTab === 'track') renderTrack();
+    });
   };
 }
 
@@ -3024,17 +3051,19 @@ function openEditCategoryForm(exerciseId, exerciseName){
 
   overlay.querySelector('#saveCatBtn').onclick = async () => {
     if (!selectedCategory) return;
-    const { data: userData } = await supabaseClient.auth.getUser();
-    const sameNameResult = await withTimeout(
-      supabaseClient.from('exercises').select('id').eq('user_id', userData.user.id).ilike('name', exerciseName),
-      15000
-    );
-    const ids = (sameNameResult.__timeout || sameNameResult.error) ? [exerciseId] : (sameNameResult.data || []).map(r => r.id);
-    for (const id of (ids.length ? ids : [exerciseId])){
-      await supabaseClient.from('exercises').update({ category: selectedCategory }).eq('id', id);
-    }
-    overlay.remove();
-    if (state.currentTab === 'track') renderTrack();
+    await withButtonLoading(overlay.querySelector('#saveCatBtn'), 'Saving…', async () => {
+      const { data: userData } = await supabaseClient.auth.getUser();
+      const sameNameResult = await withTimeout(
+        supabaseClient.from('exercises').select('id').eq('user_id', userData.user.id).ilike('name', exerciseName),
+        15000
+      );
+      const ids = (sameNameResult.__timeout || sameNameResult.error) ? [exerciseId] : (sameNameResult.data || []).map(r => r.id);
+      for (const id of (ids.length ? ids : [exerciseId])){
+        await supabaseClient.from('exercises').update({ category: selectedCategory }).eq('id', id);
+      }
+      overlay.remove();
+      if (state.currentTab === 'track') renderTrack();
+    });
   };
 }
 
@@ -3101,11 +3130,11 @@ function openEditTagsForm(exerciseId, exerciseName){
     };
   }
 
-  overlay.querySelector('#saveTagsBtn').onclick = async () => {
+  overlay.querySelector('#saveTagsBtn').onclick = async () => { await withButtonLoading(overlay.querySelector('#saveTagsBtn'), 'Saving…', async () => {
     await supabaseClient.from('exercises').update({ push_pull: pushPull, upper_lower: upperLower, location_ids: locationIds }).eq('id', exerciseId);
     overlay.remove();
     if (state.currentTab === 'track') renderTrack();
-  };
+  }); };
 }
 
 function openEditLocationForm(exerciseId, exerciseName){
@@ -3155,11 +3184,11 @@ function openEditLocationForm(exerciseId, exerciseName){
     };
   }
 
-  overlay.querySelector('#saveLocBtn').onclick = async () => {
+  overlay.querySelector('#saveLocBtn').onclick = async () => { await withButtonLoading(overlay.querySelector('#saveLocBtn'), 'Saving…', async () => {
     await supabaseClient.from('exercises').update({ location_ids: selectedIds }).eq('id', exerciseId);
     overlay.remove();
     if (state.currentTab === 'track') renderTrack();
-  };
+  }); };
 }
 
 function confirmDeleteExerciseEntirely(exerciseName, onDeleted){
@@ -4529,7 +4558,7 @@ async function openChangeSingleDay(){
           render();
         };
       });
-      body.querySelector('#confirmChangeDayBtn').onclick = async () => {
+      body.querySelector('#confirmChangeDayBtn').onclick = async () => { await withButtonLoading(body.querySelector('#confirmChangeDayBtn'), 'Applying…', async () => {
         const snapshot = allExercises.map(ex => ({ id: ex.id, weekday: ex.weekday }));
         localStorage.setItem('zealift_reorg_snapshot', JSON.stringify({ snapshot, at: new Date().toISOString() }));
 
@@ -4564,7 +4593,7 @@ async function openChangeSingleDay(){
         state.selectedDay = targetDay;
         state.currentTab = 'track';
         renderTrack();
-      };
+      }); };
     }
     render();
   }
@@ -4660,7 +4689,7 @@ async function openPlanReorganizer(){
         };
       });
     });
-    body.querySelector('#toPreviewBtn').onclick = () => renderStep3();
+    body.querySelector('#toPreviewBtn').onclick = () => withButtonLoading(body.querySelector('#toPreviewBtn'), 'Building preview…', () => renderStep3());
   }
 
   async function renderStep3(){
@@ -4923,7 +4952,7 @@ async function openPlanReorganizer(){
       };
     });
 
-    body.querySelector('#confirmReorgBtn').onclick = async () => {
+    body.querySelector('#confirmReorgBtn').onclick = async () => { await withButtonLoading(body.querySelector('#confirmReorgBtn'), 'Applying…', async () => {
       // Snapshot current weekday assignments before touching anything, so this
       // can be reverted in one tap from Me -> Data.
       const snapshot = allExercises.map(ex => ({ id: ex.id, weekday: ex.weekday }));
@@ -4995,7 +5024,7 @@ async function openPlanReorganizer(){
       state.selectedDay = todayWeekday();
       state.currentTab = 'track';
       renderTrack();
-    };
+    }); };
   }
 
   renderStep1();
@@ -5218,29 +5247,31 @@ async function openNewExerciseForm(){
   overlay.querySelector('#saveExerciseBtn').onclick = async () => {
     const name = document.getElementById('exNameInput').value.trim();
     if (!name) return;
-    const { data: userData } = await supabaseClient.auth.getUser();
-    const existingResult = await withTimeout(
-      supabaseClient.from('exercises').select('id').eq('user_id', userData.user.id).eq('weekday', selectedDay).ilike('name', name).eq('active', true).maybeSingle(),
-      15000
-    );
-    if (!existingResult.__timeout && !existingResult.error && existingResult.data){
-      alert(`"${name}" already exists on ${DAY_NAMES[selectedDay]} - opening it instead of creating a duplicate.`);
+    await withButtonLoading(overlay.querySelector('#saveExerciseBtn'), 'Saving…', async () => {
+      const { data: userData } = await supabaseClient.auth.getUser();
+      const existingResult = await withTimeout(
+        supabaseClient.from('exercises').select('id').eq('user_id', userData.user.id).eq('weekday', selectedDay).ilike('name', name).eq('active', true).maybeSingle(),
+        15000
+      );
+      if (!existingResult.__timeout && !existingResult.error && existingResult.data){
+        alert(`"${name}" already exists on ${DAY_NAMES[selectedDay]} - opening it instead of creating a duplicate.`);
+        overlay.remove();
+        state.selectedDay = selectedDay;
+        state.currentTab = 'track';
+        openLogForm(existingResult.data.id, name);
+        return;
+      }
+      const { error } = await createExerciseForToday({
+        user_id: userData.user.id, name, category: selectedCategory, weekday: selectedDay,
+        alt_group_id: pickedAltGroup ? pickedAltGroup.id : null,
+        push_pull: selectedPushPull, upper_lower: selectedUpperLower, location_ids: selectedLocationIds
+      });
+      if (error){ alert(error.message); return; }
       overlay.remove();
       state.selectedDay = selectedDay;
       state.currentTab = 'track';
-      openLogForm(existingResult.data.id, name);
-      return;
-    }
-    const { error } = await createExerciseForToday({
-      user_id: userData.user.id, name, category: selectedCategory, weekday: selectedDay,
-      alt_group_id: pickedAltGroup ? pickedAltGroup.id : null,
-      push_pull: selectedPushPull, upper_lower: selectedUpperLower, location_ids: selectedLocationIds
+      renderTrack();
     });
-    if (error){ alert(error.message); return; }
-    overlay.remove();
-    state.selectedDay = selectedDay;
-    state.currentTab = 'track';
-    renderTrack();
   };
 }
 
@@ -5903,7 +5934,9 @@ function openLogForm(exerciseId, exerciseName){
     const notesVal = document.getElementById('notesInput').value.trim();
     if (!weightRaw && !setsVal && !repsVal){ alert("Enter at least one value to save a set — weight, time, sets, or reps. If you just want this exercise sitting on today's list ready to log later, tap ✕ to close instead - it's already there, no set required."); return; }
     const weight = weightRaw ? parseFloat(weightRaw) : null;
-    const insertedId = await saveEntry(weight, unit, weightType, repsVal ? parseInt(repsVal,10) : null, setsVal ? parseInt(setsVal,10) : null, notesVal);
+    const insertedId = await withButtonLoading(overlay.querySelector('#saveSetBtn'), 'Saving…', () =>
+      saveEntry(weight, unit, weightType, repsVal ? parseInt(repsVal,10) : null, setsVal ? parseInt(setsVal,10) : null, notesVal)
+    );
     if (insertedId){
       overlay.remove();
       if (state.currentTab === 'track') renderTrack();
@@ -6294,14 +6327,16 @@ function openLogWeightForm(){
   overlay.querySelector('#saveWBtn').onclick = async () => {
     const weight = parseFloat(document.getElementById('bwInput').value);
     if (!weight){ alert('Enter a weight.'); return; }
-    const notes = document.getElementById('bwNotes').value.trim();
-    const { data: userData } = await supabaseClient.auth.getUser();
-    const { error } = await supabaseClient.from('body_weight').insert({
-      user_id: userData.user.id, weight, unit, logged_at: todayStr(), notes: notes || null
+    await withButtonLoading(overlay.querySelector('#saveWBtn'), 'Saving…', async () => {
+      const notes = document.getElementById('bwNotes').value.trim();
+      const { data: userData } = await supabaseClient.auth.getUser();
+      const { error } = await supabaseClient.from('body_weight').insert({
+        user_id: userData.user.id, weight, unit, logged_at: todayStr(), notes: notes || null
+      });
+      if (error){ alert(error.message); return; }
+      overlay.remove();
+      renderScale();
     });
-    if (error){ alert(error.message); return; }
-    overlay.remove();
-    renderScale();
   };
 }
 
@@ -6403,7 +6438,7 @@ function openEditPhaseForm(existing){
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#closeP').onclick = () => overlay.remove();
-  overlay.querySelector('#savePBtn').onclick = async () => {
+  overlay.querySelector('#savePBtn').onclick = async () => { await withButtonLoading(overlay.querySelector('#savePBtn'), 'Saving…', async () => {
     const { data: userData } = await supabaseClient.auth.getUser();
     const payload = {
       user_id: userData.user.id,
@@ -6416,7 +6451,7 @@ function openEditPhaseForm(existing){
     if (error){ alert(error.message); return; }
     overlay.remove();
     renderScale();
-  };
+  }); };
 }
 
 // ---------- BALANCE ----------
