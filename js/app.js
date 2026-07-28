@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.99';
+const APP_VERSION = 'Beta 5.100';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -5081,7 +5081,7 @@ async function openPlanReorganizer(){
       };
     });
 
-    body.querySelector('#confirmReorgBtn').onclick = async () => { await withButtonLoading(body.querySelector('#confirmReorgBtn'), 'Applying…', async () => {
+    body.querySelector('#confirmReorgBtn').onclick = async () => { await withButtonLoading(body.querySelector('#confirmReorgBtn'), 'Applying…', async () => { try {
       // Snapshot current weekday assignments before touching anything, so this
       // can be reverted in one tap from Me -> Data.
       const snapshot = allExercises.map(ex => ({ id: ex.id, weekday: ex.weekday }));
@@ -5188,7 +5188,9 @@ async function openPlanReorganizer(){
         document.body.appendChild(report);
         report.querySelector('#closeReorgReport').onclick = () => report.remove();
       }, 100);
-    }); };
+    } catch (err) {
+      alert(`Something went wrong applying the reorganization: ${err.message}\n\nNothing may have been fully applied - check Track and use Revert Last Reorganization from Me -> Data if anything looks wrong.`);
+    } }); };
   }
 
   renderStep1();
