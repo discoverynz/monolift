@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.94';
+const APP_VERSION = 'Beta 5.95';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -3330,7 +3330,7 @@ function showUndoToast(exerciseName, onUndo){
 const MECHANIC_NA_KEYWORDS = ['stretch','-smr','smr','warm up','cardio','bicycling','elliptical','treadmill','walk','jog','pose','mobility',
   'windmill','tibialis','drill','sprint','jumping','circle','rotation','toe touch','figure 8','straddle','pyramid',
   'stairmaster','step mill','recumbent','skating','hang','groin','knee across','ankle on','hug knees','locust','side bridge'];
-const MECHANIC_COMPOUND_KEYWORDS = ['press','squat','row','pull-up','pullup','pull up','deadlift','dip','lunge','thrust','clean','snatch','chin-up','chin up'];
+const MECHANIC_COMPOUND_KEYWORDS = ['press','squat','row','pull-up','pullup','pull up','pulldown','deadlift','dip','lunge','thrust','clean','snatch','chin-up','chin up'];
 const MECHANIC_ISOLATION_KEYWORDS = ['curl','extension','fly','flye','raise','pushdown','crunch','shrug','kickback','pullover','abduction','adduction'];
 
 // Real database mechanic field where available (~90% of entries); for the rest
@@ -3849,12 +3849,43 @@ async function openAutoAltReview(){
   const body = overlay.querySelector('#autoAltBody');
   proposals.forEach((p, i) => { p.included = true; p.id = 'proposal-' + i; });
 
+  // Ungrouped exercises that actually match an EXISTING group's signature -
+  // this is what stops fragmented duplicate groups from piling up over
+  // multiple runs. Without this, an exercise added after a group was already
+  // created would either get silently skipped, or - worse - end up
+  // clustered into a brand new group with the same name as one that already
+  // exists, which is exactly how you get two different "Lat Pulldown Alt"
+  // groups with different colors.
+  const db2 = await loadExerciseDB();
+  const existingGroupSignature = {}; // alt_group_id -> signature, from whichever member is already there
+  const existingGroupName = {};
+  state.exercises.filter(ex => ex.alt_group_id).forEach(ex => {
+    if (existingGroupSignature[ex.alt_group_id]) return;
+    const match = matchExercise(ex.name, db2);
+    const muscle = match && match.primaryMuscles && match.primaryMuscles[0];
+    const mech = classifyMechanic(match);
+    const sig = computeAltSignature(ex.name, muscle, mech ? mech.value : null);
+    if (sig){ existingGroupSignature[ex.alt_group_id] = sig; existingGroupName[ex.alt_group_id] = ex.alt_groups ? ex.alt_groups.name : 'this group'; }
+  });
+  const clusteredIdsFromProposals = new Set();
+  proposals.forEach(p => p.members.forEach(m => clusteredIdsFromProposals.add(m.id)));
+  const joinProposals = [];
+  state.exercises.filter(ex => !ex.alt_group_id && !clusteredIdsFromProposals.has(ex.id)).forEach(ex => {
+    const match = matchExercise(ex.name, db2);
+    const muscle = match && match.primaryMuscles && match.primaryMuscles[0];
+    const mech = classifyMechanic(match);
+    const sig = computeAltSignature(ex.name, muscle, mech ? mech.value : null);
+    if (!sig) return;
+    const matchGroupId = Object.keys(existingGroupSignature).find(gid => existingGroupSignature[gid] === sig);
+    if (matchGroupId) joinProposals.push({ id: 'join-' + ex.id, exercise: ex, groupId: matchGroupId, groupName: existingGroupName[matchGroupId], included: true });
+  });
+  const joinedIds = new Set(joinProposals.map(j => j.exercise.id));
+
   // For exercises that don't already have a same-day cluster, suggest real
   // database exercises that share the same muscle+pattern+mechanic - a
   // standalone exercise otherwise never gets an alt suggestion at all.
-  const clusteredIds = new Set();
-  proposals.forEach(p => p.members.forEach(m => clusteredIds.add(m.id)));
-  const standalone = state.exercises.filter(ex => !ex.alt_group_id && !clusteredIds.has(ex.id));
+  const clusteredIds = new Set(clusteredIdsFromProposals);
+  const standalone = state.exercises.filter(ex => !ex.alt_group_id && !clusteredIds.has(ex.id) && !joinedIds.has(ex.id));
   const todayNamesLower = new Set(state.exercises.map(ex => ex.name.toLowerCase()));
   const db = await loadExerciseDB();
   const suggestions = [];
@@ -3872,7 +3903,7 @@ async function openAutoAltReview(){
     if (candidates.length) suggestions.push({ id: 'sugg-' + ex.id, forExercise: ex, candidates, picked: null });
   });
 
-  if (!proposals.length && !suggestions.length){
+  if (!proposals.length && !suggestions.length && !joinProposals.length){
     body.innerHTML = `<div class="empty-state" style="padding:30px 18px;">No obvious groupings or suggestions found among today's ungrouped exercises. This works best when exercises share both a muscle and a movement pattern (e.g. two different presses for chest).</div>`;
     return;
   }
@@ -3888,6 +3919,18 @@ async function openAutoAltReview(){
           </div>
           <div class="small" style="color:var(--slate); margin-bottom:8px;">${p.muscle}</div>
           ${p.members.map(m => `<div style="display:flex; justify-content:space-between; align-items:center; padding:5px 0;"><div class="ex-name" style="font-size:13px;">${m.name}</div><span class="proposal-remove-member" data-pid="${p.id}" data-mid="${m.id}" style="color:var(--slate); font-size:12px; padding:2px 6px;">✕</span></div>`).join('')}
+        </div>
+      `).join('')}
+      ${joinProposals.length ? `<div class="small" style="padding:6px 18px 10px 18px; color:var(--slate);">These already match an existing group on today's list - joining keeps everything under one group instead of creating a duplicate.</div>` : ''}
+      ${joinProposals.map(j => `
+        <div class="proposal-card" data-jid="${j.id}" style="margin:0 18px 14px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; opacity:${j.included ? 1 : 0.45};">
+          <div style="display:flex; align-items:center; justify-content:space-between;">
+            <div>
+              <div class="ex-name" style="font-size:13px;">${j.exercise.name}</div>
+              <div class="small" style="color:var(--slate); margin-top:2px;">Join "${j.groupName}"</div>
+            </div>
+            <button class="join-toggle" data-jid="${j.id}" style="background:none; color:${j.included ? 'var(--good)' : 'var(--slate)'}; font-size:11px; font-weight:600; padding:4px 8px;">${j.included ? 'INCLUDED' : 'SKIPPED'}</button>
+          </div>
         </div>
       `).join('')}
       ${suggestions.length ? `<div class="small" style="padding:6px 18px 10px 18px; color:var(--slate);">These don't have a match on today's list yet - pick one to add it and group it with the original in one step.</div>` : ''}
@@ -3915,16 +3958,18 @@ async function openAutoAltReview(){
         render();
       };
     });
+    body.querySelectorAll('.join-toggle').forEach(btn => {
+      btn.onclick = () => { const j = joinProposals.find(j => j.id === btn.dataset.jid); j.included = !j.included; render(); };
+    });
     body.querySelectorAll('.suggestion-none').forEach(chip => {
       chip.onclick = () => { suggestions.find(s => s.id === chip.dataset.sid).picked = null; render(); };
     });
     body.querySelectorAll('.suggestion-pick').forEach(chip => {
       chip.onclick = () => { suggestions.find(s => s.id === chip.dataset.sid).picked = chip.dataset.name; render(); };
     });
-    body.querySelector('#confirmAutoAltBtn').onclick = async () => {
-      const btn = body.querySelector('#confirmAutoAltBtn');
-      btn.textContent = 'Applying…';
+    body.querySelector('#confirmAutoAltBtn').onclick = async () => { await withButtonLoading(body.querySelector('#confirmAutoAltBtn'), 'Applying…', async () => {
       const toApply = proposals.filter(p => p.included && p.members.length >= 2);
+      const toJoin = joinProposals.filter(j => j.included);
       const toAddAsAlt = suggestions.filter(s => s.picked);
       const { data: userData } = await supabaseClient.auth.getUser();
       const useMaster = getUseExerciseMasterFlag();
@@ -3939,6 +3984,9 @@ async function openAutoAltReview(){
         for (const m of p.members){
           await supabaseClient.from(memberTable).update({ alt_group_id: groupId }).eq('id', m.id);
         }
+      }
+      for (const j of toJoin){
+        await supabaseClient.from(memberTable).update({ alt_group_id: j.groupId }).eq('id', j.exercise.id);
       }
       for (const s of toAddAsAlt){
         const insertResult = await withTimeout(
@@ -3959,7 +4007,7 @@ async function openAutoAltReview(){
       }
       overlay.remove();
       renderTrack();
-    };
+    }); };
   }
   render();
 }
