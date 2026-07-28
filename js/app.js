@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.88';
+const APP_VERSION = 'Beta 5.89';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -127,7 +127,7 @@ function getGroupByPref(){
   return (v === 'equipment' || v === 'muscle') ? v : 'equipment';
 }
 function setGroupByPref(v){ localStorage.setItem('zealift_group_by_track', v); }
-function getPickerGroupByPref(){ return localStorage.getItem('zealift_group_by_picker') || 'equipment'; }
+function getPickerGroupByPref(){ return localStorage.getItem('zealift_group_by_picker') || 'split'; }
 function setPickerGroupByPref(v){ localStorage.setItem('zealift_group_by_picker', v); }
 function getSplitModePref(){ return localStorage.getItem('zealift_split_mode') || 'ppl'; }
 function setSplitModePref(v){ localStorage.setItem('zealift_split_mode', v); }
@@ -2743,11 +2743,9 @@ async function renderTrack(){
             <span style="font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px;">TIMER</span>
           </button>
           ${state.exercises.some(ex => !ex.alt_group_id) ? `<button id="toolbarAutoGroupBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:var(--panel); border:1px solid var(--flame); color:var(--flame);">
-            <span style="font-size:14px;">✨</span>
             <span style="font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px;">ALTS</span>
           </button>` : ''}
           ${state.exercises.some(ex => ex.loggedToday || ex.completeVia) ? `<button id="toolbarHideCompletedBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:${hideCompleted?'rgba(255,107,26,0.12)':'var(--panel)'}; border:1px solid ${hideCompleted?'var(--flame)':'var(--line)'}; color:${hideCompleted?'var(--flame)':'var(--slate)'};">
-            <span style="font-size:14px;">${hideCompleted?'☑':'☐'}</span>
             <span style="font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px;">HIDE</span>
           </button>` : ''}
         </div>
@@ -3157,33 +3155,48 @@ function openEditLocationForm(exerciseId, exerciseName){
   };
 }
 
-async function confirmDeleteExerciseEntirely(exerciseName, onDeleted){
-  if (!confirm(`Permanently delete "${exerciseName}"? This removes it from every day and deletes all logged history for it. Cannot be undone.`)) return;
-  const { data: userData } = await supabaseClient.auth.getUser();
-  const uid = userData.user.id;
-  if (getUseExerciseMasterFlag()){
-    const masterResult = await withTimeout(
-      supabaseClient.from('exercise_master').select('id').eq('user_id', uid).ilike('name', exerciseName).maybeSingle(),
-      15000
-    );
-    if (!masterResult.__timeout && !masterResult.error && masterResult.data){
-      const id = masterResult.data.id;
-      await supabaseClient.from('sets').delete().eq('exercise_master_id', id);
-      await supabaseClient.from('exercise_days').delete().eq('exercise_master_id', id);
-      await supabaseClient.from('exercise_master').delete().eq('id', id);
+function confirmDeleteExerciseEntirely(exerciseName, onDeleted){
+  const overlay = document.createElement('div');
+  overlay.style = 'position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:60; display:flex; align-items:center; justify-content:center;';
+  overlay.innerHTML = `
+    <div style="background:var(--panel); border-radius:16px; padding:22px; width:300px; text-align:center;">
+      <div style="font-family:'Oswald', sans-serif; font-size:16px; margin-bottom:8px;">Delete Permanently?</div>
+      <div style="font-size:13px; color:var(--slate); margin-bottom:18px;">"${exerciseName}" will be removed from every day, and all logged history for it will be deleted. Cannot be undone.</div>
+      <div style="display:flex; gap:10px;">
+        <button id="cancelDeleteEntire" style="flex:1; padding:11px; border-radius:10px; background:var(--ink); color:var(--chalk); font-size:13px;">Cancel</button>
+        <button id="confirmDeleteEntire" style="flex:1; padding:11px; border-radius:10px; background:#E8492A; color:white; font-weight:600; font-size:13px;">Delete</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#cancelDeleteEntire').onclick = () => overlay.remove();
+  overlay.querySelector('#confirmDeleteEntire').onclick = async () => {
+    overlay.remove();
+    const { data: userData } = await supabaseClient.auth.getUser();
+    const uid = userData.user.id;
+    if (getUseExerciseMasterFlag()){
+      const masterResult = await withTimeout(
+        supabaseClient.from('exercise_master').select('id').eq('user_id', uid).ilike('name', exerciseName).maybeSingle(),
+        15000
+      );
+      if (!masterResult.__timeout && !masterResult.error && masterResult.data){
+        const id = masterResult.data.id;
+        await supabaseClient.from('sets').delete().eq('exercise_master_id', id);
+        await supabaseClient.from('exercise_days').delete().eq('exercise_master_id', id);
+        await supabaseClient.from('exercise_master').delete().eq('id', id);
+      }
+    } else {
+      const exResult = await withTimeout(
+        supabaseClient.from('exercises').select('id').eq('user_id', uid).ilike('name', exerciseName),
+        15000
+      );
+      const ids = (exResult.__timeout || exResult.error ? [] : exResult.data || []).map(e => e.id);
+      for (const id of ids){
+        await supabaseClient.from('sets').delete().eq('exercise_id', id);
+        await supabaseClient.from('exercises').delete().eq('id', id);
+      }
     }
-  } else {
-    const exResult = await withTimeout(
-      supabaseClient.from('exercises').select('id').eq('user_id', uid).ilike('name', exerciseName),
-      15000
-    );
-    const ids = (exResult.__timeout || exResult.error ? [] : exResult.data || []).map(e => e.id);
-    for (const id of ids){
-      await supabaseClient.from('sets').delete().eq('exercise_id', id);
-      await supabaseClient.from('exercises').delete().eq('id', id);
-    }
-  }
-  if (onDeleted) onDeleted();
+    if (onDeleted) onDeleted();
+  };
 }
 
 function confirmRemoveExercise(exerciseId, exerciseName){
