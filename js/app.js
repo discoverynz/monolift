@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.97';
+const APP_VERSION = 'Beta 5.98';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1014,6 +1014,61 @@ async function insertExerciseSafely(payload){
 // old-style per-day rows unconditionally, and passing that id into the log
 // form under the new structure caused a foreign key violation the moment
 // someone tried to save a set, since that id doesn't exist in exercise_master.
+async function fetchAllExercisesCompat(uid){
+  if (!getUseExerciseMasterFlag()){
+    const result = await withTimeout(
+      supabaseClient.from('exercises').select('id, name, category, weekday, alt_group_id, push_pull, upper_lower, location_ids').eq('user_id', uid).eq('active', true),
+      15000
+    );
+    return result.__timeout || result.error ? [] : (result.data || []);
+  }
+  const result = await withTimeout(
+    supabaseClient.from('exercise_days').select('id, weekday, exercise_master(id, name, category, alt_group_id, push_pull, upper_lower, location_ids)').eq('user_id', uid),
+    15000
+  );
+  if (result.__timeout || result.error) return [];
+  return (result.data || []).filter(r => r.exercise_master).map(r => ({
+    id: r.id, masterId: r.exercise_master.id,
+    name: r.exercise_master.name, category: r.exercise_master.category, weekday: r.weekday,
+    alt_group_id: r.exercise_master.alt_group_id, push_pull: r.exercise_master.push_pull,
+    upper_lower: r.exercise_master.upper_lower, location_ids: r.exercise_master.location_ids
+  }));
+}
+
+// Moves an exercise to a different day - under the old structure that's just
+// updating the row's own weekday (and clearing alt_group_id in the same
+// call, since both live on the same table). Under the new structure, weekday
+// lives on exercise_days while alt_group_id lives on exercise_master, so
+// these need to be two separate calls against two different tables.
+async function moveExerciseToDay(item, newWeekday, clearAlt){
+  if (!getUseExerciseMasterFlag()){
+    for (const id of item.ids){
+      const payload = { weekday: newWeekday };
+      if (clearAlt) payload.alt_group_id = null;
+      await supabaseClient.from('exercises').update(payload).eq('id', id);
+    }
+    return;
+  }
+  for (const id of item.ids){
+    await supabaseClient.from('exercise_days').update({ weekday: newWeekday }).eq('id', id);
+  }
+  if (clearAlt && item.masterId){
+    await supabaseClient.from('exercise_master').update({ alt_group_id: null }).eq('id', item.masterId);
+  }
+}
+
+// Removes an exercise from a specific day - old structure soft-deactivates
+// the row (it's day-specific already, so nothing else is affected). New
+// structure deletes just that day's link, since the exercise_master record
+// itself may still be legitimately placed on other days.
+async function removeExerciseFromDay(exerciseRow){
+  if (!getUseExerciseMasterFlag()){
+    await supabaseClient.from('exercises').update({ active: false }).eq('id', exerciseRow.id);
+    return;
+  }
+  await supabaseClient.from('exercise_days').delete().eq('id', exerciseRow.id);
+}
+
 async function createExerciseForToday(payload){
   if (!getUseExerciseMasterFlag()) return insertExerciseSafely(payload);
 
@@ -4568,11 +4623,11 @@ async function openChangeSingleDay(){
     overlay.querySelector('#closeChangeDay').onclick = () => overlay.remove();
 
     const { data: userData } = await supabaseClient.auth.getUser();
-    const [exResult, db] = await Promise.all([
-      withTimeout(supabaseClient.from('exercises').select('name').eq('user_id', userData.user.id), 15000),
+    const [compatEx, db] = await Promise.all([
+      fetchAllExercisesCompat(userData.user.id),
       loadExerciseDB()
     ]);
-    const names = [...new Set((exResult.data||[]).map(e=>e.name))];
+    const names = [...new Set(compatEx.map(e=>e.name))];
     const muscles = new Set();
     names.forEach(n => { const m = matchExercise(n, db); if (m && m.primaryMuscles && m.primaryMuscles[0]) muscles.add(m.primaryMuscles[0]); });
     const cats = ['push','pull','legs','upper','lower','chestback','shouldersarms','fullbody', ...muscles, 'rest'];
@@ -4596,14 +4651,13 @@ async function openChangeSingleDay(){
     overlay.querySelector('#closeChangeDay').onclick = () => overlay.remove();
 
     const { data: userData } = await supabaseClient.auth.getUser();
-    const [exResult, db] = await Promise.all([
-      withTimeout(supabaseClient.from('exercises').select('id, name, weekday, alt_group_id, push_pull, upper_lower, category').eq('user_id', userData.user.id).eq('active', true), 15000),
+    const [allExercises, db] = await Promise.all([
+      fetchAllExercisesCompat(userData.user.id),
       loadExerciseDB()
     ]);
-    const allExercises = exResult.__timeout || exResult.error ? [] : (exResult.data || []);
     const byName = {};
     allExercises.forEach(ex => {
-      if (!byName[ex.name]) byName[ex.name] = { name: ex.name, ids: [], weekday: ex.weekday, altGroupId: ex.alt_group_id, push_pull: ex.push_pull, upper_lower: ex.upper_lower };
+      if (!byName[ex.name]) byName[ex.name] = { name: ex.name, ids: [], masterId: ex.masterId || null, weekday: ex.weekday, altGroupId: ex.alt_group_id, push_pull: ex.push_pull, upper_lower: ex.upper_lower };
       byName[ex.name].ids.push(ex.id);
     });
     const namedList = await Promise.all(Object.values(byName).map(async item => {
@@ -4657,16 +4711,12 @@ async function openChangeSingleDay(){
         for (const n of incoming){
           if (!included.has(n.name)) continue;
           const clearAlt = n.altGroupId && altGroupsToClear.has(n.altGroupId);
-          for (const id of n.ids){
-            const payload = { weekday: targetDay };
-            if (clearAlt) payload.alt_group_id = null;
-            await supabaseClient.from('exercises').update(payload).eq('id', id);
-          }
+          await moveExerciseToDay(n, targetDay, clearAlt);
         }
         for (const n of leaving){
           if (included.has(n.name)) continue; // kept anyway, don't deactivate
           for (const id of n.ids){
-            await supabaseClient.from('exercises').update({ active: false }).eq('id', id);
+            await removeExerciseFromDay({ id, masterId: n.masterId });
           }
         }
         overlay.remove();
@@ -4715,11 +4765,11 @@ async function openPlanReorganizer(){
     let cats = SPLIT_TYPES.find(s=>s.id===splitType).cats;
     if (splitType === 'muscle' || splitType === 'custom'){
       const { data: userData } = await supabaseClient.auth.getUser();
-      const [exResult, db] = await Promise.all([
-        withTimeout(supabaseClient.from('exercises').select('name').eq('user_id', userData.user.id), 15000),
+      const [compatEx, db] = await Promise.all([
+        fetchAllExercisesCompat(userData.user.id),
         loadExerciseDB()
       ]);
-      const names = [...new Set((exResult.data||[]).map(e=>e.name))];
+      const names = [...new Set(compatEx.map(e=>e.name))];
       const muscles = new Set();
       const regions = new Set();
       names.forEach(n => {
@@ -4778,17 +4828,16 @@ async function openPlanReorganizer(){
     overlay.querySelector('#closeReorg').onclick = () => overlay.remove();
 
     const { data: userData } = await supabaseClient.auth.getUser();
-    const [exResult, db] = await Promise.all([
-      withTimeout(supabaseClient.from('exercises').select('id, name, category, weekday, alt_group_id, push_pull, upper_lower, location_ids').eq('user_id', userData.user.id).eq('active', true), 15000),
+    const [allExercises, db] = await Promise.all([
+      fetchAllExercisesCompat(userData.user.id),
       loadExerciseDB()
     ]);
-    const allExercises = exResult.__timeout || exResult.error ? [] : (exResult.data || []);
 
     // Group all exercises by distinct name, deriving each name's category once.
     const byName = {};
     allExercises.forEach(ex => {
       const key = ex.name.toLowerCase();
-      if (!byName[key]) byName[key] = { name: ex.name, ids: [] };
+      if (!byName[key]) byName[key] = { name: ex.name, ids: [], masterId: ex.masterId || null };
       byName[key].ids.push(ex.id);
     });
     const namedList = Object.values(byName).map(item => {
@@ -5054,11 +5103,7 @@ async function openPlanReorganizer(){
             if (!match) continue;
             touchedNames.add(name);
             const clearAlt = match.altGroupId && altGroupsToClear.has(match.altGroupId);
-            for (const id of match.ids){
-              const payload = { weekday: dp.dayIdx };
-              if (clearAlt) payload.alt_group_id = null;
-              await supabaseClient.from('exercises').update(payload).eq('id', id);
-            }
+            await moveExerciseToDay(match, dp.dayIdx, clearAlt);
           }
           continue;
         }
@@ -5082,11 +5127,7 @@ async function openPlanReorganizer(){
               push_pull: sample.push_pull, upper_lower: sample.upper_lower, location_ids: sample.location_ids
             });
           } else {
-            for (const id of it.ids){
-              const payload = { weekday: dp.dayIdx };
-              if (clearAlt) payload.alt_group_id = null;
-              await supabaseClient.from('exercises').update(payload).eq('id', id);
-            }
+            await moveExerciseToDay(it, dp.dayIdx, clearAlt);
           }
         }
       }
@@ -5096,13 +5137,14 @@ async function openPlanReorganizer(){
       // was never touched above), would otherwise be silently stranded on
       // its old weekday - exactly how a repurposed day (Wednesday going from
       // Chest to Legs, say) ends up still showing old chest exercises
-      // alongside the new leg ones. Deactivated rather than deleted, so nothing
-      // is lost and it can be manually re-added if it was actually wanted.
+      // alongside the new leg ones. Old structure soft-deactivates; new
+      // structure removes just that day's link, since the exercise itself
+      // may still be legitimately placed elsewhere.
       const reorganizedDayIdxs = new Set(dayPlans.filter(dp => !dp.isCustom && dayAssignments[dp.dayIdx]).map(dp => dp.dayIdx));
       for (const ex of allExercises){
         if (!reorganizedDayIdxs.has(ex.weekday)) continue;
         if (touchedNames.has(ex.name)) continue;
-        await supabaseClient.from('exercises').update({ active: false }).eq('id', ex.id);
+        await removeExerciseFromDay(ex);
       }
 
       // Sync the day's header label to match its new category - otherwise
@@ -5131,9 +5173,10 @@ async function revertLastReorganization(){
   const raw = localStorage.getItem('zealift_reorg_snapshot');
   if (!raw){ alert('No reorganization to revert.'); return; }
   const { snapshot } = JSON.parse(raw);
+  const table = getUseExerciseMasterFlag() ? 'exercise_days' : 'exercises';
   showConfirmDialog(`Restore ${snapshot.length} exercises to their previous days?`, async () => {
     for (const item of snapshot){
-      await supabaseClient.from('exercises').update({ weekday: item.weekday }).eq('id', item.id);
+      await supabaseClient.from(table).update({ weekday: item.weekday }).eq('id', item.id);
     }
     localStorage.removeItem('zealift_reorg_snapshot');
     if (state.currentTab === 'track') renderTrack();
