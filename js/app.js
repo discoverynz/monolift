@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.101';
+const APP_VERSION = 'Beta 5.102';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1051,9 +1051,29 @@ async function moveExerciseToDay(item, newWeekday, clearAlt){
     }
     return results;
   }
-  for (const id of item.ids){
-    const { data, error } = await supabaseClient.from('exercise_days').update({ weekday: newWeekday }).eq('id', id).select();
-    results.push({ id, ok: !error && data && data.length > 0, error: error ? error.message : (!data || !data.length ? 'update matched zero rows' : null) });
+  // An exercise can legitimately already be linked to several different days
+  // at once (e.g. a Push exercise appearing on both Monday and Thursday under
+  // a twice-weekly split) - trying to "move" every one of its existing links
+  // to this one target day would collide with itself the moment more than one
+  // of those links needs the same new weekday, which is exactly what was
+  // causing the unique constraint violations. Instead: just make sure a link
+  // for this exact exercise+day exists. Existing links on other days are left
+  // completely alone - the exercise keeps showing up wherever else it
+  // legitimately belongs, and the separate cleanup pass is what removes
+  // anything that's genuinely stale now.
+  if (!item.masterId){ results.push({ id: null, ok: false, error: 'no master id on this item' }); return results; }
+  const existing = await withTimeout(
+    supabaseClient.from('exercise_days').select('id').eq('exercise_master_id', item.masterId).eq('weekday', newWeekday).maybeSingle(),
+    15000
+  );
+  if (!existing.__timeout && !existing.error && existing.data){
+    results.push({ id: existing.data.id, ok: true, error: null }); // already exists, nothing to do
+  } else {
+    const { data: userData } = await supabaseClient.auth.getUser();
+    const { data, error } = await supabaseClient.from('exercise_days').insert({
+      user_id: userData.user.id, exercise_master_id: item.masterId, weekday: newWeekday
+    }).select();
+    results.push({ id: data && data[0] ? data[0].id : null, ok: !error && data && data.length > 0, error: error ? error.message : null });
   }
   if (clearAlt && item.masterId){
     await supabaseClient.from('exercise_master').update({ alt_group_id: null }).eq('id', item.masterId);
