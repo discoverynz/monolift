@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.98';
+const APP_VERSION = 'Beta 5.99';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -5141,10 +5141,17 @@ async function openPlanReorganizer(){
       // structure removes just that day's link, since the exercise itself
       // may still be legitimately placed elsewhere.
       const reorganizedDayIdxs = new Set(dayPlans.filter(dp => !dp.isCustom && dayAssignments[dp.dayIdx]).map(dp => dp.dayIdx));
+      const cleanedUp = [];
+      const cleanupErrors = [];
       for (const ex of allExercises){
         if (!reorganizedDayIdxs.has(ex.weekday)) continue;
         if (touchedNames.has(ex.name)) continue;
-        await removeExerciseFromDay(ex);
+        try {
+          await removeExerciseFromDay(ex);
+          cleanedUp.push({ name: ex.name, fromDay: DAY_NAMES[ex.weekday] });
+        } catch (e) {
+          cleanupErrors.push({ name: ex.name, error: e.message });
+        }
       }
 
       // Sync the day's header label to match its new category - otherwise
@@ -5163,6 +5170,24 @@ async function openPlanReorganizer(){
       state.selectedDay = todayWeekday();
       state.currentTab = 'track';
       renderTrack();
+
+      // Diagnostic summary - shows exactly what happened instead of silently
+      // trusting it worked, since that trust has been wrong before.
+      setTimeout(() => {
+        const report = document.createElement('div');
+        report.style = 'position:fixed; inset:0; background:rgba(0,0,0,0.75); z-index:70; display:flex; align-items:center; justify-content:center; padding:20px;';
+        report.innerHTML = `
+          <div style="background:var(--panel); border-radius:16px; padding:20px; width:100%; max-width:340px; max-height:80vh; overflow-y:auto;">
+            <div style="font-family:'Oswald', sans-serif; font-size:16px; margin-bottom:12px;">What Actually Happened</div>
+            <div class="small" style="color:var(--slate); margin-bottom:4px;">${touchedNames.size} exercise names moved or placed</div>
+            <div class="small" style="color:${cleanedUp.length ? 'var(--good)' : 'var(--slate)'}; margin-bottom:${cleanupErrors.length ? '4px' : '12px'};">${cleanedUp.length} stale exercises removed from repurposed days${cleanedUp.length ? ':' : ''}</div>
+            ${cleanedUp.length ? `<div style="max-height:150px; overflow-y:auto; margin-bottom:12px;">${cleanedUp.map(c => `<div class="small" style="color:var(--slate); padding:2px 0;">• ${c.name} (was on ${c.fromDay})</div>`).join('')}</div>` : ''}
+            ${cleanupErrors.length ? `<div class="small" style="color:#E8492A; margin-bottom:4px;">${cleanupErrors.length} failed to clean up:</div><div style="max-height:120px; overflow-y:auto; margin-bottom:12px;">${cleanupErrors.map(c => `<div class="small" style="color:#E8A33D; padding:2px 0;">• ${c.name}: ${c.error}</div>`).join('')}</div>` : ''}
+            <button id="closeReorgReport" class="save-btn" style="margin-top:8px;">Close</button>
+          </div>`;
+        document.body.appendChild(report);
+        report.querySelector('#closeReorgReport').onclick = () => report.remove();
+      }, 100);
     }); };
   }
 
