@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.119';
+const APP_VERSION = 'Beta 5.120';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -7168,6 +7168,211 @@ function pplBarsHtml(pplTally){
   }).join('');
 }
 
+async function fetchExtendedWorkoutData(weeksBack){
+  weeksBack = weeksBack || 8;
+  const { data: userData } = await supabaseClient.auth.getUser();
+  const useMaster = getUseExerciseMasterFlag();
+  const since = new Date(Date.now() - weeksBack*7*86400000).toISOString().slice(0,10);
+  const [exercises, setResult, db] = await Promise.all([
+    fetchAllExercisesCompat(userData.user.id),
+    withTimeout(supabaseClient.from('sets').select('exercise_id, exercise_master_id, weight, weight_unit, weight_type, reps, num_sets, logged_at').gte('logged_at', since), 15000),
+    loadExerciseDB()
+  ]);
+  const sets = setResult.__timeout || setResult.error ? [] : (setResult.data || []);
+  const exById = {};
+  exercises.forEach(ex => { exById[ex.masterId || ex.id] = ex; });
+  // Attach resolved exercise name + primary muscle to each set once, up front,
+  // so every downstream consumer just reads it instead of re-matching.
+  sets.forEach(s => {
+    const ex = exById[useMaster ? s.exercise_master_id : s.exercise_id];
+    s._name = ex ? ex.name : null;
+    if (s._name){
+      const m = matchExercise(s._name, db);
+      s._muscle = m && m.primaryMuscles && m.primaryMuscles[0];
+    }
+  });
+  return { sets, exercises, db };
+}
+
+// Buckets sets into calendar weeks (Monday-start), most recent week last, so
+// charts read left-to-right as "then -> now."
+function bucketSetsByWeek(sets, weeksBack){
+  const weeks = [];
+  const now = new Date();
+  const dayOfWeek = (now.getDay() + 6) % 7; // Monday = 0
+  const thisMonday = new Date(now); thisMonday.setDate(now.getDate() - dayOfWeek); thisMonday.setHours(0,0,0,0);
+  for (let i = weeksBack - 1; i >= 0; i--){
+    const start = new Date(thisMonday); start.setDate(thisMonday.getDate() - i*7);
+    const end = new Date(start); end.setDate(start.getDate() + 7);
+    weeks.push({ start, end, label: `${start.getMonth()+1}/${start.getDate()}`, sets: [] });
+  }
+  sets.forEach(s => {
+    const d = new Date(s.logged_at + 'T00:00:00');
+    const bucket = weeks.find(w => d >= w.start && d < w.end);
+    if (bucket) bucket.sets.push(s);
+  });
+  return weeks;
+}
+
+function computeLifetimeStats(sets){
+  const totalSets = sets.reduce((sum, s) => sum + (s.num_sets || 1), 0);
+  const trainingDays = new Set(sets.map(s => s.logged_at)).size;
+  let tonnageKg = 0;
+  sets.forEach(s => {
+    if (typeof s.weight !== 'number' || !s.reps) return;
+    if (s.weight_unit !== 'kg' && s.weight_unit !== 'lb') return;
+    const kgWeight = s.weight_unit === 'lb' ? convertWeight(s.weight, 'lb', 'kg') : s.weight;
+    const perSideMultiplier = s.weight_type === 'per' ? 2 : 1;
+    tonnageKg += kgWeight * perSideMultiplier * s.reps * (s.num_sets || 1);
+  });
+  return { totalSets, trainingDays, tonnageKg: Math.round(tonnageKg) };
+}
+
+// Flags an exercise as a recent PR if its all-time heaviest logged weight (in
+// a comparable unit) was actually hit within the last 14 days, not just that
+// a heavy set exists somewhere in history. Bodyweight/time/pin/level-based
+// exercises are skipped since a "heaviest ever" comparison isn't meaningful
+// the same way across those unit types.
+function computeRecentPRs(sets){
+  const byName = {};
+  sets.forEach(s => {
+    if (!s._name) return;
+    if (s.weight_unit !== 'kg' && s.weight_unit !== 'lb') return;
+    if (typeof s.weight !== 'number') return;
+    const kgWeight = s.weight_unit === 'lb' ? convertWeight(s.weight, 'lb', 'kg') : s.weight;
+    (byName[s._name] = byName[s._name] || []).push({ kgWeight, logged_at: s.logged_at, origWeight: s.weight, origUnit: s.weight_unit, perSide: s.weight_type === 'per' });
+  });
+  const recentCutoff = new Date(Date.now() - 14*86400000).toISOString().slice(0,10);
+  const prs = [];
+  Object.entries(byName).forEach(([name, entries]) => {
+    const maxEntry = entries.reduce((best, e) => e.kgWeight > best.kgWeight ? e : best, entries[0]);
+    if (maxEntry.logged_at >= recentCutoff){
+      // Was this genuinely an improvement, or just the only weight ever logged?
+      const priorMax = entries.filter(e => e.logged_at < maxEntry.logged_at).reduce((best, e) => Math.max(best, e.kgWeight), 0);
+      if (priorMax > 0 && priorMax < maxEntry.kgWeight){
+        prs.push({ name, weight: maxEntry.origWeight, unit: maxEntry.origUnit, perSide: maxEntry.perSide, date: maxEntry.logged_at, priorKg: priorMax, newKg: maxEntry.kgWeight });
+      }
+    }
+  });
+  return prs.sort((a,b) => b.date.localeCompare(a.date)).slice(0, 5);
+}
+
+function computeRepRangeBreakdown(sets){
+  const buckets = { strength: 0, hypertrophy: 0, endurance: 0 };
+  sets.forEach(s => {
+    if (!s.reps) return;
+    const count = s.num_sets || 1;
+    if (s.reps <= 5) buckets.strength += count;
+    else if (s.reps <= 12) buckets.hypertrophy += count;
+    else buckets.endurance += count;
+  });
+  return buckets;
+}
+
+function weeklyVolumeTrendSvg(weeks){
+  const totals = weeks.map(w => w.sets.reduce((sum, s) => sum + (s.num_sets || 1), 0));
+  const maxVal = Math.max(1, ...totals);
+  const W = 320, H = 100, padL = 4, padR = 4, padT = 10, padB = 18;
+  const chartW = W - padL - padR, chartH = H - padT - padB;
+  const n = weeks.length;
+  const barW = chartW / n * 0.55;
+  const slotW = chartW / n;
+  const bars = totals.map((v, i) => {
+    const x = padL + i*slotW + (slotW - barW)/2;
+    const h = maxVal > 0 ? (v / maxVal) * chartH : 0;
+    const y = padT + chartH - h;
+    const isLast = i === n - 1;
+    return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" rx="2" fill="${isLast ? 'var(--flame)' : '#3A3D42'}"/>`;
+  }).join('');
+  const points = totals.map((v, i) => {
+    const x = padL + i*slotW + slotW/2;
+    const y = padT + chartH - (maxVal > 0 ? (v/maxVal)*chartH : 0);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  const labels = weeks.map((w, i) => {
+    if (n > 6 && i % 2 !== (n-1) % 2) return '';
+    const x = padL + i*slotW + slotW/2;
+    return `<text x="${x.toFixed(1)}" y="${H-4}" font-size="8" fill="var(--slate)" text-anchor="middle">${w.label}</text>`;
+  }).join('');
+  return `<svg width="100%" height="${H}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="display:block;">
+    ${bars}
+    <polyline points="${points}" fill="none" stroke="#E8A33D" stroke-width="1.5" stroke-linejoin="round" opacity="0.85"/>
+    ${labels}
+  </svg>`;
+}
+
+function perMuscleSparklineSvg(weeks, muscle){
+  const totals = weeks.map(w => w.sets.filter(s => s._muscle === muscle).reduce((sum, s) => sum + (s.num_sets || 1), 0));
+  const maxVal = Math.max(1, ...totals);
+  const W = 60, H = 20, pad = 2;
+  const n = totals.length;
+  const stepX = (W - pad*2) / Math.max(1, n - 1);
+  const points = totals.map((v, i) => {
+    const x = pad + i*stepX;
+    const y = H - pad - (maxVal > 0 ? (v/maxVal)*(H-pad*2) : 0);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  const lastUp = totals.length >= 2 && totals[totals.length-1] > totals[totals.length-2];
+  const color = lastUp ? '#8FBF7A' : '#7BA6C9';
+  return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="display:block; flex-shrink:0;"><polyline points="${points}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+}
+
+// A 13-axis radar chart of every muscle at once - the overall shape instantly
+// shows lopsidedness (e.g. a big spike on one side, a collapsed wedge on the
+// other) in a way a column of linear bars can't communicate as immediately.
+function balanceRadarSvg(tally, mode){
+  const order = BALANCE_MUSCLES;
+  const n = order.length;
+  const size = 280, cx = size/2, cy = size/2, maxR = 100;
+  const refMax = mode === 'logged' ? BALANCE_TARGET_MAX : Math.max(1, ...order.map(m => tally[m]));
+  const angleFor = (i) => (Math.PI * 2 * i / n) - Math.PI/2;
+  const pointFor = (i, val) => {
+    const r = Math.min(1, val / refMax) * maxR;
+    const a = angleFor(i);
+    return [cx + r*Math.cos(a), cy + r*Math.sin(a)];
+  };
+  const dataPoints = order.map((m, i) => pointFor(i, tally[m]));
+  const dataPath = dataPoints.map(p => p.map(v=>v.toFixed(1)).join(',')).join(' ');
+  // Reference rings at 33%/66%/100% of the target/max, for scale
+  const rings = [0.33, 0.66, 1].map(frac => {
+    const ringPts = order.map((m, i) => { const a = angleFor(i); return `${(cx + maxR*frac*Math.cos(a)).toFixed(1)},${(cy + maxR*frac*Math.sin(a)).toFixed(1)}`; }).join(' ');
+    return `<polygon points="${ringPts}" fill="none" stroke="#2A2C31" stroke-width="1"/>`;
+  }).join('');
+  const spokes = order.map((m, i) => { const a = angleFor(i); return `<line x1="${cx}" y1="${cy}" x2="${(cx+maxR*Math.cos(a)).toFixed(1)}" y2="${(cy+maxR*Math.sin(a)).toFixed(1)}" stroke="#2A2C31" stroke-width="1"/>`; }).join('');
+  const labels = order.map((m, i) => {
+    const a = angleFor(i);
+    const lx = cx + (maxR+18)*Math.cos(a), ly = cy + (maxR+18)*Math.sin(a);
+    const short = BALANCE_LABELS[m].split(' ')[0].split('/')[0];
+    return `<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" font-size="8.5" fill="var(--slate)" text-anchor="middle" dominant-baseline="middle">${short}</text>`;
+  }).join('');
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
+    ${rings}${spokes}
+    <polygon points="${dataPath}" fill="rgba(232,73,42,0.22)" stroke="var(--flame)" stroke-width="1.5"/>
+    ${dataPoints.map(p => `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="2.2" fill="var(--flame)"/>`).join('')}
+    ${labels}
+  </svg>`;
+}
+
+// Finds the 1-2 most neglected muscles by tally, then surfaces real database
+// exercises targeting them that aren't already somewhere in the user's library -
+// a concrete, actionable next step rather than just pointing out the gap.
+async function computeMuscleRecommendations(tally, existingLibraryNames){
+  const worst = BALANCE_MUSCLES.slice().sort((a,b) => tally[a] - tally[b]).slice(0, 2).filter(m => tally[m] < BALANCE_TARGET_MIN);
+  if (!worst.length) return [];
+  const db = await loadExerciseDB();
+  if (!db) return [];
+  const recs = [];
+  worst.forEach(muscle => {
+    const candidates = db.filter(e => (e.primaryMuscles || [])[0] === muscle
+      && !existingLibraryNames.some(name => namesAreSimilar(name, e.name)));
+    const starred = candidates.filter(e => POPULAR_EXERCISES.has(e.name));
+    const pick = (starred.length ? starred : candidates).sort(() => Math.random() - 0.5).slice(0, 2);
+    pick.forEach(e => recs.push({ muscle, name: e.name, equipment: e.equipment }));
+  });
+  return recs;
+}
+
+
 async function tallyLoggedInRange(sinceDate, untilDate){
   const useMaster = getUseExerciseMasterFlag();
   const [exercises, setResult, db] = await Promise.all([
@@ -7248,7 +7453,7 @@ function statusForPlanCount(count, maxCount){
   return { label:'HEAVY', color:'#E8492A' };
 }
 
-function balanceBarsHtml(tally, mode, prevTally){
+function balanceBarsHtml(tally, mode, prevTally, weeks){
   const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
   const maxCount = Math.max(1, ...Object.values(tally));
   return BALANCE_MUSCLES.map(muscle => {
@@ -7268,8 +7473,9 @@ function balanceBarsHtml(tally, mode, prevTally){
         trendHtml = `<span style="font-size:10px; color:${trendColor}; margin-left:6px;">${delta > 0 ? '▲' : '▼'}${Math.abs(delta)}</span>`;
       }
     }
+    const sparklineHtml = (mode === 'logged' && weeks) ? `<div style="margin-left:8px;">${perMuscleSparklineSvg(weeks, muscle)}</div>` : '';
     return `<div class="bal-row" data-muscle="${cap(muscle)}" style="cursor:pointer;">
-      <div class="bal-toprow"><div class="bal-name">${BALANCE_LABELS[muscle]}</div><div style="display:flex; align-items:center;"><div class="bal-status" style="background:${status.color}26; color:${status.color};">${status.label}</div>${trendHtml}</div></div>
+      <div class="bal-toprow"><div class="bal-name">${BALANCE_LABELS[muscle]}</div><div style="display:flex; align-items:center;">${sparklineHtml}<div class="bal-status" style="background:${status.color}26; color:${status.color}; margin-left:8px;">${status.label}</div>${trendHtml}</div></div>
       <div class="bal-bar-track">
         ${targetZoneHtml}
         <div class="bal-bar-fill" style="width:${widthPct}%; background:${status.color};"><span class="bal-count">${count}${suffix}</span></div>
@@ -7451,11 +7657,100 @@ async function renderBalance(mode, view){
   state.balanceMode = mode;
   state.balanceView = view;
   app.innerHTML = `<div class="app-shell"><div class="login-wrap"><div class="login-sub">Crunching your balance…</div></div></div>`;
-  const [tally, prevTally] = await Promise.all([
+  const [tally, prevTally, extended] = await Promise.all([
     mode === 'logged' ? tallyLoggedThisWeek() : tallyFullPlan(),
-    mode === 'logged' ? tallyLoggedPreviousWeek() : Promise.resolve(null)
+    mode === 'logged' ? tallyLoggedPreviousWeek() : Promise.resolve(null),
+    mode === 'logged' ? fetchExtendedWorkoutData(8) : Promise.resolve(null)
   ]);
   const insights = computeBalanceInsights(tally, prevTally, mode);
+
+  let weeks = null, lifetimeStats = null, recentPRs = [], repRanges = null;
+  if (extended){
+    weeks = bucketSetsByWeek(extended.sets, 8);
+    lifetimeStats = computeLifetimeStats(extended.sets);
+    recentPRs = computeRecentPRs(extended.sets);
+    repRanges = computeRepRangeBreakdown(weeks[weeks.length-1].sets);
+  }
+  const existingLibraryNames = mode === 'logged' && extended ? extended.exercises.map(e => e.name) : [];
+  const recommendations = await computeMuscleRecommendations(tally, existingLibraryNames);
+
+  // Lifetime stats tiles - only meaningful in logged mode, where there's real history.
+  const lifetimeHtml = lifetimeStats ? `
+    <div style="display:flex; gap:8px; margin:0 18px 14px 18px;">
+      <div style="flex:1; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 10px; text-align:center;">
+        <div style="font-family:'Bebas Neue',sans-serif; font-size:22px; color:var(--chalk);">${lifetimeStats.totalSets}</div>
+        <div style="font-size:9.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.3px; margin-top:2px;">Sets (8wk)</div>
+      </div>
+      <div style="flex:1; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 10px; text-align:center;">
+        <div style="font-family:'Bebas Neue',sans-serif; font-size:22px; color:var(--chalk);">${lifetimeStats.trainingDays}</div>
+        <div style="font-size:9.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.3px; margin-top:2px;">Days Trained</div>
+      </div>
+      <div style="flex:1; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 10px; text-align:center;">
+        <div style="font-family:'Bebas Neue',sans-serif; font-size:22px; color:var(--chalk);">${lifetimeStats.tonnageKg >= 1000 ? (lifetimeStats.tonnageKg/1000).toFixed(1)+'t' : lifetimeStats.tonnageKg+'kg'}</div>
+        <div style="font-size:9.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.3px; margin-top:2px;">Tonnage Moved</div>
+      </div>
+    </div>` : '';
+
+  const trendChartHtml = weeks ? `
+    <div class="section-label">8-Week Volume Trend</div>
+    <div style="margin:0 18px 14px 18px; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px 10px 6px 10px;">
+      ${weeklyVolumeTrendSvg(weeks)}
+    </div>` : '';
+
+  const prsHtml = recentPRs.length ? `
+    <div class="section-label">Recent PRs 🏆</div>
+    <div style="padding:0 18px 6px 18px; display:flex; flex-direction:column; gap:8px;">
+      ${recentPRs.map(pr => `
+        <div style="display:flex; justify-content:space-between; align-items:center; background:var(--panel); border:1px solid rgba(240,197,66,0.3); border-radius:10px; padding:11px 13px;">
+          <div>
+            <div style="font-size:13px; color:var(--chalk); font-weight:600;">${pr.name}</div>
+            <div style="font-size:11px; color:var(--slate); margin-top:1px;">${pr.date}</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-family:'Bebas Neue',sans-serif; font-size:17px; color:#F0C542;">${pr.weight}${pr.unit}${pr.perSide?' per':''}</div>
+            <div style="font-size:10px; color:var(--good);">up from ${pr.unit==='lb' ? Math.round(convertWeight(pr.priorKg,'kg','lb')) : Math.round(pr.priorKg)}${pr.unit}</div>
+          </div>
+        </div>
+      `).join('')}
+    </div>` : '';
+
+  const repRangeHtml = repRanges && (repRanges.strength + repRanges.hypertrophy + repRanges.endurance > 0) ? (() => {
+    const total = repRanges.strength + repRanges.hypertrophy + repRanges.endurance;
+    const pct = (n) => Math.round((n/total)*100);
+    return `
+    <div class="section-label">This Week's Rep Ranges</div>
+    <div style="margin:0 18px 14px 18px;">
+      <div style="display:flex; height:22px; border-radius:6px; overflow:hidden;">
+        <div style="width:${pct(repRanges.strength)}%; background:#E8492A;"></div>
+        <div style="width:${pct(repRanges.hypertrophy)}%; background:#8FBF7A;"></div>
+        <div style="width:${pct(repRanges.endurance)}%; background:#3A6EA5;"></div>
+      </div>
+      <div style="display:flex; justify-content:space-between; margin-top:6px; font-size:10.5px; color:var(--slate);">
+        <div><span style="color:#E8492A;">●</span> Strength (1-5) ${pct(repRanges.strength)}%</div>
+        <div><span style="color:#8FBF7A;">●</span> Hypertrophy (6-12) ${pct(repRanges.hypertrophy)}%</div>
+        <div><span style="color:#3A6EA5;">●</span> Endurance (13+) ${pct(repRanges.endurance)}%</div>
+      </div>
+    </div>`;
+  })() : '';
+
+  const recsHtml = recommendations.length ? `
+    <div class="section-label">Worth Adding 💡</div>
+    <div style="padding:0 18px 6px 18px; display:flex; flex-direction:column; gap:8px;">
+      ${recommendations.map(r => `
+        <div class="rec-add-row" data-name="${r.name}" data-muscle="${r.muscle}" data-equip="${r.equipment||''}" style="display:flex; justify-content:space-between; align-items:center; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:11px 13px; cursor:pointer;">
+          <div>
+            <div style="font-size:13px; color:var(--chalk);">${r.name}</div>
+            <div style="font-size:11px; color:var(--slate); margin-top:1px;">Targets ${BALANCE_LABELS[r.muscle]} - your lowest-covered muscle</div>
+          </div>
+          <div class="chev" style="color:var(--flame); font-size:20px;">+</div>
+        </div>
+      `).join('')}
+    </div>` : '';
+
+  const radarHtml = view === 'muscle' ? `
+    <div class="section-label" style="text-align:center;">Shape of Your Week</div>
+    <div style="display:flex; justify-content:center; padding:4px 0 18px 0;">${balanceRadarSvg(tally, mode)}</div>
+  ` : '';
 
   let bodyContentHtml;
   if (view === 'ppl'){
@@ -7466,10 +7761,11 @@ async function renderBalance(mode, view){
       <div class="small" style="padding:8px 18px 0 18px; color:var(--slate);">Abdominals is folded into Legs for this split - push/pull/legs doesn't have a clean third home for core work.</div>
     `;
   } else {
-    const barsHtml = balanceBarsHtml(tally, mode, prevTally);
+    const barsHtml = balanceBarsHtml(tally, mode, prevTally, weeks);
     const frontSvg = balanceBodySvg(tally, mode, 'front');
     const backSvg = balanceBodySvg(tally, mode, 'back');
     bodyContentHtml = `
+      ${radarHtml}
       <div class="section-label">${mode === 'logged' ? 'Sets Logged, By Muscle' : 'Plan Coverage, By Muscle'}</div>
       ${barsHtml}
       <div class="section-label" style="text-align:center;">Heat Map</div>
@@ -7490,7 +7786,12 @@ async function renderBalance(mode, view){
           <div class="bal-seg-chip ${mode==='plan'?'active':''}" data-mode="plan" style="flex:1; text-align:center; padding:7px 0; font-family:'Bebas Neue',sans-serif; font-size:11.5px; letter-spacing:0.5px; color:${mode==='plan'?'var(--ink)':'var(--slate)'}; background:${mode==='plan'?'var(--flame)':'transparent'};">FULL PLAN</div>
         </div>
         ${balanceHeroHtml(tally, prevTally, mode)}
+        ${lifetimeHtml}
+        ${trendChartHtml}
         ${balanceInsightsHtml(insights)}
+        ${prsHtml}
+        ${repRangeHtml}
+        ${recsHtml}
         <div class="seg" style="margin:14px 18px 10px 18px; display:flex; border:1px solid var(--line);">
           <div class="bal-view-chip ${view==='muscle'?'active':''}" data-view="muscle" style="flex:1; text-align:center; padding:6px 0; font-family:'Bebas Neue',sans-serif; font-size:11px; letter-spacing:0.5px; color:${view==='muscle'?'var(--ink)':'var(--slate)'}; background:${view==='muscle'?'var(--flame)':'transparent'};">MUSCLE GROUPS</div>
           <div class="bal-view-chip ${view==='ppl'?'active':''}" data-view="ppl" style="flex:1; text-align:center; padding:6px 0; font-family:'Bebas Neue',sans-serif; font-size:11px; letter-spacing:0.5px; color:${view==='ppl'?'var(--ink)':'var(--slate)'}; background:${view==='ppl'?'var(--flame)':'transparent'};">PUSH / PULL / LEGS</div>
@@ -7509,6 +7810,9 @@ async function renderBalance(mode, view){
   });
   document.querySelectorAll('.bal-row[data-muscle]').forEach(row => {
     row.onclick = () => openPicker('database', row.dataset.muscle);
+  });
+  document.querySelectorAll('.rec-add-row').forEach(row => {
+    row.onclick = () => openSuggestionPreview(row.dataset.name, EQUIPMENT_TO_CATEGORY[row.dataset.equip] || 'Other');
   });
 }
 
