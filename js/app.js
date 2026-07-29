@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.112';
+const APP_VERSION = 'Beta 5.113';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -526,13 +526,13 @@ function computeAltSignature(name, muscle, mechValue){
 async function proposeAltGroups(dayExercises){
   const db = await loadExerciseDB();
   const ungrouped = dayExercises.filter(ex => !ex.alt_group_id);
-  // Broad muscle + movement pattern is the primary grouping signal - Standing
-  // Calf Raises, Seated Calf Machine, and Calf Raise Machine all genuinely
-  // read as interchangeable alternatives to someone picking between them,
-  // even though they technically emphasize gastrocnemius vs soleus
-  // differently. That fine-muscle distinction is useful for Track's display
-  // grouping, but grouping same-day exercises together matters more here
-  // than precision about exactly which head of a muscle each one targets.
+  // Fine muscle category + movement pattern is the grouping signal. Calves
+  // is deliberately collapsed to one category at the fineMuscleCategory
+  // level itself (standing/seated/leg-press calf raises genuinely read as
+  // interchangeable), but biceps long head vs short head vs brachialis, or
+  // triceps long vs lateral head, are meaningfully different exercises that
+  // should stay in their own groups rather than all getting lumped under one
+  // generic muscle name.
   const buckets = {};
   ungrouped.forEach(ex => {
     const pattern = movementPatternOf(ex.name);
@@ -540,16 +540,17 @@ async function proposeAltGroups(dayExercises){
     const match = matchExercise(ex.name, db);
     const muscle = match && match.primaryMuscles && match.primaryMuscles[0];
     if (!muscle) return;
-    const key = muscle + '|' + pattern;
+    const fineMuscle = fineMuscleCategory(muscle, ex.name);
+    const key = fineMuscle + '|' + pattern;
     (buckets[key] = buckets[key] || []).push(ex);
   });
   return Object.entries(buckets)
     .filter(([, members]) => members.length >= 2)
     .map(([key, members], i) => {
-      const [muscle] = key.split('|');
+      const [fineMuscle] = key.split('|');
       return {
-        suggestedName: `${cap(muscle)} Alt`,
-        muscle: cap(muscle),
+        suggestedName: `${fineMuscle} Alt`,
+        muscle: fineMuscle,
         color: ALT_COLORS[i % ALT_COLORS.length],
         members
       };
@@ -3779,7 +3780,7 @@ async function openPicker(initialTab, jumpToMuscle){
   // able to start a selection that then gets confirmed with one action,
   // rather than adding exercises one at a time.
   const selection = { active: false, items: new Map() }; // id -> {name, category}
-  function renderSelectionBar(rerenderList, onAdd, onDelete){
+  function renderSelectionBar(rerenderList, onAdd, onDelete, onRename){
     let bar = overlay.querySelector('#selectionBar');
     if (!selection.active || selection.items.size === 0){
       if (bar) bar.remove();
@@ -3787,15 +3788,17 @@ async function openPicker(initialTab, jumpToMuscle){
     }
     const count = selection.items.size;
     const html = `
-      <div id="selectionBar" style="position:fixed; left:0; right:0; bottom:0; background:var(--panel); border-top:1px solid var(--line); padding:12px 18px calc(12px + env(safe-area-inset-bottom)) 18px; display:flex; gap:10px; z-index:30;">
+      <div id="selectionBar" style="position:fixed; left:0; right:0; bottom:0; background:var(--panel); border-top:1px solid var(--line); padding:12px 18px calc(12px + env(safe-area-inset-bottom)) 18px; display:flex; flex-wrap:wrap; gap:10px; z-index:30;">
         <button id="selectionCancel" style="padding:11px 16px; border-radius:10px; background:var(--ink); color:var(--chalk); font-size:13px;">Cancel</button>
+        ${onRename && count === 1 ? `<button id="selectionRename" style="padding:11px 16px; border-radius:10px; background:var(--ink); color:var(--flame); font-size:13px;">Rename</button>` : ''}
         ${onDelete ? `<button id="selectionDelete" style="padding:11px 16px; border-radius:10px; background:#E8492A; color:white; font-size:13px;">Delete ${count}</button>` : ''}
-        <button id="selectionAdd" class="save-btn" style="flex:1; margin:0;">Add ${count} to ${DAY_NAMES[state.selectedDay]}</button>
+        <button id="selectionAdd" class="save-btn" style="flex:1; margin:0; min-width:140px;">Add ${count} to ${DAY_NAMES[state.selectedDay]}</button>
       </div>`;
     if (bar) bar.outerHTML = html; else overlay.insertAdjacentHTML('beforeend', html);
     overlay.querySelector('#selectionCancel').onclick = () => { selection.active = false; selection.items.clear(); renderSelectionBar(); rerenderList(); };
     overlay.querySelector('#selectionAdd').onclick = onAdd;
     if (onDelete) overlay.querySelector('#selectionDelete').onclick = onDelete;
+    if (onRename && count === 1) overlay.querySelector('#selectionRename').onclick = onRename;
   }
 
   function renderMineTab(){
@@ -3980,6 +3983,31 @@ async function openPicker(initialTab, jumpToMuscle){
             selection.items.clear();
             renderList(body.querySelector('#pickerSearch').value);
           }, { title: `Delete ${items.length} Exercises?`, danger: true, confirmLabel: 'Delete' });
+        },
+        () => {
+          const item = [...selection.items.values()][0];
+          promptText({
+            title: 'Rename Exercise', placeholder: 'New name', initialValue: item.name,
+            onConfirm: async (newName) => {
+              if (!newName || newName === item.name){ selection.active = false; selection.items.clear(); renderList(body.querySelector('#pickerSearch').value); return; }
+              const { data: userData } = await supabaseClient.auth.getUser();
+              if (getUseExerciseMasterFlag()){
+                const masterResult = await withTimeout(
+                  supabaseClient.from('exercise_master').select('id').eq('user_id', userData.user.id).ilike('name', item.name).maybeSingle(),
+                  15000
+                );
+                if (!masterResult.__timeout && !masterResult.error && masterResult.data){
+                  await supabaseClient.from('exercise_master').update({ name: newName }).eq('id', masterResult.data.id);
+                }
+              } else {
+                await supabaseClient.from('exercises').update({ name: newName }).eq('user_id', userData.user.id).ilike('name', item.name);
+              }
+              selection.active = false;
+              selection.items.clear();
+              renderList(body.querySelector('#pickerSearch').value);
+              if (state.currentTab === 'track') renderTrack();
+            }
+          });
         }
       );
     }
