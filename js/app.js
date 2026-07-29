@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.110';
+const APP_VERSION = 'Beta 5.111';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -173,7 +173,7 @@ function clusterByAltGroup(items){
 // stores the final label directly (e.g. "Rear Delts"), not a broad muscle
 // that still needs further processing.
 function getEffectiveMuscleLabel(ex, db){
-  if (ex && ex.muscle_override) return ex.muscle_override;
+  if (ex && ex.muscle_override && ex.muscle_override !== 'Calves (Gastrocnemius)' && ex.muscle_override !== 'Calves (Soleus)') return ex.muscle_override;
   const m = matchExercise(ex.name, db);
   const muscle = m && m.primaryMuscles && m.primaryMuscles[0];
   return muscle ? fineMuscleCategory(muscle, ex.name) : 'Other';
@@ -3665,15 +3665,10 @@ function fineMuscleCategory(broadMuscle, exerciseName){
     if (n.includes('preacher') || n.includes('concentration') || n.includes('spider')) return 'Biceps (Short Head)';
     return 'Biceps';
   }
-  if (m === 'calves'){
-    // Knee position determines which calf muscle actually does the work -
-    // gastrocnemius crosses the knee so it's loaded with the leg straight
-    // (standing raises), soleus doesn't cross the knee so it takes over when
-    // the knee is bent (seated raises). This is standard, reliable convention.
-    if (n.includes('seated')) return 'Calves (Soleus)';
-    if (n.includes('standing') || n.includes('donkey') || n.includes('leg press calf')) return 'Calves (Gastrocnemius)';
-    return 'Calves';
-  }
+  // Calves are deliberately left as one broad category - unlike the splits
+  // above, gastrocnemius vs soleus isn't a meaningful enough distinction in
+  // practice for someone picking between standing, seated, or leg press calf
+  // raises; they read as interchangeable, not genuinely different exercises.
   if (m === 'forearms'){
     // Matches the exact convention already used in the plan itself - curling
     // the wrist works the flexors, extending/reversing it works the extensors.
@@ -3708,7 +3703,7 @@ const MUSCLE_SORT_REGION = {
   'Triceps':'Arms', 'Triceps (Long Head)':'Arms', 'Triceps (Lateral Head)':'Arms',
   'Forearms':'Arms', 'Forearms (Flexors)':'Arms', 'Forearms (Extensors)':'Arms',
   'Quadriceps':'Legs', 'Hamstrings':'Legs', 'Glutes':'Legs', 'Adductors':'Legs', 'Abductors':'Legs',
-  'Calves':'Legs', 'Calves (Gastrocnemius)':'Legs', 'Calves (Soleus)':'Legs',
+  'Calves':'Legs',
   'Abdominals':'Core', 'Neck':'Neck'
 };
 // True anatomical top-to-bottom order, not alphabetical within a region -
@@ -3723,7 +3718,7 @@ const MUSCLE_ANATOMICAL_ORDER = [
   'Forearms (Flexors)', 'Forearms (Extensors)', 'Forearms',
   'Abdominals',
   'Glutes', 'Quadriceps', 'Hamstrings', 'Adductors', 'Abductors',
-  'Calves (Gastrocnemius)', 'Calves (Soleus)', 'Calves'
+  'Calves'
 ];
 function muscleSortKey(label){
   const idx = MUSCLE_ANATOMICAL_ORDER.indexOf(label);
