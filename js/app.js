@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.116';
+const APP_VERSION = 'Beta 5.117';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1271,14 +1271,20 @@ function checkExerciseOverride(name){
   }
   return null;
 }
+let _normalizedDbCache = null; // { forDb: <db array identity>, entries: [{e, words}] }
+function getNormalizedDb(db){
+  if (_normalizedDbCache && _normalizedDbCache.forDb === db) return _normalizedDbCache.entries;
+  const entries = db.map(e => ({ e, words: exdbNormalize(e.name) })).filter(entry => entry.words.size);
+  _normalizedDbCache = { forDb: db, entries };
+  return entries;
+}
+
 function fuzzyMatchExercise(name, db){
   if (!db) return null;
   const qwords = exdbNormalize(name);
   if (!qwords.size) return null;
   let best = null, bestScore = 0;
-  for (const e of db){
-    const ewords = exdbNormalize(e.name);
-    if (!ewords.size) continue;
+  for (const { e, words: ewords } of getNormalizedDb(db)){
     let overlap = 0;
     for (const w of qwords){ if (ewords.has(w)) overlap++; }
     const score = overlap / Math.max(qwords.size, ewords.size);
@@ -1287,7 +1293,18 @@ function fuzzyMatchExercise(name, db){
   return bestScore >= 0.34 ? best : null;
 }
 
+let _matchExerciseCache = null; // { forDb: <db array identity>, byName: Map }
 function matchExercise(name, db){
+  if (!_matchExerciseCache || _matchExerciseCache.forDb !== db){
+    _matchExerciseCache = { forDb: db, byName: new Map() };
+  }
+  const cache = _matchExerciseCache.byName;
+  if (cache.has(name)) return cache.get(name);
+  const result = matchExerciseUncached(name, db);
+  cache.set(name, result);
+  return result;
+}
+function matchExerciseUncached(name, db){
   const override = checkExerciseOverride(name);
   if (override){
     // Overrides only ever supply correct muscle info, not photos/instructions.
