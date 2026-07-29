@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.118';
+const APP_VERSION = 'Beta 5.119';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -7168,14 +7168,16 @@ function pplBarsHtml(pplTally){
   }).join('');
 }
 
-async function tallyLoggedThisWeek(){
-  const { data: userData } = await supabaseClient.auth.getUser();
-  const since = new Date(Date.now() - 6*86400000).toISOString().slice(0,10);
+async function tallyLoggedInRange(sinceDate, untilDate){
   const useMaster = getUseExerciseMasterFlag();
-  const idField = useMaster ? 'exercise_master_id' : 'exercise_id';
   const [exercises, setResult, db] = await Promise.all([
-    fetchAllExercisesCompat(userData.user.id),
-    withTimeout(supabaseClient.from('sets').select('exercise_id, exercise_master_id, num_sets, logged_at').gte('logged_at', since), 15000),
+    fetchAllExercisesCompat((await supabaseClient.auth.getUser()).data.user.id),
+    withTimeout(
+      (untilDate
+        ? supabaseClient.from('sets').select('exercise_id, exercise_master_id, num_sets, logged_at').gte('logged_at', sinceDate).lt('logged_at', untilDate)
+        : supabaseClient.from('sets').select('exercise_id, exercise_master_id, num_sets, logged_at').gte('logged_at', sinceDate)),
+      15000
+    ),
     loadExerciseDB()
   ]);
   const sets = setResult.__timeout || setResult.error ? [] : (setResult.data || []);
@@ -7193,6 +7195,15 @@ async function tallyLoggedThisWeek(){
   });
   return tally;
 }
+async function tallyLoggedThisWeek(){
+  const since = new Date(Date.now() - 6*86400000).toISOString().slice(0,10);
+  return tallyLoggedInRange(since, null);
+}
+async function tallyLoggedPreviousWeek(){
+  const since = new Date(Date.now() - 13*86400000).toISOString().slice(0,10);
+  const until = new Date(Date.now() - 6*86400000).toISOString().slice(0,10);
+  return tallyLoggedInRange(since, until);
+}
 
 async function tallyFullPlan(){
   const { data: userData } = await supabaseClient.auth.getUser();
@@ -7204,7 +7215,16 @@ async function tallyFullPlan(){
 
   const tally = {};
   BALANCE_MUSCLES.forEach(m => tally[m] = 0);
+  // Alt-group siblings are interchangeable options for one slot, not separate
+  // planned volume - counting all of them would make a muscle look far more
+  // covered than it really is just because it has more variety, not more work.
+  // Grouping key includes weekday since the same alt group can legitimately
+  // appear as a separate slot on a different day.
+  const seenSlots = new Set();
   exercises.forEach(ex => {
+    const slotKey = ex.alt_group_id ? `${ex.alt_group_id}|${ex.weekday}` : (ex.masterId || ex.id);
+    if (seenSlots.has(slotKey)) return;
+    seenSlots.add(slotKey);
     const m = matchExercise(ex.name, db);
     const muscle = m && m.primaryMuscles && m.primaryMuscles[0];
     if (muscle && tally.hasOwnProperty(muscle)) tally[muscle] += 1;
@@ -7228,7 +7248,7 @@ function statusForPlanCount(count, maxCount){
   return { label:'HEAVY', color:'#E8492A' };
 }
 
-function balanceBarsHtml(tally, mode){
+function balanceBarsHtml(tally, mode, prevTally){
   const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
   const maxCount = Math.max(1, ...Object.values(tally));
   return BALANCE_MUSCLES.map(muscle => {
@@ -7240,14 +7260,101 @@ function balanceBarsHtml(tally, mode){
       ? `<div class="bal-target-zone" style="left:${Math.round((BALANCE_TARGET_MIN/barMax)*100)}%; width:${Math.round(((BALANCE_TARGET_MAX-BALANCE_TARGET_MIN)/barMax)*100)}%;"></div>`
       : '';
     const suffix = mode === 'logged' ? '' : ' ex';
+    let trendHtml = '';
+    if (prevTally){
+      const delta = count - prevTally[muscle];
+      if (delta !== 0){
+        const trendColor = delta > 0 ? '#8FBF7A' : '#7BA6C9';
+        trendHtml = `<span style="font-size:10px; color:${trendColor}; margin-left:6px;">${delta > 0 ? '▲' : '▼'}${Math.abs(delta)}</span>`;
+      }
+    }
     return `<div class="bal-row" data-muscle="${cap(muscle)}" style="cursor:pointer;">
-      <div class="bal-toprow"><div class="bal-name">${BALANCE_LABELS[muscle]}</div><div class="bal-status" style="background:${status.color}26; color:${status.color};">${status.label}</div></div>
+      <div class="bal-toprow"><div class="bal-name">${BALANCE_LABELS[muscle]}</div><div style="display:flex; align-items:center;"><div class="bal-status" style="background:${status.color}26; color:${status.color};">${status.label}</div>${trendHtml}</div></div>
       <div class="bal-bar-track">
         ${targetZoneHtml}
         <div class="bal-bar-fill" style="width:${widthPct}%; background:${status.color};"><span class="bal-count">${count}${suffix}</span></div>
       </div>
     </div>`;
   }).join('');
+}
+
+function computeBalanceInsights(tally, prevTally, mode){
+  const insights = [];
+  const trained = BALANCE_MUSCLES.filter(m => tally[m] > 0);
+  const grand = BALANCE_MUSCLES.reduce((sum, m) => sum + tally[m], 0);
+
+  if (mode === 'logged'){
+    if (grand === 0){
+      insights.push({ icon: '👋', tone: 'neutral', text: `Nothing logged yet this week. Log a set and this fills in with real insight.` });
+      return insights;
+    }
+
+    const sorted = BALANCE_MUSCLES.slice().sort((a,b) => tally[b] - tally[a]);
+    const top = sorted[0];
+    if (tally[top] > 0){
+      insights.push({ icon: '🔥', tone: 'good', text: `${BALANCE_LABELS[top]} led the week with ${tally[top]} sets.` });
+    }
+    const untouched = BALANCE_MUSCLES.filter(m => tally[m] === 0);
+    if (untouched.length && untouched.length <= 4){
+      insights.push({ icon: '💤', tone: 'warn', text: `${untouched.map(m => BALANCE_LABELS[m]).join(', ')} ${untouched.length===1?'hasn\u2019t':'haven\u2019t'} been trained this week.` });
+    } else if (untouched.length > 4){
+      insights.push({ icon: '💤', tone: 'warn', text: `${untouched.length} muscle groups are sitting at zero this week - a lot of ground still uncovered.` });
+    }
+
+    const inTarget = BALANCE_MUSCLES.filter(m => tally[m] >= BALANCE_TARGET_MIN && tally[m] <= BALANCE_TARGET_MAX);
+    const over = BALANCE_MUSCLES.filter(m => tally[m] > BALANCE_TARGET_MAX);
+    insights.push({ icon: '🎯', tone: inTarget.length >= 7 ? 'good' : 'neutral', text: `${inTarget.length} of ${BALANCE_MUSCLES.length} muscle groups are sitting in the ${BALANCE_TARGET_MIN}-${BALANCE_TARGET_MAX} set target zone.` });
+    if (over.length){
+      const worst = over.sort((a,b) => tally[b]-tally[a])[0];
+      insights.push({ icon: '📈', tone: 'warn', text: `${BALANCE_LABELS[worst]} is running hot at ${tally[worst]} sets, above the usual target range.` });
+    }
+
+    if (prevTally){
+      const prevGrand = BALANCE_MUSCLES.reduce((sum, m) => sum + prevTally[m], 0);
+      if (prevGrand > 0){
+        const pct = Math.round(((grand - prevGrand) / prevGrand) * 100);
+        if (Math.abs(pct) >= 10){
+          insights.push({ icon: pct > 0 ? '⬆️' : '⬇️', tone: pct > 0 ? 'good' : 'neutral', text: `Total volume is ${pct > 0 ? 'up' : 'down'} ${Math.abs(pct)}% vs last week (${grand} vs ${prevGrand} sets).` });
+        }
+      }
+      let biggestMover = null, biggestDelta = 0;
+      BALANCE_MUSCLES.forEach(m => {
+        const delta = tally[m] - prevTally[m];
+        if (Math.abs(delta) > Math.abs(biggestDelta) && (tally[m] >= 3 || prevTally[m] >= 3)){
+          biggestDelta = delta; biggestMover = m;
+        }
+      });
+      if (biggestMover && Math.abs(biggestDelta) >= 4){
+        insights.push({ icon: biggestDelta > 0 ? '📊' : '📉', tone: 'neutral', text: `${BALANCE_LABELS[biggestMover]} ${biggestDelta > 0 ? 'jumped up' : 'dropped'} by ${Math.abs(biggestDelta)} sets compared to last week.` });
+      }
+    }
+
+    const pplTally = pplTallyFrom(tally);
+    const pplGrand = pplTally.push + pplTally.pull + pplTally.legs;
+    if (pplGrand > 0){
+      const shares = { push: pplTally.push/pplGrand, pull: pplTally.pull/pplGrand, legs: pplTally.legs/pplGrand };
+      const dominant = Object.entries(shares).sort((a,b) => b[1]-a[1])[0];
+      if (dominant[1] > 0.55){
+        insights.push({ icon: '⚖️', tone: 'warn', text: `${PPL_LABELS[dominant[0]]} is taking up more than half your volume this week (${Math.round(dominant[1]*100)}%) - the other two are getting comparatively little.` });
+      }
+    }
+  } else {
+    if (grand === 0){
+      insights.push({ icon: '👋', tone: 'neutral', text: `No exercises planned yet across the week.` });
+      return insights;
+    }
+    const gaps = BALANCE_MUSCLES.filter(m => tally[m] === 0);
+    if (gaps.length){
+      insights.push({ icon: '🕳️', tone: 'warn', text: `${gaps.map(m => BALANCE_LABELS[m]).join(', ')} ${gaps.length===1?'has':'have'} no planned exercises anywhere in the week.` });
+    }
+    const sorted = BALANCE_MUSCLES.slice().sort((a,b) => tally[b] - tally[a]);
+    if (tally[sorted[0]] > 0){
+      insights.push({ icon: '🏗️', tone: 'neutral', text: `${BALANCE_LABELS[sorted[0]]} has the most planned coverage, with ${tally[sorted[0]]} exercise${tally[sorted[0]]===1?'':'s'} across the week.` });
+    }
+    insights.push({ icon: '✅', tone: gaps.length === 0 ? 'good' : 'neutral', text: `${trained.length} of ${BALANCE_MUSCLES.length} muscle groups have at least one planned exercise somewhere in the week.` });
+  }
+
+  return insights;
 }
 
 function balanceColorFor(tally, muscle, mode){
@@ -7290,13 +7397,65 @@ function balanceBodySvg(tally, mode, view){
   </svg>`;
 }
 
+function balanceHeroHtml(tally, prevTally, mode){
+  const grand = BALANCE_MUSCLES.reduce((sum, m) => sum + tally[m], 0);
+  const trained = BALANCE_MUSCLES.filter(m => tally[m] > 0).length;
+  const inTarget = BALANCE_MUSCLES.filter(m => tally[m] >= BALANCE_TARGET_MIN && tally[m] <= BALANCE_TARGET_MAX).length;
+  const headline = mode === 'logged' ? grand : grand;
+  const headlineLabel = mode === 'logged' ? 'TOTAL SETS THIS WEEK' : 'EXERCISE SLOTS PLANNED';
+  let trendHtml = '';
+  if (mode === 'logged' && prevTally){
+    const prevGrand = BALANCE_MUSCLES.reduce((sum, m) => sum + prevTally[m], 0);
+    if (prevGrand > 0){
+      const pct = Math.round(((grand - prevGrand) / prevGrand) * 100);
+      const color = pct > 0 ? '#8FBF7A' : pct < 0 ? '#7BA6C9' : 'var(--slate)';
+      const arrow = pct > 0 ? '▲' : pct < 0 ? '▼' : '—';
+      trendHtml = `<div style="font-size:12px; color:${color}; margin-top:2px;">${arrow} ${Math.abs(pct)}% vs last week</div>`;
+    } else if (grand > 0) {
+      trendHtml = `<div style="font-size:12px; color:#8FBF7A; margin-top:2px;">First week logging - nothing to compare yet</div>`;
+    }
+  }
+  const secondLine = mode === 'logged'
+    ? `${trained}/${BALANCE_MUSCLES.length} muscles trained · ${inTarget}/${BALANCE_MUSCLES.length} in target zone`
+    : `${trained}/${BALANCE_MUSCLES.length} muscles covered somewhere in the week`;
+  return `
+    <div style="margin:0 18px 14px 18px; background:linear-gradient(135deg, rgba(232,73,42,0.12), rgba(232,73,42,0.02)); border:1px solid rgba(232,73,42,0.25); border-radius:16px; padding:20px;">
+      <div style="display:flex; align-items:baseline; gap:10px;">
+        <div style="font-family:'Bebas Neue',sans-serif; font-size:44px; line-height:1; color:var(--flame);">${headline}</div>
+        <div style="font-size:11px; letter-spacing:0.5px; color:var(--slate); text-transform:uppercase;">${headlineLabel}</div>
+      </div>
+      ${trendHtml}
+      <div style="font-size:12.5px; color:var(--chalk); margin-top:10px; opacity:0.85;">${secondLine}</div>
+    </div>`;
+}
+
+function balanceInsightsHtml(insights){
+  if (!insights.length) return '';
+  const toneColor = { good: '#8FBF7A', warn: '#E8A33D', neutral: '#7BA6C9' };
+  return `
+    <div class="section-label">Insights</div>
+    <div style="padding:0 18px 6px 18px; display:flex; flex-direction:column; gap:8px;">
+      ${insights.map(ins => `
+        <div style="display:flex; gap:10px; align-items:flex-start; background:var(--panel); border:1px solid var(--line); border-left:3px solid ${toneColor[ins.tone] || toneColor.neutral}; border-radius:10px; padding:11px 13px;">
+          <div style="font-size:16px; line-height:1.3;">${ins.icon}</div>
+          <div style="font-size:13px; color:var(--chalk); line-height:1.4; flex:1;">${ins.text}</div>
+        </div>
+      `).join('')}
+    </div>`;
+}
+
+
 async function renderBalance(mode, view){
   mode = mode || state.balanceMode || 'logged';
   view = view || state.balanceView || 'muscle';
   state.balanceMode = mode;
   state.balanceView = view;
   app.innerHTML = `<div class="app-shell"><div class="login-wrap"><div class="login-sub">Crunching your balance…</div></div></div>`;
-  const tally = mode === 'logged' ? await tallyLoggedThisWeek() : await tallyFullPlan();
+  const [tally, prevTally] = await Promise.all([
+    mode === 'logged' ? tallyLoggedThisWeek() : tallyFullPlan(),
+    mode === 'logged' ? tallyLoggedPreviousWeek() : Promise.resolve(null)
+  ]);
+  const insights = computeBalanceInsights(tally, prevTally, mode);
 
   let bodyContentHtml;
   if (view === 'ppl'){
@@ -7307,7 +7466,7 @@ async function renderBalance(mode, view){
       <div class="small" style="padding:8px 18px 0 18px; color:var(--slate);">Abdominals is folded into Legs for this split - push/pull/legs doesn't have a clean third home for core work.</div>
     `;
   } else {
-    const barsHtml = balanceBarsHtml(tally, mode);
+    const barsHtml = balanceBarsHtml(tally, mode, prevTally);
     const frontSvg = balanceBodySvg(tally, mode, 'front');
     const backSvg = balanceBodySvg(tally, mode, 'back');
     bodyContentHtml = `
@@ -7330,11 +7489,13 @@ async function renderBalance(mode, view){
           <div class="bal-seg-chip ${mode==='logged'?'active':''}" data-mode="logged" style="flex:1; text-align:center; padding:7px 0; font-family:'Bebas Neue',sans-serif; font-size:11.5px; letter-spacing:0.5px; color:${mode==='logged'?'var(--ink)':'var(--slate)'}; background:${mode==='logged'?'var(--flame)':'transparent'};">LOGGED THIS WEEK</div>
           <div class="bal-seg-chip ${mode==='plan'?'active':''}" data-mode="plan" style="flex:1; text-align:center; padding:7px 0; font-family:'Bebas Neue',sans-serif; font-size:11.5px; letter-spacing:0.5px; color:${mode==='plan'?'var(--ink)':'var(--slate)'}; background:${mode==='plan'?'var(--flame)':'transparent'};">FULL PLAN</div>
         </div>
-        <div class="seg" style="margin:0 18px 10px 18px; display:flex; border:1px solid var(--line);">
+        ${balanceHeroHtml(tally, prevTally, mode)}
+        ${balanceInsightsHtml(insights)}
+        <div class="seg" style="margin:14px 18px 10px 18px; display:flex; border:1px solid var(--line);">
           <div class="bal-view-chip ${view==='muscle'?'active':''}" data-view="muscle" style="flex:1; text-align:center; padding:6px 0; font-family:'Bebas Neue',sans-serif; font-size:11px; letter-spacing:0.5px; color:${view==='muscle'?'var(--ink)':'var(--slate)'}; background:${view==='muscle'?'var(--flame)':'transparent'};">MUSCLE GROUPS</div>
           <div class="bal-view-chip ${view==='ppl'?'active':''}" data-view="ppl" style="flex:1; text-align:center; padding:6px 0; font-family:'Bebas Neue',sans-serif; font-size:11px; letter-spacing:0.5px; color:${view==='ppl'?'var(--ink)':'var(--slate)'}; background:${view==='ppl'?'var(--flame)':'transparent'};">PUSH / PULL / LEGS</div>
         </div>
-        ${mode === 'plan' ? `<div class="small" style="padding:0 18px 8px 18px; color:var(--slate);">Counts exercise slots across every day, regardless of what's been logged.</div>` : `<div class="small" style="padding:0 18px 8px 18px; color:var(--slate);">Target zone is a general guideline (~${BALANCE_TARGET_MIN}-${BALANCE_TARGET_MAX} weekly sets), not personalized advice.</div>`}
+        ${mode === 'plan' ? `<div class="small" style="padding:0 18px 8px 18px; color:var(--slate);">Counts exercise slots across every day (alt-group siblings count once, as one slot), regardless of what's been logged.</div>` : `<div class="small" style="padding:0 18px 8px 18px; color:var(--slate);">Target zone is a general guideline (~${BALANCE_TARGET_MIN}-${BALANCE_TARGET_MAX} weekly sets), not personalized advice.</div>`}
         ${bodyContentHtml}
       </div>
       ${renderTabbar()}
