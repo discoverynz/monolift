@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.109';
+const APP_VERSION = 'Beta 5.110';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -3910,7 +3910,7 @@ async function openPicker(initialTab, jumpToMuscle){
             weekday: state.selectedDay, alt_group_id: null
           });
           if (error){ alert(error.message); return; }
-          openLogForm(inserted[0].id, picked.name);
+          openLogForm(inserted[0].id, picked.name, true);
         };
       });
     }
@@ -5923,7 +5923,7 @@ function celebratePR(exerciseName, weight, unit, priorBest){
 // Gym plates: 45, 35 (rarer), 25, 10 lb. Standard barbell = 45lb / ~20kg.
 // Only makes sense for equipment you actually load plates onto — not dumbbells,
 // not pin-loaded machines. Gated by exercise name since that's what's available.
-function openLogForm(exerciseId, exerciseName){
+function openLogForm(exerciseId, exerciseName, isNewToDay){
   removeSideIndex();
   let unit = 'kg';
   let weightType = 'total';
@@ -6284,13 +6284,14 @@ function openLogForm(exerciseId, exerciseName){
     }
   }
   overlay.querySelector('#saveSetBtn').onclick = handleSaveClick;
-  // Button label reflects what tapping it will actually do - "Add to Day" when
-  // there's nothing entered yet (exercise is already on the list either way,
-  // this just closes), "Save Set" the moment any value is entered.
+  // Button label reflects what tapping it will actually do - "Add to [Day]"
+  // only when this exercise is genuinely new to today (nothing entered yet
+  // means it just confirms the add), "Save Set" the moment any value is
+  // entered, or always for an exercise that was already on the list.
   function updateSaveBtnLabel(){
     const btn = overlay.querySelector('#saveSetBtn');
     const hasValue = document.getElementById('weightInput').value || document.getElementById('setsInput').value || document.getElementById('repsInput').value;
-    btn.textContent = hasValue ? 'Save Set' : 'Add to Day';
+    btn.textContent = (hasValue || !isNewToDay) ? 'Save Set' : `Add to ${DAY_NAMES[state.selectedDay]}`;
   }
   ['weightInput', 'setsInput', 'repsInput'].forEach(id => {
     const el = document.getElementById(id);
