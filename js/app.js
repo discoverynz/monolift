@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.111';
+const APP_VERSION = 'Beta 5.112';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -3405,6 +3405,33 @@ function openEditLocationForm(exerciseId, exerciseName){
   }); };
 }
 
+async function deleteExerciseEntirelyNow(exerciseName){
+  const { data: userData } = await supabaseClient.auth.getUser();
+  const uid = userData.user.id;
+  if (getUseExerciseMasterFlag()){
+    const masterResult = await withTimeout(
+      supabaseClient.from('exercise_master').select('id').eq('user_id', uid).ilike('name', exerciseName).maybeSingle(),
+      15000
+    );
+    if (!masterResult.__timeout && !masterResult.error && masterResult.data){
+      const id = masterResult.data.id;
+      await supabaseClient.from('sets').delete().eq('exercise_master_id', id);
+      await supabaseClient.from('exercise_days').delete().eq('exercise_master_id', id);
+      await supabaseClient.from('exercise_master').delete().eq('id', id);
+    }
+  } else {
+    const exResult = await withTimeout(
+      supabaseClient.from('exercises').select('id').eq('user_id', uid).ilike('name', exerciseName),
+      15000
+    );
+    const ids = (exResult.__timeout || exResult.error ? [] : exResult.data || []).map(e => e.id);
+    for (const id of ids){
+      await supabaseClient.from('sets').delete().eq('exercise_id', id);
+      await supabaseClient.from('exercises').delete().eq('id', id);
+    }
+  }
+}
+
 function confirmDeleteExerciseEntirely(exerciseName, onDeleted){
   const overlay = document.createElement('div');
   overlay.style = 'position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:60; display:flex; align-items:center; justify-content:center;';
@@ -3421,30 +3448,7 @@ function confirmDeleteExerciseEntirely(exerciseName, onDeleted){
   overlay.querySelector('#cancelDeleteEntire').onclick = () => overlay.remove();
   overlay.querySelector('#confirmDeleteEntire').onclick = async () => {
     overlay.remove();
-    const { data: userData } = await supabaseClient.auth.getUser();
-    const uid = userData.user.id;
-    if (getUseExerciseMasterFlag()){
-      const masterResult = await withTimeout(
-        supabaseClient.from('exercise_master').select('id').eq('user_id', uid).ilike('name', exerciseName).maybeSingle(),
-        15000
-      );
-      if (!masterResult.__timeout && !masterResult.error && masterResult.data){
-        const id = masterResult.data.id;
-        await supabaseClient.from('sets').delete().eq('exercise_master_id', id);
-        await supabaseClient.from('exercise_days').delete().eq('exercise_master_id', id);
-        await supabaseClient.from('exercise_master').delete().eq('id', id);
-      }
-    } else {
-      const exResult = await withTimeout(
-        supabaseClient.from('exercises').select('id').eq('user_id', uid).ilike('name', exerciseName),
-        15000
-      );
-      const ids = (exResult.__timeout || exResult.error ? [] : exResult.data || []).map(e => e.id);
-      for (const id of ids){
-        await supabaseClient.from('sets').delete().eq('exercise_id', id);
-        await supabaseClient.from('exercises').delete().eq('id', id);
-      }
-    }
+    await deleteExerciseEntirelyNow(exerciseName);
     if (onDeleted) onDeleted();
   };
 }
@@ -3771,6 +3775,29 @@ async function openPicker(initialTab, jumpToMuscle){
   const { data: userData } = await supabaseClient.auth.getUser();
   const all = await fetchAllExercisesCompat(userData.user.id);
 
+  // Multi-select state, shared across both tabs since a long-press should be
+  // able to start a selection that then gets confirmed with one action,
+  // rather than adding exercises one at a time.
+  const selection = { active: false, items: new Map() }; // id -> {name, category}
+  function renderSelectionBar(rerenderList, onAdd, onDelete){
+    let bar = overlay.querySelector('#selectionBar');
+    if (!selection.active || selection.items.size === 0){
+      if (bar) bar.remove();
+      return;
+    }
+    const count = selection.items.size;
+    const html = `
+      <div id="selectionBar" style="position:fixed; left:0; right:0; bottom:0; background:var(--panel); border-top:1px solid var(--line); padding:12px 18px calc(12px + env(safe-area-inset-bottom)) 18px; display:flex; gap:10px; z-index:30;">
+        <button id="selectionCancel" style="padding:11px 16px; border-radius:10px; background:var(--ink); color:var(--chalk); font-size:13px;">Cancel</button>
+        ${onDelete ? `<button id="selectionDelete" style="padding:11px 16px; border-radius:10px; background:#E8492A; color:white; font-size:13px;">Delete ${count}</button>` : ''}
+        <button id="selectionAdd" class="save-btn" style="flex:1; margin:0;">Add ${count} to ${DAY_NAMES[state.selectedDay]}</button>
+      </div>`;
+    if (bar) bar.outerHTML = html; else overlay.insertAdjacentHTML('beforeend', html);
+    overlay.querySelector('#selectionCancel').onclick = () => { selection.active = false; selection.items.clear(); renderSelectionBar(); rerenderList(); };
+    overlay.querySelector('#selectionAdd').onclick = onAdd;
+    if (onDelete) overlay.querySelector('#selectionDelete').onclick = onDelete;
+  }
+
   function renderMineTab(){
     removeSideIndex();
     const body = overlay.querySelector('#pickerBody');
@@ -3831,7 +3858,7 @@ async function openPicker(initialTab, jumpToMuscle){
         const altHint = todayHintName
           ? `<div class="small" style="color:var(--slate); opacity:0.7; font-style:italic; margin-top:1px;">alt for ${todayHintName} (on ${DAY_NAMES[state.selectedDay]})</div>`
           : listHintName ? `<div class="small" style="color:var(--slate); opacity:0.7; font-style:italic; margin-top:1px;">alt for ${listHintName}</div>` : '';
-        return `<div class="pick-row" data-id="${ex.masterId || ex.id}" data-name="${ex.name}"><div><div class="ex-name">${ex.name}${mechTag}${alreadyToday}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}${altHint}</div><div class="chev">›</div></div>`;
+        return `<div class="pick-row" data-id="${ex.masterId || ex.id}" data-name="${ex.name}" data-category="${ex.category||''}" style="${selection.active ? 'display:flex; align-items:center; gap:10px;' : ''}">${selection.active ? `<div class="check-circle" style="opacity:${selection.items.has(ex.masterId||ex.id)?1:0.3}; flex-shrink:0;">${ICON_CHECK}</div>` : ''}<div style="flex:1;"><div class="ex-name">${ex.name}${mechTag}${alreadyToday}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}${altHint}</div>${selection.active ? '' : '<div class="chev">›</div>'}</div>`;
       }
 
       let html = '';
@@ -3878,7 +3905,11 @@ async function openPicker(initialTab, jumpToMuscle){
           longPressed = false;
           pressTimer = setTimeout(() => {
             longPressed = true;
-            confirmDeleteExerciseEntirely(el.dataset.name, () => renderList(body.querySelector('#pickerSearch').value));
+            if (!selection.active){ selection.active = true; selection.items.clear(); }
+            const id = el.dataset.id;
+            if (selection.items.has(id)) selection.items.delete(id);
+            else selection.items.set(id, { name: el.dataset.name, category: el.dataset.category });
+            renderList(body.querySelector('#pickerSearch').value);
           }, 550);
         };
         const cancel = () => { clearTimeout(pressTimer); };
@@ -3888,6 +3919,14 @@ async function openPicker(initialTab, jumpToMuscle){
         el.addEventListener('pointercancel', cancel);
         el.onclick = async () => {
           if (longPressed) return;
+          if (selection.active){
+            const id = el.dataset.id;
+            if (selection.items.has(id)) selection.items.delete(id);
+            else selection.items.set(id, { name: el.dataset.name, category: el.dataset.category });
+            if (selection.items.size === 0) selection.active = false;
+            renderList(body.querySelector('#pickerSearch').value);
+            return;
+          }
           const picked = all.find(ex => (ex.masterId || ex.id) === el.dataset.id);
           overlay.remove();
           if (!picked || picked.weekday === state.selectedDay){
@@ -3908,6 +3947,41 @@ async function openPicker(initialTab, jumpToMuscle){
           openLogForm(inserted[0].id, picked.name, true);
         };
       });
+
+      renderSelectionBar(
+        () => renderList(body.querySelector('#pickerSearch').value),
+        async () => {
+          const btn = overlay.querySelector('#selectionAdd');
+          const items = [...selection.items.values()];
+          await withButtonLoading(btn, 'Adding…', async () => {
+            const { data: userData } = await supabaseClient.auth.getUser();
+            const errors = [];
+            for (const item of items){
+              const alreadyToday = all.find(ex => ex.weekday === state.selectedDay && ex.name.toLowerCase() === item.name.toLowerCase());
+              if (alreadyToday) continue; // already there, nothing to do
+              const { error } = await createExerciseForToday({
+                user_id: userData.user.id, name: item.name, category: item.category || 'Other', weekday: state.selectedDay, alt_group_id: null
+              });
+              if (error) errors.push(`${item.name}: ${error.message}`);
+            }
+            overlay.remove();
+            state.currentTab = 'track';
+            renderTrack();
+            if (errors.length) alert(`${items.length - errors.length} of ${items.length} added.\n\n${errors.length} failed:\n${errors.join('\n')}`);
+          });
+        },
+        () => {
+          const items = [...selection.items.values()];
+          showConfirmDialog(`Permanently delete ${items.length} exercise${items.length===1?'':'s'}? Every day they appear on, and all logged history, will be removed.`, async () => {
+            for (const item of items){
+              await deleteExerciseEntirelyNow(item.name);
+            }
+            selection.active = false;
+            selection.items.clear();
+            renderList(body.querySelector('#pickerSearch').value);
+          }, { title: `Delete ${items.length} Exercises?`, danger: true, confirmLabel: 'Delete' });
+        }
+      );
     }
     renderList('');
     body.querySelector('#pickerSearch').oninput = (e) => renderList(e.target.value);
@@ -3988,7 +4062,7 @@ async function openPicker(initialTab, jumpToMuscle){
         const altHint = todayHintName
           ? `<div class="small" style="color:var(--slate); opacity:0.7; font-style:italic; margin-top:1px;">alt for ${todayHintName} (on ${DAY_NAMES[state.selectedDay]})</div>`
           : listHintName ? `<div class="small" style="color:var(--slate); opacity:0.7; font-style:italic; margin-top:1px;">alt for ${listHintName}</div>` : '';
-        return `<div class="pick-row db-pick" data-name="${e.name}" data-equip="${e.equipment||''}"><div><div class="ex-name">${e.name}${star}${mechTag}${alreadyToday}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}${equipLine ? `<div class="small" style="color:var(--slate); opacity:0.7; font-size:10.5px;">${equipLine}</div>` : ''}${altHint}</div><div class="chev">›</div></div>`;
+        return `<div class="pick-row db-pick" data-name="${e.name}" data-equip="${e.equipment||''}" style="${selection.active ? 'display:flex; align-items:center; gap:10px;' : ''}">${selection.active ? `<div class="check-circle" style="opacity:${selection.items.has(e.name)?1:0.3}; flex-shrink:0;">${ICON_CHECK}</div>` : ''}<div style="flex:1;"><div class="ex-name">${e.name}${star}${mechTag}${alreadyToday}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}${equipLine ? `<div class="small" style="color:var(--slate); opacity:0.7; font-size:10.5px;">${equipLine}</div>` : ''}${altHint}</div>${selection.active ? '' : '<div class="chev">›</div>'}</div>`;
       }
 
       presentKeys.forEach(cat => {
@@ -4030,11 +4104,62 @@ async function openPicker(initialTab, jumpToMuscle){
       }
 
       body.querySelectorAll('.db-pick').forEach(el => {
+        let pressTimer = null;
+        let longPressed = false;
+        const start = () => {
+          longPressed = false;
+          pressTimer = setTimeout(() => {
+            longPressed = true;
+            if (!selection.active){ selection.active = true; selection.items.clear(); }
+            const name = el.dataset.name;
+            if (selection.items.has(name)) selection.items.delete(name);
+            else selection.items.set(name, { name, category: EQUIPMENT_TO_CATEGORY[el.dataset.equip] || 'Other' });
+            renderDbList(body.querySelector('#dbSearch').value);
+          }, 550);
+        };
+        const cancel = () => { clearTimeout(pressTimer); };
+        el.addEventListener('pointerdown', start);
+        el.addEventListener('pointerup', cancel);
+        el.addEventListener('pointerleave', cancel);
+        el.addEventListener('pointercancel', cancel);
         el.onclick = () => {
+          if (longPressed) return;
+          if (selection.active){
+            const name = el.dataset.name;
+            if (selection.items.has(name)) selection.items.delete(name);
+            else selection.items.set(name, { name, category: EQUIPMENT_TO_CATEGORY[el.dataset.equip] || 'Other' });
+            if (selection.items.size === 0) selection.active = false;
+            renderDbList(body.querySelector('#dbSearch').value);
+            return;
+          }
           removeSideIndex();
           openSuggestionPreview(el.dataset.name, EQUIPMENT_TO_CATEGORY[el.dataset.equip] || 'Other', flatOrder);
         };
       });
+
+      renderSelectionBar(
+        () => renderDbList(body.querySelector('#dbSearch').value),
+        async () => {
+          const btn = overlay.querySelector('#selectionAdd');
+          const items = [...selection.items.values()];
+          await withButtonLoading(btn, 'Adding…', async () => {
+            const { data: userData } = await supabaseClient.auth.getUser();
+            const errors = [];
+            for (const item of items){
+              const alreadyToday = todayNames.has(item.name.toLowerCase());
+              if (alreadyToday) continue;
+              const { error } = await createExerciseForToday({
+                user_id: userData.user.id, name: item.name, category: item.category, weekday: state.selectedDay, alt_group_id: null
+              });
+              if (error) errors.push(`${item.name}: ${error.message}`);
+            }
+            overlay.remove();
+            state.currentTab = 'track';
+            renderTrack();
+            if (errors.length) alert(`${items.length - errors.length} of ${items.length} added.\n\n${errors.length} failed:\n${errors.join('\n')}`);
+          });
+        }
+      );
     }
     renderDbList('');
     body.querySelector('#dbSearch').oninput = (e) => renderDbList(e.target.value);
@@ -4047,6 +4172,7 @@ async function openPicker(initialTab, jumpToMuscle){
       });
       tab.classList.add('active'); tab.style.color = 'var(--chalk)'; tab.style.borderBottomColor = 'var(--flame)';
       overlay.querySelector('#pickerBody').scrollTop = 0;
+      selection.active = false; selection.items.clear(); renderSelectionBar();
       if (tab.dataset.tab === 'mine') renderMineTab(); else renderDatabaseTab();
     };
   });
