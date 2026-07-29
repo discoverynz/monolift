@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.121';
+const APP_VERSION = 'Beta 5.122';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -7400,6 +7400,110 @@ function computeMostLoggedExercise(sets){
   return { name, count };
 }
 
+// General, widely-taught training frequency guidance - not personalized, just
+// the kind of reference info you'd find in any intro hypertrophy resource.
+// Larger muscle groups recover slower and get more total sets since they're
+// really several distinct heads; smaller/stabilizer muscles get hit
+// indirectly by compounds too, so they need less direct volume.
+const TRAINING_FREQUENCY_GUIDE = [
+  { group: 'Chest, Back, Quads, Hamstrings', freq: '2-3x / week', sets: '10-20 sets/week', note: 'Large muscle groups - split volume across multiple sessions rather than one long day if you can.' },
+  { group: 'Shoulders (all heads), Glutes', freq: '2-3x / week', sets: '10-16 sets/week', note: 'Side and rear delts especially respond well to more frequent, lighter exposure.' },
+  { group: 'Biceps, Triceps', freq: '2x / week', sets: '10-14 sets/week', note: 'Already getting indirect work from pressing and pulling compounds - direct sets are the top-up, not the whole job.' },
+  { group: 'Calves, Forearms, Abs', freq: '2-4x / week', sets: '8-16 sets/week', note: 'Small, fast-recovering muscles - more frequency tends to beat more sets in one sitting.' },
+  { group: 'Traps, Lower Back', freq: '1-2x / week direct', sets: '6-10 sets/week', note: 'Usually taking a lot of indirect load from deadlifts, rows, and shrugs already baked into a session.' }
+];
+
+const DID_YOU_KNOW_FACTS = [
+  { text: "The triceps make up roughly two-thirds of your upper arm's mass - the biceps get the glory, but the back of the arm is doing more of the volume." },
+  { text: "Muscle doesn't get \"toned\" by high reps - what you're seeing is a combination of muscle size and lower body fat covering it. There's no separate \"toning\" mechanism." },
+  { text: "The soleus (a calf muscle) is almost entirely slow-twitch fiber, which is part of why calves are notoriously stubborn to grow with typical rep ranges." },
+  { text: "Delayed onset muscle soreness (DOMS) peaks 24-72 hours after training, not the same day - soreness the next morning is often just getting started." },
+  { text: "Your grip gives out on rows and pulldowns before your back does more often than people realize - straps aren't cheating, they're removing the weakest link." },
+  { text: "\"Muscle confusion\" isn't a real training principle - muscles adapt to progressive overload and consistent stimulus, not novelty for its own sake." },
+  { text: "The rotator cuff is four small muscles, not one - which is exactly why it's so easy to neglect and so common to injure under heavy pressing volume." },
+  { text: "Strength gains in your first few months of training come mostly from your nervous system getting better at recruiting muscle, not the muscle itself growing yet." },
+  { text: "The glutes are the single largest muscle group in the human body by cross-sectional area - bigger than the quads." },
+  { text: "Lifting explosively on the concentric (lifting) portion of a rep and controlling the eccentric (lowering) portion both matter - the eccentric is actually where a lot of the muscle-damage stimulus comes from." },
+  { text: "A pump is mostly fluid shifting into the muscle, not new muscle tissue - it feels great and may support growth, but it isn't the growth itself." },
+  { text: "The hamstrings cross two joints (hip and knee), which is why they need both hip-hinge moves (like RDLs) and knee-flexion moves (like leg curls) to be trained completely." }
+];
+function todaysDidYouKnow(){
+  // Offset from the wisdom index so the two cards don't rotate in lockstep.
+  const dayIndex = (Math.floor(Date.now() / 86400000) + 3) % DID_YOU_KNOW_FACTS.length;
+  return DID_YOU_KNOW_FACTS[dayIndex];
+}
+
+// Days since each muscle was last given any direct work - genuinely
+// actionable in a way pure volume counts aren't, since a muscle can be "in
+// target" for the week but not have been touched in 6 days.
+function computeRecoveryClock(sets){
+  const lastTrained = {};
+  sets.forEach(s => {
+    if (!s._muscle) return;
+    if (!lastTrained[s._muscle] || s.logged_at > lastTrained[s._muscle]) lastTrained[s._muscle] = s.logged_at;
+  });
+  const today = new Date(); today.setHours(0,0,0,0);
+  return BALANCE_MUSCLES.map(m => {
+    if (!lastTrained[m]) return { muscle: m, days: null };
+    const last = new Date(lastTrained[m] + 'T00:00:00');
+    const days = Math.round((today - last) / 86400000);
+    return { muscle: m, days };
+  }).sort((a,b) => {
+    if (a.days === null) return 1;
+    if (b.days === null) return -1;
+    return b.days - a.days;
+  });
+}
+
+function computeComebackAlert(recoveryClock){
+  const candidate = recoveryClock.find(r => r.days !== null && r.days >= 7);
+  return candidate || null;
+}
+
+// A single composite 0-100 score blending coverage, target-zone adherence,
+// and consistency - not a scientific metric, just a fun single number to
+// watch trend upward, the way a game might show an overall rating.
+function computeConsistencyScore(tally, streak){
+  const trained = BALANCE_MUSCLES.filter(m => tally[m] > 0).length;
+  const inTarget = BALANCE_MUSCLES.filter(m => tally[m] >= BALANCE_TARGET_MIN && tally[m] <= BALANCE_TARGET_MAX).length;
+  const coverageScore = (trained / BALANCE_MUSCLES.length) * 40;
+  const targetScore = (inTarget / BALANCE_MUSCLES.length) * 40;
+  const streakScore = Math.min(1, streak.current / 5) * 20;
+  return Math.round(coverageScore + targetScore + streakScore);
+}
+
+function computeExerciseVariety(sets){
+  const names = new Set(sets.filter(s => s._name).map(s => s._name));
+  return names.size;
+}
+
+function computeBusiestDay(sets){
+  const byDow = [0,0,0,0,0,0,0]; // Sun..Sat to match native getDay()
+  sets.forEach(s => {
+    const d = new Date(s.logged_at + 'T00:00:00');
+    byDow[d.getDay()] += (s.num_sets || 1);
+  });
+  const dowNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  let bestIdx = 0;
+  byDow.forEach((v, i) => { if (v > byDow[bestIdx]) bestIdx = i; });
+  if (byDow[bestIdx] === 0) return null;
+  return { day: dowNames[bestIdx], sets: byDow[bestIdx] };
+}
+
+function consistencyScoreRingSvg(score){
+  const size = 84, cx = size/2, cy = size/2, r = 34;
+  const circumference = 2 * Math.PI * r;
+  const offset = circumference * (1 - score/100);
+  const color = score >= 70 ? '#8FBF7A' : score >= 40 ? '#E8A33D' : '#E8492A';
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
+    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#2A2C31" stroke-width="7"/>
+    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${color}" stroke-width="7" stroke-linecap="round"
+      stroke-dasharray="${circumference.toFixed(1)}" stroke-dashoffset="${offset.toFixed(1)}"
+      transform="rotate(-90 ${cx} ${cy})"/>
+    <text x="${cx}" y="${cy+2}" font-size="20" font-family="'Bebas Neue',sans-serif" fill="var(--chalk)" text-anchor="middle" dominant-baseline="middle">${score}</text>
+  </svg>`;
+}
+
 // A small, honest badge set - each one only appears if it's actually earned
 // by the real numbers, not decorative filler.
 function computeAchievementBadges(tally, streak, lifetimeStats, recentPRs, repRanges){
@@ -7832,6 +7936,7 @@ async function renderBalance(mode, view){
 
   let weeks = null, lifetimeStats = null, recentPRs = [], repRanges = null;
   let streak = null, heatmapDays = null, oneRms = [], biggestGainer = null, leaderboard = null, badges = [], mostLogged = null;
+  let recoveryClock = null, comebackAlert = null, consistencyScore = null, exerciseVariety = null, busiestDay = null;
   if (extended){
     weeks = bucketSetsByWeek(extended.sets, 8);
     lifetimeStats = computeLifetimeStats(extended.sets);
@@ -7843,11 +7948,77 @@ async function renderBalance(mode, view){
     biggestGainer = computeBiggestGainer(extended.sets);
     mostLogged = computeMostLoggedExercise(extended.sets);
     badges = computeAchievementBadges(tally, streak, lifetimeStats, recentPRs, repRanges);
+    recoveryClock = computeRecoveryClock(extended.sets);
+    comebackAlert = computeComebackAlert(recoveryClock);
+    consistencyScore = computeConsistencyScore(tally, streak);
+    exerciseVariety = computeExerciseVariety(extended.sets);
+    busiestDay = computeBusiestDay(extended.sets);
   }
   leaderboard = computeMuscleLeaderboard(tally);
   const wisdom = todaysGymWisdom();
+  const didYouKnow = todaysDidYouKnow();
   const existingLibraryNames = mode === 'logged' && extended ? extended.exercises.map(e => e.name) : [];
   const recommendations = await computeMuscleRecommendations(tally, existingLibraryNames);
+
+  const didYouKnowHtml = `
+    <div style="margin:0 18px 14px 18px; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px;">
+      <div style="font-size:10px; letter-spacing:0.5px; color:#7BA6C9; text-transform:uppercase; margin-bottom:6px;">🧠 Did You Know</div>
+      <div style="font-size:13px; color:var(--chalk); line-height:1.45;">${didYouKnow.text}</div>
+    </div>`;
+
+  const scoreAndVarietyHtml = (consistencyScore !== null) ? `
+    <div style="display:flex; gap:10px; margin:0 18px 14px 18px; align-items:stretch;">
+      <div style="background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px; display:flex; align-items:center; gap:12px; flex:1;">
+        ${consistencyScoreRingSvg(consistencyScore)}
+        <div>
+          <div style="font-size:11px; color:var(--slate); text-transform:uppercase; letter-spacing:0.3px;">Consistency Score</div>
+          <div style="font-size:11px; color:var(--slate); margin-top:2px;">Coverage + target zone + streak</div>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex; gap:8px; margin:0 18px 14px 18px;">
+      <div style="flex:1; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 10px; text-align:center;">
+        <div style="font-family:'Bebas Neue',sans-serif; font-size:20px; color:var(--chalk);">${exerciseVariety}</div>
+        <div style="font-size:9.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.3px; margin-top:2px;">Exercises Used</div>
+      </div>
+      ${busiestDay ? `<div style="flex:1; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 10px; text-align:center;">
+        <div style="font-family:'Bebas Neue',sans-serif; font-size:20px; color:var(--chalk);">${busiestDay.day.slice(0,3)}</div>
+        <div style="font-size:9.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.3px; margin-top:2px;">Busiest Day</div>
+      </div>` : ''}
+    </div>` : '';
+
+  const comebackHtml = comebackAlert ? `
+    <div style="margin:0 18px 14px 18px; background:linear-gradient(135deg, rgba(232,163,61,0.14), rgba(232,163,61,0.02)); border:1px solid rgba(232,163,61,0.35); border-radius:12px; padding:14px 16px; cursor:pointer;" class="bal-row" data-muscle="${comebackAlert.muscle.charAt(0).toUpperCase()+comebackAlert.muscle.slice(1)}">
+      <div style="font-size:10px; letter-spacing:0.5px; color:#E8A33D; text-transform:uppercase; margin-bottom:4px;">⏰ Comeback Alert</div>
+      <div style="font-size:13px; color:var(--chalk); line-height:1.4;">${BALANCE_LABELS[comebackAlert.muscle]} hasn't been trained in ${comebackAlert.days} days - due for a comeback.</div>
+    </div>` : '';
+
+  const recoveryClockHtml = recoveryClock ? `
+    <div class="section-label">Recovery Clock</div>
+    <div style="padding:0 18px 14px 18px; display:flex; flex-direction:column; gap:6px;">
+      ${recoveryClock.filter(r => r.days !== null).slice(0, 5).map(r => `
+        <div style="display:flex; justify-content:space-between; align-items:center; font-size:12.5px; padding:4px 0;">
+          <div style="color:var(--chalk);">${BALANCE_LABELS[r.muscle]}</div>
+          <div style="color:${r.days >= 7 ? '#E8A33D' : 'var(--slate)'};">${r.days === 0 ? 'Today' : r.days === 1 ? 'Yesterday' : `${r.days} days ago`}</div>
+        </div>
+      `).join('')}
+    </div>` : '';
+
+  const freqGuideHtml = `
+    <div class="section-label">How Often Should You Train Each Muscle?</div>
+    <div style="padding:0 18px 14px 18px; display:flex; flex-direction:column; gap:8px;">
+      ${TRAINING_FREQUENCY_GUIDE.map(g => `
+        <div style="background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:11px 13px;">
+          <div style="display:flex; justify-content:space-between; align-items:baseline;">
+            <div style="font-size:12.5px; color:var(--chalk); font-weight:600;">${g.group}</div>
+            <div style="font-size:11px; color:var(--flame); white-space:nowrap; margin-left:8px;">${g.freq}</div>
+          </div>
+          <div style="font-size:10.5px; color:var(--slate); margin-top:2px;">${g.sets}</div>
+          <div style="font-size:11px; color:var(--slate); margin-top:4px; line-height:1.35;">${g.note}</div>
+        </div>
+      `).join('')}
+      <div class="small" style="color:var(--slate); margin-top:2px;">General guidance for most lifters, not personalized advice - your ideal frequency depends on total volume, recovery, and experience level too.</div>
+    </div>`;
 
   const wisdomHtml = `
     <div style="margin:0 18px 14px 18px; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px;">
@@ -8016,9 +8187,12 @@ async function renderBalance(mode, view){
         </div>
         ${balanceHeroHtml(tally, prevTally, mode)}
         ${badgesHtml}
+        ${scoreAndVarietyHtml}
+        ${comebackHtml}
         ${heatmapSectionHtml}
         ${lifetimeHtml}
         ${wisdomHtml}
+        ${didYouKnowHtml}
         ${trendChartHtml}
         ${balanceInsightsHtml(insights)}
         ${prsHtml}
@@ -8026,8 +8200,10 @@ async function renderBalance(mode, view){
         ${oneRmHtml}
         ${mostLoggedHtml}
         ${leaderboardHtml}
+        ${recoveryClockHtml}
         ${repRangeHtml}
         ${recsHtml}
+        ${freqGuideHtml}
         <div class="seg" style="margin:14px 18px 10px 18px; display:flex; border:1px solid var(--line);">
           <div class="bal-view-chip ${view==='muscle'?'active':''}" data-view="muscle" style="flex:1; text-align:center; padding:6px 0; font-family:'Bebas Neue',sans-serif; font-size:11px; letter-spacing:0.5px; color:${view==='muscle'?'var(--ink)':'var(--slate)'}; background:${view==='muscle'?'var(--flame)':'transparent'};">MUSCLE GROUPS</div>
           <div class="bal-view-chip ${view==='ppl'?'active':''}" data-view="ppl" style="flex:1; text-align:center; padding:6px 0; font-family:'Bebas Neue',sans-serif; font-size:11px; letter-spacing:0.5px; color:${view==='ppl'?'var(--ink)':'var(--slate)'}; background:${view==='ppl'?'var(--flame)':'transparent'};">PUSH / PULL / LEGS</div>
