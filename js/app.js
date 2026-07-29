@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.117';
+const APP_VERSION = 'Beta 5.118';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -7413,11 +7413,16 @@ function openSwapDaysForm(){
     overlay.querySelector('#confirmSwapBtn').onclick = async () => {
       const btn = overlay.querySelector('#confirmSwapBtn');
       btn.disabled = true; btn.textContent = 'Swapping…';
-      await performDaySwap(dayA, dayB);
-      overlay.remove();
-      state.selectedDay = dayB;
-      state.currentTab = 'track';
-      renderTrack();
+      try {
+        await performDaySwap(dayA, dayB);
+        overlay.remove();
+        state.selectedDay = dayB;
+        state.currentTab = 'track';
+        renderTrack();
+      } catch(e){
+        alert(e.message);
+        btn.disabled = false; btn.textContent = 'Swap These Days';
+      }
     };
   }
 
@@ -7437,19 +7442,57 @@ async function performDaySwap(dayA, dayB){
   const { data: userData } = await supabaseClient.auth.getUser();
   const uid = userData.user.id;
   const useMaster = getUseExerciseMasterFlag();
-  const table = useMaster ? 'exercise_days' : 'exercises';
+  const failures = [];
 
-  // Capture exact row IDs first, since updating by weekday-match would lose track of
-  // which rows belonged to which day once the first update runs.
-  const [resA, resB] = await Promise.all([
-    supabaseClient.from(table).select('id').eq('user_id', uid).eq('weekday', dayA),
-    supabaseClient.from(table).select('id').eq('user_id', uid).eq('weekday', dayB)
-  ]);
-  const idsA = (resA.data || []).map(r => r.id);
-  const idsB = (resB.data || []).map(r => r.id);
+  if (useMaster){
+    // Fetch every exercise_days row for both days, keyed by exercise_master_id
+    // so an exercise that happens to exist on both days already can be
+    // detected and handled instead of colliding with itself mid-swap.
+    const [resA, resB] = await Promise.all([
+      supabaseClient.from('exercise_days').select('id, exercise_master_id').eq('user_id', uid).eq('weekday', dayA),
+      supabaseClient.from('exercise_days').select('id, exercise_master_id').eq('user_id', uid).eq('weekday', dayB)
+    ]);
+    const rowsA = resA.data || [];
+    const rowsB = resB.data || [];
+    const masterIdsOnB = new Set(rowsB.map(r => r.exercise_master_id));
+    const masterIdsOnA = new Set(rowsA.map(r => r.exercise_master_id));
 
-  if (idsA.length > 0) await supabaseClient.from(table).update({ weekday: dayB }).in('id', idsA);
-  if (idsB.length > 0) await supabaseClient.from(table).update({ weekday: dayA }).in('id', idsB);
+    for (const row of rowsA){
+      if (masterIdsOnB.has(row.exercise_master_id)){
+        // Already exists on the target day - this link is now redundant, not moved.
+        await supabaseClient.from('exercise_days').delete().eq('id', row.id);
+        continue;
+      }
+      const { data, error } = await supabaseClient.from('exercise_days').update({ weekday: dayB }).eq('id', row.id).select();
+      if (error || !data || !data.length) failures.push(`an exercise moving from ${DAY_NAMES[dayA]} to ${DAY_NAMES[dayB]}: ${error ? error.message : 'update matched zero rows'}`);
+    }
+    for (const row of rowsB){
+      if (masterIdsOnA.has(row.exercise_master_id)){
+        await supabaseClient.from('exercise_days').delete().eq('id', row.id);
+        continue;
+      }
+      const { data, error } = await supabaseClient.from('exercise_days').update({ weekday: dayA }).eq('id', row.id).select();
+      if (error || !data || !data.length) failures.push(`an exercise moving from ${DAY_NAMES[dayB]} to ${DAY_NAMES[dayA]}: ${error ? error.message : 'update matched zero rows'}`);
+    }
+  } else {
+    // Old structure: rows are day-specific copies, so there's no shared-identity
+    // collision risk the way there is under exercise_master - a plain bulk
+    // update is safe, but still verified.
+    const [resA, resB] = await Promise.all([
+      supabaseClient.from('exercises').select('id').eq('user_id', uid).eq('weekday', dayA),
+      supabaseClient.from('exercises').select('id').eq('user_id', uid).eq('weekday', dayB)
+    ]);
+    const idsA = (resA.data || []).map(r => r.id);
+    const idsB = (resB.data || []).map(r => r.id);
+    if (idsA.length > 0){
+      const { data, error } = await supabaseClient.from('exercises').update({ weekday: dayB }).in('id', idsA).select();
+      if (error || !data || data.length !== idsA.length) failures.push(`exercises moving from ${DAY_NAMES[dayA]} to ${DAY_NAMES[dayB]}: ${error ? error.message : 'not all rows updated'}`);
+    }
+    if (idsB.length > 0){
+      const { data, error } = await supabaseClient.from('exercises').update({ weekday: dayA }).in('id', idsB).select();
+      if (error || !data || data.length !== idsB.length) failures.push(`exercises moving from ${DAY_NAMES[dayB]} to ${DAY_NAMES[dayA]}: ${error ? error.message : 'not all rows updated'}`);
+    }
+  }
 
   const [dtA, dtB] = await Promise.all([
     supabaseClient.from('day_types').select('label').eq('user_id', uid).eq('weekday', dayA).maybeSingle(),
@@ -7459,6 +7502,10 @@ async function performDaySwap(dayA, dayB){
   const labelB = dtB.data ? dtB.data.label : DAY_TYPES[dayB];
   await supabaseClient.from('day_types').upsert({ user_id: uid, weekday: dayA, label: labelB }, { onConflict: 'user_id,weekday' });
   await supabaseClient.from('day_types').upsert({ user_id: uid, weekday: dayB, label: labelA }, { onConflict: 'user_id,weekday' });
+
+  if (failures.length){
+    throw new Error(`The day labels swapped, but some exercises did not:\n${failures.join('\n')}`);
+  }
 }
 
 async function renderMe(){
