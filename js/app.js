@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.113';
+const APP_VERSION = 'Beta 5.114';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -2771,24 +2771,47 @@ const EQUIPMENT_TO_CATEGORY = {
   bands: 'Cable', 'e-z curl bar': 'Free Weights - No Bench', 'exercise ball': 'Other',
   'foam roll': 'Other', 'medicine ball': 'Other', other: 'Other'
 };
-async function getSuggestedExercises(dayTypeLabel, existingLibraryExercises){
+async function getSuggestedExercises(dayTypeLabel, fullLibrary, todayNames){
   const targets = getTargetMusclesForDayType(dayTypeLabel);
   if (!targets.length) return [];
   const db = await loadExerciseDB();
   if (!db) return [];
-  const existingNames = existingLibraryExercises.map(e => e.name);
+  const libraryNames = fullLibrary.map(e => e.name);
+  const today = todayNames || new Set();
+
+  // From the user's own library: things they've used before that fit today's
+  // focus but aren't already sitting on today's list. Matched against the
+  // database purely to read off primary muscles for the target-muscle filter.
+  const libraryCandidates = fullLibrary
+    .filter(ex => !today.has(ex.name.toLowerCase()))
+    .map(ex => ({ ex, match: matchExercise(ex.name, db) }))
+    .filter(({ match }) => match && (match.primaryMuscles || []).some(m => targets.includes(m)));
+  const dedupedLibrary = [];
+  const seenLibraryNames = new Set();
+  libraryCandidates.sort(() => Math.random() - 0.5).forEach(({ ex, match }) => {
+    const key = ex.name.toLowerCase();
+    if (seenLibraryNames.has(key)) return;
+    seenLibraryNames.add(key);
+    dedupedLibrary.push({ ...match, name: ex.name, source: 'library' });
+  });
+  const libraryPicks = dedupedLibrary.slice(0, 4);
+
+  // From the public database: genuinely new to the user, not already
+  // anywhere in their library (not just today).
   const candidates = db.filter(e => (e.primaryMuscles || []).some(m => targets.includes(m)));
-  const fresh = candidates.filter(cand => !existingNames.some(name => namesAreSimilar(name, cand.name)));
+  const fresh = candidates.filter(cand => !libraryNames.some(name => namesAreSimilar(name, cand.name)));
   const starred = fresh.filter(e => POPULAR_EXERCISES.has(e.name)).sort(() => Math.random() - 0.5);
   const unstarred = fresh.filter(e => !POPULAR_EXERCISES.has(e.name)).sort(() => Math.random() - 0.5);
-  // Prioritized, not exclusive: fill up to 4 of the 6 slots from starred exercises
+  // Prioritized, not exclusive: fill up to half the slots from starred exercises
   // when available, then top up the rest from whatever's left (unstarred first,
   // spilling into any remaining starred if the pool is thin) - so familiar staples
   // surface more often without every suggestion always being the same handful.
-  const picked = starred.slice(0, 4);
-  const rest = unstarred.concat(starred.slice(4)).sort(() => Math.random() - 0.5);
-  picked.push(...rest.slice(0, 6 - picked.length));
-  return picked.sort(() => Math.random() - 0.5);
+  const picked = starred.slice(0, 2);
+  const rest = unstarred.concat(starred.slice(2)).sort(() => Math.random() - 0.5);
+  picked.push(...rest.slice(0, 4 - picked.length));
+  const databasePicks = picked.sort(() => Math.random() - 0.5).map(e => ({ ...e, source: 'database' }));
+
+  return [...libraryPicks, ...databasePicks];
 }
 
 async function openSuggestionPreview(name, category, navList){
@@ -2902,7 +2925,8 @@ async function renderTrack(){
       const { data: userData } = await supabaseClient.auth.getUser();
       const compatEx = await fetchAllExercisesCompat(userData.user.id);
       const fullLibrary = compatEx.length ? compatEx.map(ex => ({ name: ex.name })) : state.exercises;
-      suggestions = await getSuggestedExercises(dayTypeLabel, fullLibrary);
+      const todayNames = new Set(state.exercises.map(ex => ex.name.toLowerCase()));
+      suggestions = await getSuggestedExercises(dayTypeLabel, fullLibrary, todayNames);
       state.suggestionsCache[cacheKey] = suggestions;
     }
   }
@@ -2936,6 +2960,18 @@ async function renderTrack(){
   let suggestionsHtml = '';
   if (suggestions.length > 0){
     const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
+    const libraryItems = suggestions.filter(s => s.source === 'library');
+    const databaseItems = suggestions.filter(s => s.source !== 'library');
+    const renderSuggestionRow = (s) => {
+      const cat = EQUIPMENT_TO_CATEGORY[s.equipment] || 'Other';
+      const muscleLabel = s.primaryMuscles && s.primaryMuscles[0] ? cap(s.primaryMuscles[0]) : '';
+      const star = POPULAR_EXERCISES.has(s.name)
+        ? `<span title="Popular staple" style="color:#F0C542; margin-left:5px;">★</span>` : '';
+      return `<div class="pick-row suggestion-add" data-name="${s.name}" data-cat="${cat}">
+        <div><div class="ex-name">${s.name}${star}</div><div class="small" style="color:var(--slate);">${muscleLabel}</div></div>
+        <div class="chev" style="color:var(--flame); font-size:20px;">+</div>
+      </div>`;
+    };
     suggestionsHtml = `<div class="category" style="display:flex; align-items:center; justify-content:space-between;">
         <div>Try Something New for ${dayTypeLabel}</div>
         <div style="display:flex; gap:2px;">
@@ -2943,17 +2979,8 @@ async function renderTrack(){
           <button id="seeAllSuggestions" style="background:none; width:38px; height:38px; display:flex; align-items:center; justify-content:center; border-radius:8px;"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="var(--flame)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
         </div>
       </div>
-      <div class="small" style="padding:0 18px 8px 18px; color:var(--slate);">Not in your library yet — pulled from a public exercise database based on today's focus.</div>
-      ${suggestions.map(s => {
-        const cat = EQUIPMENT_TO_CATEGORY[s.equipment] || 'Other';
-        const muscleLabel = s.primaryMuscles && s.primaryMuscles[0] ? cap(s.primaryMuscles[0]) : '';
-        const star = POPULAR_EXERCISES.has(s.name)
-          ? `<span title="Popular staple" style="color:#F0C542; margin-left:5px;">★</span>` : '';
-        return `<div class="pick-row suggestion-add" data-name="${s.name}" data-cat="${cat}">
-          <div><div class="ex-name">${s.name}${star}</div><div class="small" style="color:var(--slate);">${muscleLabel}</div></div>
-          <div class="chev" style="color:var(--flame); font-size:20px;">+</div>
-        </div>`;
-      }).join('')}`;
+      ${libraryItems.length ? `<div class="small" style="padding:0 18px 8px 18px; color:var(--slate);">From your own library - used before, just not on ${DAY_LABELS[state.selectedDay]}.</div>${libraryItems.map(renderSuggestionRow).join('')}` : ''}
+      ${databaseItems.length ? `<div class="small" style="padding:${libraryItems.length ? '10px' : '0'} 18px 8px 18px; color:var(--slate);">Not in your library yet — pulled from a public exercise database based on today's focus.</div>${databaseItems.map(renderSuggestionRow).join('')}` : ''}`;
   }
 
   app.innerHTML = `
