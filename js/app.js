@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.115';
+const APP_VERSION = 'Beta 5.116';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -3905,6 +3905,11 @@ async function openPicker(initialTab, jumpToMuscle){
 
   const { data: userData } = await supabaseClient.auth.getUser();
   const all = await fetchAllExercisesCompat(userData.user.id);
+  // Matches Track's own location resolution - an exercise linked to today but
+  // hidden from Track's display because it's tagged for a different location
+  // shouldn't claim "on [Day]" here either, or the badge contradicts what's
+  // actually visible on the day itself.
+  const currentLocationId = getCurrentLocationId() || getDefaultLocationId();
 
   // Multi-select state, shared across both tabs since a long-press should be
   // able to start a selection that then gets confirmed with one action,
@@ -3956,9 +3961,10 @@ async function openPicker(initialTab, jumpToMuscle){
         groupExercisesByChoice(deduped, groupBy, splitMode),
         loadExerciseDB()
       ]);
-      const todayNames = new Set(all.filter(ex => ex.weekday === state.selectedDay).map(ex => ex.name.toLowerCase()));
+      const isOnDayHere = ex => ex.weekday === state.selectedDay && isAvailableAtLocation(ex, currentLocationId);
+      const todayNames = new Set(all.filter(isOnDayHere).map(ex => ex.name.toLowerCase()));
       const todaySignatures = {}; // signature -> exercise name, for exercises already on today
-      all.filter(ex => ex.weekday === state.selectedDay).forEach(ex => {
+      all.filter(isOnDayHere).forEach(ex => {
         const m = matchExercise(ex.name, db);
         const muscle = m && m.primaryMuscles && m.primaryMuscles[0];
         const mech = classifyMechanic(m);
@@ -4186,9 +4192,10 @@ async function openPicker(initialTab, jumpToMuscle){
       let html = '';
       const presentKeys = orderedKeys.filter(k => (grouped[k]||[]).length);
       const flatOrder = []; // display order across every visible category, for swipe nav
-      const todayNames = new Set(all.filter(ex => ex.weekday === state.selectedDay).map(ex => ex.name.toLowerCase()));
+      const isOnDayHere = ex => ex.weekday === state.selectedDay && isAvailableAtLocation(ex, currentLocationId);
+      const todayNames = new Set(all.filter(isOnDayHere).map(ex => ex.name.toLowerCase()));
       const todaySignatures = {};
-      all.filter(ex => ex.weekday === state.selectedDay).forEach(ex => {
+      all.filter(isOnDayHere).forEach(ex => {
         const m = matchExercise(ex.name, db);
         const muscle = m && m.primaryMuscles && m.primaryMuscles[0];
         const mech = classifyMechanic(m);
