@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.114';
+const APP_VERSION = 'Beta 5.115';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1577,6 +1577,10 @@ function openPlanSubPage(){
         <div><div style="color:#E8492A;">Clear a Day</div><div class="small" style="color:var(--slate); margin-top:2px;">Remove every exercise from one day - history is kept</div></div>
         <div class="chev" style="margin-top:2px;">›</div>
       </div>
+      <div class="me-item" id="subMergeDupesBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+        <div><div style="color:#E8492A;">Merge Duplicates</div><div class="small" style="color:var(--slate); margin-top:2px;">Fix exercises that ended up as separate records with the same name</div></div>
+        <div class="chev" style="margin-top:2px;">›</div>
+      </div>
       ${localStorage.getItem('zealift_reorg_snapshot') ? `<div class="me-item" id="subRevertReorgBtn"><div style="color:#E8A33D;">Revert Last Reorganization</div><div class="chev">›</div></div>` : ''}
     </div>`;
   document.body.appendChild(overlay);
@@ -1588,6 +1592,7 @@ function openPlanSubPage(){
   overlay.querySelector('#subRebuildToolsBtn').onclick = openRebuildToolsSubPage;
   overlay.querySelector('#subWipeAltsBtn').onclick = openWipeAltGroupsScreen;
   overlay.querySelector('#subClearDayBtn').onclick = openClearDayScreen;
+  overlay.querySelector('#subMergeDupesBtn').onclick = openMergeDuplicateExercisesScreen;
   const subRevertBtn = overlay.querySelector('#subRevertReorgBtn');
   if (subRevertBtn) subRevertBtn.onclick = revertLastReorganization;
 }
@@ -2232,6 +2237,104 @@ async function openRetagLocationFromNotesScreen(){
     alert(`Retagged ${updated} sets by location.`);
     if (state.currentTab === 'track') renderTrack();
   });
+}
+
+async function openMergeDuplicateExercisesScreen(){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeMergeDupes">✕</button><h1>Merge Duplicates</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll">
+      <div class="small" style="padding:8px 18px 16px 18px; color:var(--slate);">Scans for exercises that ended up as separate records sharing the same name - a real cause of wrong "on day" badges and unnecessary slowdown. History from every duplicate is kept and merged onto whichever one survives; nothing is lost.</div>
+      <div id="mergeDupesBody" style="padding:0 18px;"><div class="small" style="color:var(--slate);">Scanning…</div></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeMergeDupes').onclick = () => overlay.remove();
+
+  const { data: userData } = await supabaseClient.auth.getUser();
+  const uid = userData.user.id;
+  const body = overlay.querySelector('#mergeDupesBody');
+
+  if (!getUseExerciseMasterFlag()){
+    body.innerHTML = `<div class="empty-state" style="padding:24px 0;">This only applies to the new exercise structure, which isn't currently active.</div>`;
+    return;
+  }
+
+  const [mastersResult, daysResult] = await Promise.all([
+    withTimeout(supabaseClient.from('exercise_master').select('id, name, created_at').eq('user_id', uid), 15000),
+    withTimeout(supabaseClient.from('exercise_days').select('id, exercise_master_id, weekday').eq('user_id', uid), 15000)
+  ]);
+  if (mastersResult.__timeout || mastersResult.error){
+    body.innerHTML = `<div class="empty-state" style="padding:24px 0;">Could not read your exercises. Try again.</div>`;
+    return;
+  }
+  const masters = mastersResult.data || [];
+  const days = daysResult.__timeout || daysResult.error ? [] : (daysResult.data || []);
+  const daysByMaster = {};
+  days.forEach(d => { (daysByMaster[d.exercise_master_id] = daysByMaster[d.exercise_master_id] || []).push(d); });
+
+  const byName = {};
+  masters.forEach(m => {
+    const key = m.name.toLowerCase();
+    (byName[key] = byName[key] || []).push(m);
+  });
+  const dupeGroups = Object.values(byName).filter(group => group.length > 1);
+
+  if (!dupeGroups.length){
+    body.innerHTML = `<div class="empty-state" style="padding:24px 0;">No duplicates found - your exercise library is clean.</div>`;
+    return;
+  }
+
+  body.innerHTML = `
+    <div style="margin-bottom:14px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px;">
+      <div class="ex-name" style="font-size:13px; margin-bottom:8px;">${dupeGroups.length} exercise${dupeGroups.length===1?'':'s'} have duplicate records</div>
+      ${dupeGroups.map(g => `<div class="small" style="color:var(--slate); padding:2px 0;">• ${g[0].name} (${g.length} copies)</div>`).join('')}
+    </div>
+    <button class="save-btn" id="confirmMergeDupesBtn" style="margin:0 0 20px 0;">Merge Duplicates</button>
+  `;
+  body.querySelector('#confirmMergeDupesBtn').onclick = () => {
+    showConfirmDialog(`Merges ${dupeGroups.length} set${dupeGroups.length===1?'':'s'} of duplicate exercises. All history is kept and combined onto one record per exercise.`, async () => {
+      await withButtonLoading(body.querySelector('#confirmMergeDupesBtn'), 'Merging…', async () => {
+        let mergedCount = 0;
+        const errors = [];
+        for (const group of dupeGroups){
+          // Survivor: whichever copy has the most day-placements, tiebroken by
+          // being first in the list (stable, not meaningful beyond determinism).
+          const survivor = group.slice().sort((a, b) => (daysByMaster[b.id]||[]).length - (daysByMaster[a.id]||[]).length)[0];
+          const survivorDayweekdays = new Set((daysByMaster[survivor.id]||[]).map(d => d.weekday));
+          const duplicates = group.filter(m => m.id !== survivor.id);
+          for (const dup of duplicates){
+            try {
+              // Reassign this duplicate's logged sets onto the survivor - this is
+              // the actual history, so it has to move, not just get dropped.
+              await supabaseClient.from('sets').update({ exercise_master_id: survivor.id }).eq('exercise_master_id', dup.id);
+              // Reassign day-links, but only where the survivor doesn't already
+              // have that day (would hit the unique constraint otherwise) -
+              // in that case the duplicate's link is just deleted instead.
+              const dupDays = daysByMaster[dup.id] || [];
+              for (const dayLink of dupDays){
+                if (survivorDayweekdays.has(dayLink.weekday)){
+                  await supabaseClient.from('exercise_days').delete().eq('id', dayLink.id);
+                } else {
+                  await supabaseClient.from('exercise_days').update({ exercise_master_id: survivor.id }).eq('id', dayLink.id);
+                  survivorDayweekdays.add(dayLink.weekday);
+                }
+              }
+              await supabaseClient.from('exercise_master').delete().eq('id', dup.id);
+              mergedCount++;
+            } catch(e){
+              errors.push(`${dup.name}: ${e.message}`);
+            }
+          }
+        }
+        overlay.remove();
+        if (state.currentTab === 'track') renderTrack();
+        alert(errors.length
+          ? `Merged ${mergedCount} duplicate record${mergedCount===1?'':'s'}. ${errors.length} failed:\n${errors.join('\n')}`
+          : `Merged ${mergedCount} duplicate record${mergedCount===1?'':'s'} across ${dupeGroups.length} exercise${dupeGroups.length===1?'':'s'}.`);
+      });
+    }, { title: 'Merge Duplicate Exercises?', confirmLabel: 'Merge' });
+  };
 }
 
 async function openWipeAltGroupsScreen(){
