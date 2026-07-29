@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.120';
+const APP_VERSION = 'Beta 5.121';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -7269,6 +7269,172 @@ function computeRepRangeBreakdown(sets){
   return buckets;
 }
 
+// Generic gym-culture wisdom, deliberately NOT attributed to any real named
+// person - fitness YouTube has a very recognizable in-joke voice (the
+// deadpan "just add weight," the aggressively literal cues, the "bro
+// science" callouts) without needing to put fabricated words in a real
+// creator's mouth. One rotates in per visit, seeded by the day so it's
+// stable across a single session instead of jumping around on every render.
+const GYM_WISDOM = [
+  { text: "The number one rule of progressive overload: the weight goes up, or you find a way to make it go up.", tag: "Every lifting channel, every video" },
+  { text: "Your workout doesn't start when you pick up the weight. It starts when you stop scrolling between sets.", tag: "Gym culture, probably" },
+  { text: "\u201cIt's not about the weight, it's about the tension\u201d - said right before someone loads four more plates on.", tag: "Gym bro paradox" },
+  { text: "Consistency beats a perfect program you quit after two weeks.", tag: "Every coach, eventually" },
+  { text: "If the last rep looked exactly like the first rep, you left reps on the table.", tag: "Form-check comment section" },
+  { text: "Nobody has ever regretted a warm-up set. Several people have regretted skipping one.", tag: "Gym wisdom" },
+  { text: "\u201cJust one more set\u201d has ended more workouts productively than it has ruined them. Usually.", tag: "Anecdotal, but confidently stated" },
+  { text: "Progressive overload doesn't care about your feelings. Log the number, beat the number.", tag: "Spreadsheet enjoyers" },
+  { text: "The best rep range is the one you'll actually do consistently for the next six months.", tag: "Long-game lifters" },
+  { text: "Your legs will forgive a missed arm day. They will not forgive a missed leg day.", tag: "Universal gym law" },
+  { text: "A PR you can't replicate next week wasn't really a PR - it was a stunt.", tag: "Strength coaches, unanimously" },
+  { text: "Sleep is a supplement. It's just the one nobody wants to buy because it's free.", tag: "Recovery science, paraphrased" }
+];
+function todaysGymWisdom(){
+  const dayIndex = Math.floor(Date.now() / 86400000) % GYM_WISDOM.length;
+  return GYM_WISDOM[dayIndex];
+}
+
+// Current streak = consecutive days up to and including today or yesterday
+// (a rest day today doesn't break a streak still "in progress"). Longest
+// streak scans the whole window for the best run.
+function computeConsistencyStreak(sets){
+  const daysWithSets = new Set(sets.map(s => s.logged_at));
+  let current = 0;
+  const todayD = new Date(); todayD.setHours(0,0,0,0);
+  let cursor = new Date(todayD);
+  // If today has nothing logged yet, start counting from yesterday instead -
+  // still "today" in streak terms until the day actually ends.
+  if (!daysWithSets.has(cursor.toISOString().slice(0,10))) cursor.setDate(cursor.getDate()-1);
+  while (daysWithSets.has(cursor.toISOString().slice(0,10))){
+    current++;
+    cursor.setDate(cursor.getDate()-1);
+  }
+  const sortedDays = [...daysWithSets].sort();
+  let longest = 0, run = 0, prevDate = null;
+  sortedDays.forEach(dateStr => {
+    const d = new Date(dateStr + 'T00:00:00');
+    if (prevDate && (d - prevDate) === 86400000) run++;
+    else run = 1;
+    longest = Math.max(longest, run);
+    prevDate = d;
+  });
+  return { current, longest };
+}
+
+// GitHub-style activity grid: one cell per day over the window, intensity by
+// set count that day. Returned Monday-first, oldest to newest.
+function computeActivityHeatmap(sets, weeksBack){
+  const byDay = {};
+  sets.forEach(s => { byDay[s.logged_at] = (byDay[s.logged_at] || 0) + (s.num_sets || 1); });
+  const days = [];
+  const now = new Date(); now.setHours(0,0,0,0);
+  const dayOfWeek = (now.getDay() + 6) % 7;
+  const thisMonday = new Date(now); thisMonday.setDate(now.getDate() - dayOfWeek);
+  const totalDays = weeksBack * 7;
+  for (let i = totalDays - 1; i >= 0; i--){
+    const d = new Date(thisMonday); d.setDate(thisMonday.getDate() + dayOfWeek - i);
+    const key = d.toISOString().slice(0,10);
+    days.push({ date: key, count: byDay[key] || 0 });
+  }
+  return days;
+}
+
+// Epley formula (weight * (1 + reps/30)) applied to each exercise's single
+// heaviest logged set, for the handful of exercises logged most often - the
+// classic "gym bro math" estimate, framed as an estimate because it is one.
+function computeEstimated1RMs(sets){
+  const byName = {};
+  sets.forEach(s => {
+    if (!s._name || typeof s.weight !== 'number' || !s.reps) return;
+    if (s.weight_unit !== 'kg' && s.weight_unit !== 'lb') return;
+    (byName[s._name] = byName[s._name] || []).push(s);
+  });
+  const results = Object.entries(byName).map(([name, entries]) => {
+    let best = null, bestEst = 0;
+    entries.forEach(s => {
+      const est = s.weight * (1 + s.reps/30);
+      if (est > bestEst){ bestEst = est; best = s; }
+    });
+    return { name, count: entries.length, oneRm: Math.round(bestEst), unit: best.weight_unit };
+  });
+  return results.sort((a,b) => b.count - a.count).slice(0, 3);
+}
+
+// Compares each exercise's earliest vs most recent logged weight within the
+// window - the single biggest mover, framed honestly as "over N weeks" since
+// two data points isn't really a trend line.
+function computeBiggestGainer(sets){
+  const byName = {};
+  sets.forEach(s => {
+    if (!s._name || typeof s.weight !== 'number') return;
+    if (s.weight_unit !== 'kg' && s.weight_unit !== 'lb') return;
+    const kgWeight = s.weight_unit === 'lb' ? convertWeight(s.weight, 'lb', 'kg') : s.weight;
+    (byName[s._name] = byName[s._name] || []).push({ kgWeight, logged_at: s.logged_at, origWeight: s.weight, origUnit: s.weight_unit });
+  });
+  let winner = null, bestGainPct = 0;
+  Object.entries(byName).forEach(([name, entries]) => {
+    if (entries.length < 2) return;
+    const sorted = entries.slice().sort((a,b) => a.logged_at.localeCompare(b.logged_at));
+    const first = sorted[0], last = sorted[sorted.length-1];
+    if (last.kgWeight <= first.kgWeight) return;
+    const gainPct = (last.kgWeight - first.kgWeight) / first.kgWeight;
+    if (gainPct > bestGainPct){
+      bestGainPct = gainPct;
+      winner = { name, from: first.origWeight, fromUnit: first.origUnit, to: last.origWeight, toUnit: last.origUnit, pct: Math.round(gainPct*100), fromDate: first.logged_at, toDate: last.logged_at };
+    }
+  });
+  return winner;
+}
+
+function computeMuscleLeaderboard(tally){
+  const sorted = BALANCE_MUSCLES.filter(m => tally[m] > 0).sort((a,b) => tally[b] - tally[a]);
+  return { top: sorted.slice(0, 3), bottom: BALANCE_MUSCLES.filter(m => tally[m] === 0).length ? [] : sorted.slice(-3).reverse() };
+}
+
+function computeMostLoggedExercise(sets){
+  const counts = {};
+  sets.forEach(s => { if (s._name) counts[s._name] = (counts[s._name]||0) + (s.num_sets||1); });
+  const entries = Object.entries(counts);
+  if (!entries.length) return null;
+  const [name, count] = entries.sort((a,b) => b[1]-a[1])[0];
+  return { name, count };
+}
+
+// A small, honest badge set - each one only appears if it's actually earned
+// by the real numbers, not decorative filler.
+function computeAchievementBadges(tally, streak, lifetimeStats, recentPRs, repRanges){
+  const badges = [];
+  if (streak.current >= 3) badges.push({ icon: '🔥', label: `${streak.current}-Day Streak` });
+  if (streak.longest >= 14) badges.push({ icon: '🗓️', label: `${streak.longest}-Day Best Streak` });
+  const inTarget = BALANCE_MUSCLES.filter(m => tally[m] >= BALANCE_TARGET_MIN && tally[m] <= BALANCE_TARGET_MAX).length;
+  if (inTarget >= 10) badges.push({ icon: '🎯', label: 'Dialed In' });
+  if (recentPRs.length >= 2) badges.push({ icon: '📈', label: 'Gains Train' });
+  if (lifetimeStats && lifetimeStats.tonnageKg >= 10000) badges.push({ icon: '🏋️', label: `${(lifetimeStats.tonnageKg/1000).toFixed(0)}t Club` });
+  if (BALANCE_MUSCLES.every(m => tally[m] > 0)) badges.push({ icon: '🌐', label: 'Full Coverage' });
+  if (repRanges && repRanges.strength > 0 && repRanges.hypertrophy > 0 && repRanges.endurance > 0) badges.push({ icon: '🎛️', label: 'Rep Range Variety' });
+  return badges;
+}
+
+function activityHeatmapHtml(days){
+  const maxCount = Math.max(1, ...days.map(d => d.count));
+  const colorFor = (count) => {
+    if (count === 0) return '#1D1F23';
+    const intensity = Math.min(1, count / maxCount);
+    if (intensity < 0.25) return 'rgba(232,73,42,0.25)';
+    if (intensity < 0.5) return 'rgba(232,73,42,0.45)';
+    if (intensity < 0.75) return 'rgba(232,73,42,0.7)';
+    return 'var(--flame)';
+  };
+  // Columns are weeks, rows are Mon-Sun, matching the familiar contribution-graph layout.
+  const weeks = [];
+  for (let i = 0; i < days.length; i += 7) weeks.push(days.slice(i, i+7));
+  const cells = weeks.map(week => `
+    <div style="display:flex; flex-direction:column; gap:3px;">
+      ${week.map(d => `<div title="${d.date}: ${d.count} sets" style="width:11px; height:11px; border-radius:2.5px; background:${colorFor(d.count)};"></div>`).join('')}
+    </div>`).join('');
+  return `<div style="display:flex; gap:3px; overflow-x:auto; padding:2px;">${cells}</div>`;
+}
+
 function weeklyVolumeTrendSvg(weeks){
   const totals = weeks.map(w => w.sets.reduce((sum, s) => sum + (s.num_sets || 1), 0));
   const maxVal = Math.max(1, ...totals);
@@ -7665,14 +7831,77 @@ async function renderBalance(mode, view){
   const insights = computeBalanceInsights(tally, prevTally, mode);
 
   let weeks = null, lifetimeStats = null, recentPRs = [], repRanges = null;
+  let streak = null, heatmapDays = null, oneRms = [], biggestGainer = null, leaderboard = null, badges = [], mostLogged = null;
   if (extended){
     weeks = bucketSetsByWeek(extended.sets, 8);
     lifetimeStats = computeLifetimeStats(extended.sets);
     recentPRs = computeRecentPRs(extended.sets);
     repRanges = computeRepRangeBreakdown(weeks[weeks.length-1].sets);
+    streak = computeConsistencyStreak(extended.sets);
+    heatmapDays = computeActivityHeatmap(extended.sets, 8);
+    oneRms = computeEstimated1RMs(extended.sets);
+    biggestGainer = computeBiggestGainer(extended.sets);
+    mostLogged = computeMostLoggedExercise(extended.sets);
+    badges = computeAchievementBadges(tally, streak, lifetimeStats, recentPRs, repRanges);
   }
+  leaderboard = computeMuscleLeaderboard(tally);
+  const wisdom = todaysGymWisdom();
   const existingLibraryNames = mode === 'logged' && extended ? extended.exercises.map(e => e.name) : [];
   const recommendations = await computeMuscleRecommendations(tally, existingLibraryNames);
+
+  const wisdomHtml = `
+    <div style="margin:0 18px 14px 18px; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px;">
+      <div style="font-size:10px; letter-spacing:0.5px; color:var(--flame); text-transform:uppercase; margin-bottom:6px;">💬 Gym Wisdom of the Day</div>
+      <div style="font-size:13px; color:var(--chalk); line-height:1.45; font-style:italic;">"${wisdom.text}"</div>
+      <div style="font-size:10.5px; color:var(--slate); margin-top:6px;">— ${wisdom.tag}</div>
+    </div>`;
+
+  const badgesHtml = badges.length ? `
+    <div style="display:flex; gap:7px; flex-wrap:wrap; padding:0 18px 14px 18px;">
+      ${badges.map(b => `<div style="background:var(--panel); border:1px solid rgba(232,73,42,0.3); border-radius:20px; padding:6px 12px; font-size:11.5px; color:var(--chalk); display:flex; align-items:center; gap:5px;"><span>${b.icon}</span>${b.label}</div>`).join('')}
+    </div>` : '';
+
+  const heatmapSectionHtml = heatmapDays ? `
+    <div class="section-label">${streak.current >= 2 ? `🔥 ${streak.current}-Day Streak` : 'Activity, Last 8 Weeks'}</div>
+    <div style="margin:0 18px 14px 18px; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px;">
+      ${activityHeatmapHtml(heatmapDays)}
+      <div style="font-size:10.5px; color:var(--slate); margin-top:8px;">Longest streak this window: ${streak.longest} day${streak.longest===1?'':'s'}</div>
+    </div>` : '';
+
+  const oneRmHtml = oneRms.length ? `
+    <div class="section-label">Estimated 1-Rep Max</div>
+    <div style="display:flex; gap:8px; padding:0 18px 14px 18px; overflow-x:auto;">
+      ${oneRms.map(r => `
+        <div style="flex-shrink:0; min-width:110px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px;">
+          <div style="font-size:11px; color:var(--slate); margin-bottom:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100px;">${r.name}</div>
+          <div style="font-family:'Bebas Neue',sans-serif; font-size:20px; color:var(--flame);">${r.oneRm}${r.unit}</div>
+          <div style="font-size:9.5px; color:var(--slate); margin-top:1px;">estimated</div>
+        </div>
+      `).join('')}
+    </div>` : '';
+
+  const gainerHtml = biggestGainer ? `
+    <div class="section-label">Biggest Gainer, 8 Weeks 🚀</div>
+    <div style="margin:0 18px 14px 18px; background:linear-gradient(135deg, rgba(143,191,122,0.12), rgba(143,191,122,0.02)); border:1px solid rgba(143,191,122,0.3); border-radius:12px; padding:14px 16px;">
+      <div style="font-size:14px; color:var(--chalk); font-weight:600;">${biggestGainer.name}</div>
+      <div style="display:flex; align-items:baseline; gap:8px; margin-top:4px;">
+        <div style="font-size:13px; color:var(--slate);">${biggestGainer.from}${biggestGainer.fromUnit} → </div>
+        <div style="font-family:'Bebas Neue',sans-serif; font-size:22px; color:var(--good);">${biggestGainer.to}${biggestGainer.toUnit}</div>
+        <div style="font-size:12px; color:var(--good);">(+${biggestGainer.pct}%)</div>
+      </div>
+    </div>` : '';
+
+  const leaderboardHtml = leaderboard.top.length ? `
+    <div class="section-label">Muscle Leaderboard</div>
+    <div style="padding:0 18px 14px 18px; display:flex; flex-direction:column; gap:6px;">
+      ${leaderboard.top.map((m, i) => `<div style="display:flex; justify-content:space-between; font-size:12.5px; padding:4px 0;"><div style="color:var(--chalk);">${['🥇','🥈','🥉'][i]} ${BALANCE_LABELS[m]}</div><div style="color:var(--slate);">${tally[m]}${mode==='logged'?' sets':' ex'}</div></div>`).join('')}
+    </div>` : '';
+
+  const mostLoggedHtml = mostLogged ? `
+    <div style="margin:0 18px 14px 18px; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px 16px; display:flex; justify-content:space-between; align-items:center;">
+      <div><div style="font-size:10px; color:var(--slate); text-transform:uppercase; letter-spacing:0.3px;">Your Go-To Lift</div><div style="font-size:13.5px; color:var(--chalk); margin-top:2px;">${mostLogged.name}</div></div>
+      <div style="font-family:'Bebas Neue',sans-serif; font-size:20px; color:var(--flame);">${mostLogged.count}×</div>
+    </div>` : '';
 
   // Lifetime stats tiles - only meaningful in logged mode, where there's real history.
   const lifetimeHtml = lifetimeStats ? `
@@ -7786,10 +8015,17 @@ async function renderBalance(mode, view){
           <div class="bal-seg-chip ${mode==='plan'?'active':''}" data-mode="plan" style="flex:1; text-align:center; padding:7px 0; font-family:'Bebas Neue',sans-serif; font-size:11.5px; letter-spacing:0.5px; color:${mode==='plan'?'var(--ink)':'var(--slate)'}; background:${mode==='plan'?'var(--flame)':'transparent'};">FULL PLAN</div>
         </div>
         ${balanceHeroHtml(tally, prevTally, mode)}
+        ${badgesHtml}
+        ${heatmapSectionHtml}
         ${lifetimeHtml}
+        ${wisdomHtml}
         ${trendChartHtml}
         ${balanceInsightsHtml(insights)}
         ${prsHtml}
+        ${gainerHtml}
+        ${oneRmHtml}
+        ${mostLoggedHtml}
+        ${leaderboardHtml}
         ${repRangeHtml}
         ${recsHtml}
         <div class="seg" style="margin:14px 18px 10px 18px; display:flex; border:1px solid var(--line);">
