@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.122';
+const APP_VERSION = 'Beta 5.123';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -7175,7 +7175,7 @@ async function fetchExtendedWorkoutData(weeksBack){
   const since = new Date(Date.now() - weeksBack*7*86400000).toISOString().slice(0,10);
   const [exercises, setResult, db] = await Promise.all([
     fetchAllExercisesCompat(userData.user.id),
-    withTimeout(supabaseClient.from('sets').select('exercise_id, exercise_master_id, weight, weight_unit, weight_type, reps, num_sets, logged_at').gte('logged_at', since), 15000),
+    withTimeout(supabaseClient.from('sets').select('exercise_id, exercise_master_id, weight, weight_unit, weight_type, reps, num_sets, logged_at, location_id').gte('logged_at', since), 15000),
     loadExerciseDB()
   ]);
   const sets = setResult.__timeout || setResult.error ? [] : (setResult.data || []);
@@ -7400,6 +7400,42 @@ function computeMostLoggedExercise(sets){
   return { name, count };
 }
 
+function computeAvgSetsPerSession(sets){
+  const trainingDays = new Set(sets.map(s => s.logged_at)).size;
+  if (!trainingDays) return null;
+  const totalSets = sets.reduce((sum, s) => sum + (s.num_sets || 1), 0);
+  return Math.round((totalSets / trainingDays) * 10) / 10;
+}
+
+// Heaviest single logged set this week, normalized to kg for comparison
+// across mixed units but displayed in its original unit.
+function computeHeaviestSet(weekSets){
+  let best = null, bestKg = 0;
+  weekSets.forEach(s => {
+    if (typeof s.weight !== 'number' || (s.weight_unit !== 'kg' && s.weight_unit !== 'lb')) return;
+    const kg = s.weight_unit === 'lb' ? convertWeight(s.weight, 'lb', 'kg') : s.weight;
+    const perSideKg = s.weight_type === 'per' ? kg * 2 : kg;
+    if (perSideKg > bestKg){ bestKg = perSideKg; best = s; }
+  });
+  if (!best) return null;
+  return { name: best._name, weight: best.weight, unit: best.weight_unit, perSide: best.weight_type === 'per', reps: best.reps };
+}
+
+async function computeVolumeByLocation(weekSets){
+  const withLocation = weekSets.filter(s => s.location_id);
+  if (!withLocation.length) return null;
+  const locations = await loadLocations();
+  const nameById = {};
+  locations.forEach(l => { nameById[l.id] = l.name; });
+  const counts = {};
+  withLocation.forEach(s => {
+    const name = nameById[s.location_id] || 'Unknown';
+    counts[name] = (counts[name] || 0) + (s.num_sets || 1);
+  });
+  const entries = Object.entries(counts).sort((a,b) => b[1]-a[1]);
+  return entries.length > 1 ? entries : null; // only interesting if more than one location was actually used
+}
+
 // General, widely-taught training frequency guidance - not personalized, just
 // the kind of reference info you'd find in any intro hypertrophy resource.
 // Larger muscle groups recover slower and get more total sets since they're
@@ -7436,6 +7472,18 @@ function todaysDidYouKnow(){
 // Days since each muscle was last given any direct work - genuinely
 // actionable in a way pure volume counts aren't, since a muscle can be "in
 // target" for the week but not have been touched in 6 days.
+// Ideal max gap between sessions for each muscle, derived directly from
+// TRAINING_FREQUENCY_GUIDE's frequency ranges (7 days / target times-per-week).
+// This is what turns "days since trained" into something actually meaningful -
+// a raw day count means nothing without a reference point for what's normal.
+const MUSCLE_IDEAL_GAP_DAYS = {
+  chest: 2.8, lats: 2.8, quadriceps: 2.8, hamstrings: 2.8,
+  shoulders: 2.8, glutes: 2.8,
+  biceps: 3.5, triceps: 3.5,
+  calves: 2.3, forearms: 2.3, abdominals: 2.3,
+  traps: 4.7, 'lower back': 4.7
+};
+
 function computeRecoveryClock(sets){
   const lastTrained = {};
   sets.forEach(s => {
@@ -7444,19 +7492,24 @@ function computeRecoveryClock(sets){
   });
   const today = new Date(); today.setHours(0,0,0,0);
   return BALANCE_MUSCLES.map(m => {
-    if (!lastTrained[m]) return { muscle: m, days: null };
+    const idealGap = MUSCLE_IDEAL_GAP_DAYS[m] || 3;
+    if (!lastTrained[m]) return { muscle: m, days: null, dueInDays: null, idealGap };
     const last = new Date(lastTrained[m] + 'T00:00:00');
     const days = Math.round((today - last) / 86400000);
-    return { muscle: m, days };
+    const dueInDays = Math.round(idealGap - days);
+    return { muscle: m, days, dueInDays, idealGap };
   }).sort((a,b) => {
-    if (a.days === null) return 1;
-    if (b.days === null) return -1;
-    return b.days - a.days;
+    // Most overdue first, untrained muscles last (they're a coverage gap,
+    // not a recovery-timing question - the recommendations section already
+    // covers "never trained").
+    if (a.dueInDays === null) return 1;
+    if (b.dueInDays === null) return -1;
+    return a.dueInDays - b.dueInDays;
   });
 }
 
 function computeComebackAlert(recoveryClock){
-  const candidate = recoveryClock.find(r => r.days !== null && r.days >= 7);
+  const candidate = recoveryClock.find(r => r.dueInDays !== null && r.dueInDays <= -2);
   return candidate || null;
 }
 
@@ -7640,6 +7693,78 @@ async function computeMuscleRecommendations(tally, existingLibraryNames){
     pick.forEach(e => recs.push({ muscle, name: e.name, equipment: e.equipment }));
   });
   return recs;
+}
+
+// Fetches the plan's exercises deduplicated by slot (alt-group siblings count
+// once), the same unit tallyFullPlan uses - shared so every plan-mode
+// analytic below is counting the same "real" set of planned exercises.
+async function fetchDedupedPlanExercises(){
+  const { data: userData } = await supabaseClient.auth.getUser();
+  const allExercises = await fetchAllExercisesCompat(userData.user.id);
+  const placed = allExercises.filter(ex => ex.weekday !== null && ex.weekday !== undefined);
+  const seenSlots = new Set();
+  const deduped = [];
+  placed.forEach(ex => {
+    const slotKey = ex.alt_group_id ? `${ex.alt_group_id}|${ex.weekday}` : (ex.masterId || ex.id);
+    if (seenSlots.has(slotKey)) return;
+    seenSlots.add(slotKey);
+    deduped.push(ex);
+  });
+  return deduped;
+}
+
+async function computeCompoundIsolationSplit(planExercises){
+  const db = await loadExerciseDB();
+  const counts = { compound: 0, isolation: 0, unclassified: 0 };
+  planExercises.forEach(ex => {
+    const match = matchExercise(ex.name, db);
+    const mech = classifyMechanic(match);
+    if (!mech) counts.unclassified++;
+    else if (mech.value === 'compound') counts.compound++;
+    else counts.isolation++;
+  });
+  return counts;
+}
+
+async function computeEquipmentBreakdown(planExercises){
+  const db = await loadExerciseDB();
+  const counts = {};
+  planExercises.forEach(ex => {
+    const match = matchExercise(ex.name, db);
+    const equip = match && match.equipment ? EQUIPMENT_TO_CATEGORY[match.equipment] || cap(match.equipment) : 'Other';
+    counts[equip] = (counts[equip] || 0) + 1;
+  });
+  return Object.entries(counts).sort((a,b) => b[1]-a[1]).slice(0, 5);
+}
+
+function computeExercisesPerDay(planExercises){
+  const perDay = [0,0,0,0,0,0,0];
+  planExercises.forEach(ex => { if (ex.weekday >= 0 && ex.weekday <= 6) perDay[ex.weekday]++; });
+  return perDay;
+}
+
+function computeRestDaySummary(exercisesPerDay){
+  const restDays = exercisesPerDay.filter(c => c === 0).length;
+  const trainingDays = 7 - restDays;
+  return { restDays, trainingDays };
+}
+
+function computeAltGroupCoverage(planExercises){
+  const withAlt = planExercises.filter(ex => ex.alt_group_id).length;
+  return { withAlt, total: planExercises.length, pct: planExercises.length ? Math.round((withAlt/planExercises.length)*100) : 0 };
+}
+
+function computeTagCoverage(planExercises){
+  const tagged = planExercises.filter(ex => ex.push_pull || ex.upper_lower).length;
+  return { tagged, total: planExercises.length, pct: planExercises.length ? Math.round((tagged/planExercises.length)*100) : 0 };
+}
+
+function computeBiggestSmallestDay(exercisesPerDay){
+  const trainingDayIndices = exercisesPerDay.map((c,i) => ({c,i})).filter(d => d.c > 0);
+  if (!trainingDayIndices.length) return null;
+  const biggest = trainingDayIndices.reduce((best, d) => d.c > best.c ? d : best);
+  const smallest = trainingDayIndices.reduce((best, d) => d.c < best.c ? d : best);
+  return { biggest: { day: DAY_NAMES[biggest.i], count: biggest.c }, smallest: { day: DAY_NAMES[smallest.i], count: smallest.c } };
 }
 
 
@@ -7937,6 +8062,8 @@ async function renderBalance(mode, view){
   let weeks = null, lifetimeStats = null, recentPRs = [], repRanges = null;
   let streak = null, heatmapDays = null, oneRms = [], biggestGainer = null, leaderboard = null, badges = [], mostLogged = null;
   let recoveryClock = null, comebackAlert = null, consistencyScore = null, exerciseVariety = null, busiestDay = null;
+  let avgSetsPerSession = null, heaviestSet = null, volumeByLocation = null;
+  let planExercises = null, compoundSplit = null, equipmentBreakdown = null, exercisesPerDay = null, restSummary = null, altCoverage = null, tagCoverage = null, biggestSmallestDay = null;
   if (extended){
     weeks = bucketSetsByWeek(extended.sets, 8);
     lifetimeStats = computeLifetimeStats(extended.sets);
@@ -7953,6 +8080,19 @@ async function renderBalance(mode, view){
     consistencyScore = computeConsistencyScore(tally, streak);
     exerciseVariety = computeExerciseVariety(extended.sets);
     busiestDay = computeBusiestDay(extended.sets);
+    avgSetsPerSession = computeAvgSetsPerSession(weeks[weeks.length-1].sets);
+    heaviestSet = computeHeaviestSet(weeks[weeks.length-1].sets);
+    volumeByLocation = await computeVolumeByLocation(weeks[weeks.length-1].sets);
+  }
+  if (mode === 'plan'){
+    planExercises = await fetchDedupedPlanExercises();
+    compoundSplit = await computeCompoundIsolationSplit(planExercises);
+    equipmentBreakdown = await computeEquipmentBreakdown(planExercises);
+    exercisesPerDay = computeExercisesPerDay(planExercises);
+    restSummary = computeRestDaySummary(exercisesPerDay);
+    altCoverage = computeAltGroupCoverage(planExercises);
+    tagCoverage = computeTagCoverage(planExercises);
+    biggestSmallestDay = computeBiggestSmallestDay(exercisesPerDay);
   }
   leaderboard = computeMuscleLeaderboard(tally);
   const wisdom = todaysGymWisdom();
@@ -7990,18 +8130,27 @@ async function renderBalance(mode, view){
   const comebackHtml = comebackAlert ? `
     <div style="margin:0 18px 14px 18px; background:linear-gradient(135deg, rgba(232,163,61,0.14), rgba(232,163,61,0.02)); border:1px solid rgba(232,163,61,0.35); border-radius:12px; padding:14px 16px; cursor:pointer;" class="bal-row" data-muscle="${comebackAlert.muscle.charAt(0).toUpperCase()+comebackAlert.muscle.slice(1)}">
       <div style="font-size:10px; letter-spacing:0.5px; color:#E8A33D; text-transform:uppercase; margin-bottom:4px;">⏰ Comeback Alert</div>
-      <div style="font-size:13px; color:var(--chalk); line-height:1.4;">${BALANCE_LABELS[comebackAlert.muscle]} hasn't been trained in ${comebackAlert.days} days - due for a comeback.</div>
+      <div style="font-size:13px; color:var(--chalk); line-height:1.4;">${BALANCE_LABELS[comebackAlert.muscle]} is overdue by ${Math.abs(comebackAlert.dueInDays)} day${Math.abs(comebackAlert.dueInDays)===1?'':'s'} against its usual training rhythm (last hit ${comebackAlert.days} days ago).</div>
     </div>` : '';
 
   const recoveryClockHtml = recoveryClock ? `
     <div class="section-label">Recovery Clock</div>
+    <div class="small" style="padding:0 18px 8px 18px; color:var(--slate);">When each muscle is next due, based on its usual training rhythm - not just days since last worked.</div>
     <div style="padding:0 18px 14px 18px; display:flex; flex-direction:column; gap:6px;">
-      ${recoveryClock.filter(r => r.days !== null).slice(0, 5).map(r => `
+      ${recoveryClock.filter(r => r.days !== null).slice(0, 6).map(r => {
+        let statusText, statusColor;
+        if (r.dueInDays <= -1){ statusText = `Overdue ${Math.abs(r.dueInDays)}d`; statusColor = '#E8492A'; }
+        else if (r.dueInDays === 0){ statusText = 'Due today'; statusColor = '#E8A33D'; }
+        else { statusText = `Due in ${r.dueInDays}d`; statusColor = 'var(--good)'; }
+        return `
         <div style="display:flex; justify-content:space-between; align-items:center; font-size:12.5px; padding:4px 0;">
           <div style="color:var(--chalk);">${BALANCE_LABELS[r.muscle]}</div>
-          <div style="color:${r.days >= 7 ? '#E8A33D' : 'var(--slate)'};">${r.days === 0 ? 'Today' : r.days === 1 ? 'Yesterday' : `${r.days} days ago`}</div>
-        </div>
-      `).join('')}
+          <div style="text-align:right;">
+            <div style="color:${statusColor}; font-weight:600;">${statusText}</div>
+            <div style="color:var(--slate); font-size:10px;">last: ${r.days === 0 ? 'today' : r.days === 1 ? 'yesterday' : `${r.days}d ago`}</div>
+          </div>
+        </div>`;
+      }).join('')}
     </div>` : '';
 
   const freqGuideHtml = `
@@ -8019,6 +8168,98 @@ async function renderBalance(mode, view){
       `).join('')}
       <div class="small" style="color:var(--slate); margin-top:2px;">General guidance for most lifters, not personalized advice - your ideal frequency depends on total volume, recovery, and experience level too.</div>
     </div>`;
+
+  // --- 3 new logged-mode sections ---
+  const sessionStatsHtml = (avgSetsPerSession !== null || heaviestSet) ? `
+    <div style="display:flex; gap:8px; margin:0 18px 14px 18px;">
+      ${avgSetsPerSession !== null ? `<div style="flex:1; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 10px; text-align:center;">
+        <div style="font-family:'Bebas Neue',sans-serif; font-size:20px; color:var(--chalk);">${avgSetsPerSession}</div>
+        <div style="font-size:9.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.3px; margin-top:2px;">Avg Sets/Session</div>
+      </div>` : ''}
+      ${heaviestSet ? `<div style="flex:1.4; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 10px;">
+        <div style="font-size:9.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.3px;">Heaviest Set This Week</div>
+        <div style="display:flex; justify-content:space-between; align-items:baseline; margin-top:3px;">
+          <div style="font-size:11.5px; color:var(--chalk); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100px;">${heaviestSet.name}</div>
+          <div style="font-family:'Bebas Neue',sans-serif; font-size:17px; color:var(--flame);">${heaviestSet.weight}${heaviestSet.unit}${heaviestSet.perSide?'/side':''}</div>
+        </div>
+      </div>` : ''}
+    </div>` : '';
+
+  const volumeByLocationHtml = volumeByLocation ? `
+    <div class="section-label">This Week, By Location</div>
+    <div style="padding:0 18px 14px 18px; display:flex; flex-direction:column; gap:6px;">
+      ${volumeByLocation.map(([name, count]) => `<div style="display:flex; justify-content:space-between; font-size:12.5px; padding:4px 0;"><div style="color:var(--chalk);">${name}</div><div style="color:var(--slate);">${count} sets</div></div>`).join('')}
+    </div>` : '';
+
+  // --- 7 new plan-mode sections ---
+  const compoundSplitHtml = compoundSplit ? (() => {
+    const total = compoundSplit.compound + compoundSplit.isolation + compoundSplit.unclassified || 1;
+    const pct = (n) => Math.round((n/total)*100);
+    return `
+    <div class="section-label">Compound vs Isolation</div>
+    <div style="margin:0 18px 14px 18px;">
+      <div style="display:flex; height:22px; border-radius:6px; overflow:hidden;">
+        <div style="width:${pct(compoundSplit.compound)}%; background:#E8492A;"></div>
+        <div style="width:${pct(compoundSplit.isolation)}%; background:#3A6EA5;"></div>
+        <div style="width:${pct(compoundSplit.unclassified)}%; background:#3A3D42;"></div>
+      </div>
+      <div style="display:flex; justify-content:space-between; margin-top:6px; font-size:10.5px; color:var(--slate);">
+        <div><span style="color:#E8492A;">●</span> Compound ${pct(compoundSplit.compound)}%</div>
+        <div><span style="color:#3A6EA5;">●</span> Isolation ${pct(compoundSplit.isolation)}%</div>
+      </div>
+    </div>`;
+  })() : '';
+
+  const equipmentHtml = (equipmentBreakdown && equipmentBreakdown.length) ? `
+    <div class="section-label">Equipment Breakdown</div>
+    <div style="padding:0 18px 14px 18px; display:flex; flex-direction:column; gap:6px;">
+      ${equipmentBreakdown.map(([name, count]) => `<div style="display:flex; justify-content:space-between; font-size:12.5px; padding:4px 0;"><div style="color:var(--chalk);">${name}</div><div style="color:var(--slate);">${count} exercise${count===1?'':'s'}</div></div>`).join('')}
+    </div>` : '';
+
+  const perDayChartHtml = exercisesPerDay ? (() => {
+    const maxC = Math.max(1, ...exercisesPerDay);
+    return `
+    <div class="section-label">Exercises Per Day</div>
+    <div style="margin:0 18px 14px 18px; display:flex; align-items:flex-end; gap:6px; height:70px;">
+      ${exercisesPerDay.map((c, i) => `
+        <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:100%;">
+          <div style="font-size:9.5px; color:var(--slate); margin-bottom:2px;">${c||''}</div>
+          <div style="width:100%; height:${Math.max(3, (c/maxC)*44)}px; background:${c>0?'var(--flame)':'#2A2C31'}; border-radius:3px 3px 0 0;"></div>
+          <div style="font-size:9px; color:var(--slate); margin-top:4px;">${DAY_NAMES[i]}</div>
+        </div>
+      `).join('')}
+    </div>`;
+  })() : '';
+
+  const restSummaryHtml = restSummary ? `
+    <div style="display:flex; gap:8px; margin:0 18px 14px 18px;">
+      <div style="flex:1; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 10px; text-align:center;">
+        <div style="font-family:'Bebas Neue',sans-serif; font-size:20px; color:var(--chalk);">${restSummary.trainingDays}</div>
+        <div style="font-size:9.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.3px; margin-top:2px;">Training Days</div>
+      </div>
+      <div style="flex:1; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 10px; text-align:center;">
+        <div style="font-family:'Bebas Neue',sans-serif; font-size:20px; color:var(--chalk);">${restSummary.restDays}</div>
+        <div style="font-size:9.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.3px; margin-top:2px;">Rest Days</div>
+      </div>
+    </div>` : '';
+
+  const coverageStatsHtml = (altCoverage && tagCoverage) ? `
+    <div style="padding:0 18px 14px 18px; display:flex; flex-direction:column; gap:8px;">
+      <div>
+        <div style="display:flex; justify-content:space-between; font-size:11.5px; margin-bottom:3px;"><div style="color:var(--chalk);">Alt-Group Coverage</div><div style="color:var(--slate);">${altCoverage.withAlt}/${altCoverage.total}</div></div>
+        <div style="height:8px; background:#2A2C31; border-radius:4px; overflow:hidden;"><div style="width:${altCoverage.pct}%; height:100%; background:#7BA6C9;"></div></div>
+      </div>
+      <div>
+        <div style="display:flex; justify-content:space-between; font-size:11.5px; margin-bottom:3px;"><div style="color:var(--chalk);">Push/Pull/Upper/Lower Tagged</div><div style="color:var(--slate);">${tagCoverage.tagged}/${tagCoverage.total}</div></div>
+        <div style="height:8px; background:#2A2C31; border-radius:4px; overflow:hidden;"><div style="width:${tagCoverage.pct}%; height:100%; background:#8FBF7A;"></div></div>
+      </div>
+    </div>` : '';
+
+  const biggestSmallestHtml = biggestSmallestDay ? `
+    <div style="margin:0 18px 14px 18px; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px 16px; display:flex; justify-content:space-between;">
+      <div><div style="font-size:9.5px; color:var(--slate); text-transform:uppercase;">Biggest Day</div><div style="font-size:13px; color:var(--chalk); margin-top:2px;">${biggestSmallestDay.biggest.day} · ${biggestSmallestDay.biggest.count} exercises</div></div>
+      <div style="text-align:right;"><div style="font-size:9.5px; color:var(--slate); text-transform:uppercase;">Lightest Day</div><div style="font-size:13px; color:var(--chalk); margin-top:2px;">${biggestSmallestDay.smallest.day} · ${biggestSmallestDay.smallest.count} exercises</div></div>
+    </div>` : '';
 
   const wisdomHtml = `
     <div style="margin:0 18px 14px 18px; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px;">
@@ -8190,7 +8431,10 @@ async function renderBalance(mode, view){
         ${scoreAndVarietyHtml}
         ${comebackHtml}
         ${heatmapSectionHtml}
+        ${restSummaryHtml}
+        ${perDayChartHtml}
         ${lifetimeHtml}
+        ${sessionStatsHtml}
         ${wisdomHtml}
         ${didYouKnowHtml}
         ${trendChartHtml}
@@ -8199,9 +8443,14 @@ async function renderBalance(mode, view){
         ${gainerHtml}
         ${oneRmHtml}
         ${mostLoggedHtml}
+        ${volumeByLocationHtml}
         ${leaderboardHtml}
         ${recoveryClockHtml}
         ${repRangeHtml}
+        ${compoundSplitHtml}
+        ${equipmentHtml}
+        ${coverageStatsHtml}
+        ${biggestSmallestHtml}
         ${recsHtml}
         ${freqGuideHtml}
         <div class="seg" style="margin:14px 18px 10px 18px; display:flex; border:1px solid var(--line);">
