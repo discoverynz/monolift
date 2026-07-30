@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.124';
+const APP_VERSION = 'Beta 5.125';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1500,16 +1500,12 @@ function openLocationSubPage(){
         <div><div>Assign Location</div><div class="small" style="color:var(--slate); margin-top:2px;">Tell the app what's where, gym by gym</div></div>
         <div class="chev" style="margin-top:2px;">›</div>
       </div>
-      <div class="me-item" id="subManageLocationsBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
-        <div><div>Manage Locations</div><div class="small" style="color:var(--slate); margin-top:2px;">Rename or delete a location</div></div>
-        <div class="chev" style="margin-top:2px;">›</div>
-      </div>
+      <div class="small" style="padding:6px 18px 4px 18px; color:var(--slate);">Naming, deleting, or setting equipment for a location now lives under Me → Environments.</div>
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#closeLocSubPage').onclick = () => overlay.remove();
   overlay.querySelector('#subDefaultLocationBtn').onclick = () => openDefaultLocationPicker();
   overlay.querySelector('#subBulkLocationBtn').onclick = () => openBulkLocationAssign();
-  overlay.querySelector('#subManageLocationsBtn').onclick = () => openManageLocationsScreen();
 }
 
 function openRebuildToolsSubPage(){
@@ -2508,14 +2504,45 @@ async function openEnvironmentsScreen(){
         ? tags.map(t => (EQUIPMENT_CATEGORIES.find(c => c.key === t) || {}).label || t).join(', ')
         : 'Not set up yet - tap to add equipment';
       return `
-      <div class="env-row" data-id="${l.id}" data-name="${l.name}" style="margin:0 18px 10px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; cursor:pointer;">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-          <div class="ex-name" style="font-size:13.5px;">${l.name}</div>
-          <div class="chev">›</div>
+      <div style="margin:0 18px 10px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px;">
+        <div class="env-row" data-id="${l.id}" data-name="${l.name}" style="cursor:pointer;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div class="ex-name" style="font-size:13.5px;">${l.name}</div>
+            <div class="chev">›</div>
+          </div>
+          <div class="small" style="color:${tags.length ? 'var(--slate)' : 'var(--flame)'}; margin-top:3px;">${summary}</div>
         </div>
-        <div class="small" style="color:${tags.length ? 'var(--slate)' : 'var(--flame)'}; margin-top:3px;">${summary}</div>
+        <div style="display:flex; gap:8px; margin-top:10px;">
+          <button class="env-rename" data-id="${l.id}" data-name="${l.name}" style="background:var(--ink); color:var(--slate); padding:7px 12px; border-radius:8px; font-size:11px;">Rename</button>
+          <button class="env-delete" data-id="${l.id}" data-name="${l.name}" style="background:var(--ink); color:#E8492A; padding:7px 12px; border-radius:8px; font-size:11px;">Delete</button>
+        </div>
       </div>`;
     }).join('');
+    listArea.querySelectorAll('.env-rename').forEach(btn => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        promptText({
+          title: 'Rename Environment', placeholder: 'Name', initialValue: btn.dataset.name,
+          onConfirm: async (newName) => { await supabaseClient.from('locations').update({ name: newName }).eq('id', btn.dataset.id); render(); }
+        });
+      };
+    });
+    listArea.querySelectorAll('.env-delete').forEach(btn => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        showConfirmDialog(`Exercises tagged to "${btn.dataset.name}" will just lose that tag - nothing else is affected.`, async () => {
+          const { data: userData } = await supabaseClient.auth.getUser();
+          const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+          const exResult = await withTimeout(supabaseClient.from(table).select('id, location_ids').eq('user_id', userData.user.id), 15000);
+          const affected = (exResult.data || []).filter(ex => (ex.location_ids || []).includes(btn.dataset.id));
+          for (const ex of affected){
+            await supabaseClient.from(table).update({ location_ids: ex.location_ids.filter(id => id !== btn.dataset.id) }).eq('id', ex.id);
+          }
+          await supabaseClient.from('locations').delete().eq('id', btn.dataset.id);
+          render();
+        }, { title: `Delete "${btn.dataset.name}"?`, danger: true, confirmLabel: 'Delete' });
+      };
+    });
     listArea.querySelectorAll('.env-row').forEach(row => {
       row.onclick = async () => {
         const locations2 = await loadLocations();
