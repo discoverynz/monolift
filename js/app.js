@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.123';
+const APP_VERSION = 'Beta 5.124';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -2454,6 +2454,114 @@ async function openClearDayScreen(){
   });
 }
 
+// Maps a friendly, checkbox-able equipment category to the exercise
+// database's actual `equipment` field values, so a location's equipment
+// selection can directly filter which exercises are realistic there.
+const EQUIPMENT_CATEGORIES = [
+  { key: 'barbell', label: 'Barbell', dbValues: ['barbell', 'e-z curl bar'] },
+  { key: 'dumbbell', label: 'Dumbbells', dbValues: ['dumbbell'] },
+  { key: 'cable', label: 'Cables', dbValues: ['cable'] },
+  { key: 'machine', label: 'Machines', dbValues: ['machine'] },
+  { key: 'kettlebells', label: 'Kettlebells', dbValues: ['kettlebells'] },
+  { key: 'bands', label: 'Resistance Bands', dbValues: ['bands'] },
+  { key: 'bodyweight', label: 'Bodyweight Only', dbValues: ['body only'] },
+  { key: 'medicine ball', label: 'Medicine Ball', dbValues: ['medicine ball'] },
+  { key: 'exercise ball', label: 'Exercise Ball', dbValues: ['exercise ball'] },
+  { key: 'foam roll', label: 'Foam Roller', dbValues: ['foam roll'] },
+  { key: 'other', label: 'Other / Misc', dbValues: ['other'] }
+];
+
+async function openEnvironmentsScreen(){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeEnvironments">✕</button><h1>Environments</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll">
+      <div class="small" style="padding:8px 18px 16px 18px; color:var(--slate);">Tell Zealift what equipment each gym actually has - a place with only dumbbells and a bench won't get suggested barbell or machine exercises when it's the active location.</div>
+      <div class="action-row" id="newEnvRow"><div class="ex-name" style="color:var(--flame);">+ New Environment</div></div>
+      <div id="envList"><div class="small" style="padding:16px 18px; color:var(--slate);">Loading…</div></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeEnvironments').onclick = () => overlay.remove();
+  overlay.querySelector('#newEnvRow').onclick = () => {
+    promptText({
+      title: 'New Environment Name', placeholder: 'e.g. Home Gym',
+      onConfirm: async (name) => {
+        const created = await createLocation(name);
+        if (created) openEditLocationEquipmentScreen(created.id, created.name, [], render);
+        else render();
+      }
+    });
+  };
+
+  async function render(){
+    const listArea = overlay.querySelector('#envList');
+    listArea.innerHTML = `<div class="small" style="padding:16px 18px; color:var(--slate);">Loading…</div>`;
+    const locations = await loadLocations();
+    if (!locations.length){
+      listArea.innerHTML = `<div class="empty-state" style="padding:20px 18px;">No environments yet - add one to start tagging what equipment it has.</div>`;
+      return;
+    }
+    listArea.innerHTML = locations.map(l => {
+      const tags = l.equipment_tags || [];
+      const summary = tags.length
+        ? tags.map(t => (EQUIPMENT_CATEGORIES.find(c => c.key === t) || {}).label || t).join(', ')
+        : 'Not set up yet - tap to add equipment';
+      return `
+      <div class="env-row" data-id="${l.id}" data-name="${l.name}" style="margin:0 18px 10px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; cursor:pointer;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div class="ex-name" style="font-size:13.5px;">${l.name}</div>
+          <div class="chev">›</div>
+        </div>
+        <div class="small" style="color:${tags.length ? 'var(--slate)' : 'var(--flame)'}; margin-top:3px;">${summary}</div>
+      </div>`;
+    }).join('');
+    listArea.querySelectorAll('.env-row').forEach(row => {
+      row.onclick = async () => {
+        const locations2 = await loadLocations();
+        const loc = locations2.find(l => l.id === row.dataset.id);
+        openEditLocationEquipmentScreen(row.dataset.id, row.dataset.name, (loc && loc.equipment_tags) || [], render);
+      };
+    });
+  }
+  render();
+}
+
+function openEditLocationEquipmentScreen(locationId, locationName, currentTags, onSaved){
+  const selected = new Set(currentTags || []);
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeEditEnvEquip">✕</button><h1>${locationName}</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll">
+      <div class="small" style="padding:8px 18px 16px 18px; color:var(--slate);">Select everything actually available at this location. Leave everything unselected to skip filtering here entirely.</div>
+      <div id="envEquipChips" style="display:flex; flex-wrap:wrap; gap:8px; padding:0 18px;">
+        ${EQUIPMENT_CATEGORIES.map(c => `<div class="chip env-equip-chip ${selected.has(c.key)?'active':''}" data-key="${c.key}">${c.label}</div>`).join('')}
+      </div>
+      <button class="save-btn" id="saveEnvEquipBtn" style="margin:24px 18px 20px 18px;">Save</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeEditEnvEquip').onclick = () => overlay.remove();
+  overlay.querySelectorAll('.env-equip-chip').forEach(chip => {
+    chip.onclick = () => {
+      const key = chip.dataset.key;
+      if (selected.has(key)){ selected.delete(key); chip.classList.remove('active'); }
+      else { selected.add(key); chip.classList.add('active'); }
+    };
+  });
+  overlay.querySelector('#saveEnvEquipBtn').onclick = async () => {
+    await withButtonLoading(overlay.querySelector('#saveEnvEquipBtn'), 'Saving…', async () => {
+      const { error } = await supabaseClient.from('locations').update({ equipment_tags: [...selected] }).eq('id', locationId);
+      if (error){
+        alert(`Could not save: ${error.message}\n\nIf this mentions a missing column, the equipment_tags migration needs to be run first.`);
+        return;
+      }
+      overlay.remove();
+      if (onSaved) onSaved();
+    });
+  };
+}
+
 async function openManageLocationsScreen(){
   const overlay = document.createElement('div');
   overlay.className = 'overlay-screen';
@@ -3927,6 +4035,21 @@ async function openPicker(initialTab, jumpToMuscle){
   // shouldn't claim "on [Day]" here either, or the badge contradicts what's
   // actually visible on the day itself.
   const currentLocationId = getCurrentLocationId() || getDefaultLocationId();
+  // If the active location has equipment set up, expand its selected
+  // categories into the actual exercise-database equipment values they cover -
+  // an empty set here means "no filter", not "nothing available".
+  let allowedEquipmentValues = null;
+  if (currentLocationId){
+    const allLocations = await loadLocations();
+    const activeLoc = allLocations.find(l => l.id === currentLocationId);
+    if (activeLoc && activeLoc.equipment_tags && activeLoc.equipment_tags.length){
+      allowedEquipmentValues = new Set();
+      activeLoc.equipment_tags.forEach(key => {
+        const cat = EQUIPMENT_CATEGORIES.find(c => c.key === key);
+        if (cat) cat.dbValues.forEach(v => allowedEquipmentValues.add(v));
+      });
+    }
+  }
 
   // Multi-select state, shared across both tabs since a long-press should be
   // able to start a selection that then gets confirmed with one action,
@@ -4177,11 +4300,19 @@ async function openPicker(initialTab, jumpToMuscle){
       return;
     }
     const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
+    const filterBannerHtml = allowedEquipmentValues ? `
+      <div style="margin:10px 18px 0 18px; background:rgba(123,166,201,0.12); border:1px solid rgba(123,166,201,0.3); border-radius:10px; padding:10px 12px; display:flex; justify-content:space-between; align-items:center;">
+        <div class="small" style="color:#7BA6C9;">Filtered to what's set up for this location</div>
+        <button id="showAllEquipBtn" style="background:none; color:#7BA6C9; font-size:11px; text-decoration:underline; flex-shrink:0; margin-left:8px;">Show all</button>
+      </div>` : '';
     body.innerHTML = `
+      ${filterBannerHtml}
       <div class="search-bar">🔍 <input id="dbSearch" placeholder="Search ${db.length} exercises…"></div>
       <div id="starterBlock"></div>
       <div id="dbGroupToggle"></div>
       <div id="dbList" style="padding-right:26px;"></div>`;
+    const showAllBtn = body.querySelector('#showAllEquipBtn');
+    if (showAllBtn) showAllBtn.onclick = () => { allowedEquipmentValues = null; renderDatabaseTab(); };
 
     const starterNames = ['Chest Press','Shoulder Press','Lat Pulldown','Tricep Pushdown','Bicep Curl','Leg Press','Seated Row','Plank'];
     const starterMatches = starterNames.map(n => matchExercise(n, db)).filter(Boolean);
@@ -4201,7 +4332,10 @@ async function openPicker(initialTab, jumpToMuscle){
 
     function renderDbList(filter){
       const f = (filter || '').toLowerCase();
-      const filtered = db.filter(e => e.name.toLowerCase().includes(f));
+      let filtered = db.filter(e => e.name.toLowerCase().includes(f));
+      if (allowedEquipmentValues){
+        filtered = filtered.filter(e => !e.equipment || allowedEquipmentValues.has(e.equipment));
+      }
       const groupBy = getPickerGroupByPref();
       const splitMode = getSplitModePref();
       const splitSubGroup = getSplitSubGroupPref();
@@ -5757,10 +5891,17 @@ async function pickAltGroup(container, onPicked){
 async function loadLocations(){
   const { data: userData } = await supabaseClient.auth.getUser();
   const result = await withTimeout(
+    supabaseClient.from('locations').select('id, name, equipment_tags').eq('user_id', userData.user.id).order('name'),
+    15000
+  );
+  if (!result.__timeout && !result.error) return result.data || [];
+  // equipment_tags column may not exist yet if the migration hasn't been run -
+  // retry without it rather than silently losing every location.
+  const fallback = await withTimeout(
     supabaseClient.from('locations').select('id, name').eq('user_id', userData.user.id).order('name'),
     15000
   );
-  return result.__timeout || result.error ? [] : (result.data || []);
+  return fallback.__timeout || fallback.error ? [] : (fallback.data || []).map(l => ({ ...l, equipment_tags: [] }));
 }
 async function createLocation(name){
   const { data: userData } = await supabaseClient.auth.getUser();
@@ -8657,6 +8798,10 @@ async function renderMe(){
           <div><div>Location</div><div class="small" style="color:var(--slate); margin-top:2px;">Default location, assign gyms, manage the list</div></div>
           <div class="chev" style="margin-top:2px;">›</div>
         </div>
+        <div class="me-item" id="environmentsBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+          <div><div>Environments</div><div class="small" style="color:var(--slate); margin-top:2px;">Set what equipment each gym has, so suggestions match reality</div></div>
+          <div class="chev" style="margin-top:2px;">›</div>
+        </div>
         <div class="me-item" id="planSubPageBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
           <div><div>Plan</div><div class="small" style="color:var(--slate); margin-top:2px;">Reorganize, swap days, redo setup, tag workouts</div></div>
           <div class="chev" style="margin-top:2px;">›</div>
@@ -8673,6 +8818,7 @@ async function renderMe(){
   document.getElementById('replayTourBtn').onclick = () => showOnboarding('teach');
   document.getElementById('backupPlanBtn').onclick = openBackupPlanScreen;
   document.getElementById('locationSubPageBtn').onclick = () => openLocationSubPage();
+  document.getElementById('environmentsBtn').onclick = () => openEnvironmentsScreen();
   document.getElementById('planSubPageBtn').onclick = () => openPlanSubPage();
   document.getElementById('refreshAppBtn').onclick = () => { location.reload(); };
   document.getElementById('updateAppBtn').onclick = async () => {
