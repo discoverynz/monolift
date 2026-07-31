@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.128';
+const APP_VERSION = 'Beta 5.129';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -663,7 +663,7 @@ function renderLogin(){
         <button class="btn-primary" id="sendCodeBtn">Send Code</button>
         <div class="login-status" id="loginStatus"></div>
         <div class="login-error" id="loginError"></div>
-        <div class="login-note">We'll email you a code. No password, no link to click.</div>
+        <div class="login-note">No password needed — we'll email you a sign-in code or link.</div>
       </div>
     </div>`;
 
@@ -692,7 +692,8 @@ function renderCodeEntry(email){
       <div class="login-wrap">
         <div class="logo-circle"><img src="icons/icon-inapp-192.png" width="48" height="48" alt=""></div>
         <div class="app-name">Zealift</div>
-        <div class="login-sub">Enter the code sent to ${email}</div>
+        <div class="login-sub">Check ${email} for a sign-in email</div>
+        <div class="small" style="text-align:center; color:var(--slate); margin:-8px 0 4px 0; padding:0 20px; line-height:1.4;">If it has a code, enter it below. If it's a link instead, just tap it — that signs you in directly, no code needed.</div>
         <input class="input-field" id="codeInput" type="text" inputmode="numeric" placeholder="123456" maxlength="10" autocomplete="one-time-code" style="text-align:center; letter-spacing:4px; font-family:'JetBrains Mono', monospace;">
         <button class="btn-primary" id="verifyBtn">Verify</button>
         <div class="login-status" id="loginStatus"></div>
@@ -711,7 +712,7 @@ function renderCodeEntry(email){
     const code = codeInputEl.value.trim();
     const errEl = document.getElementById('loginError');
     errEl.textContent = '';
-    if (!code || code.length < 6){ errEl.textContent = 'Enter the code from your email.'; return; }
+    if (!code || code.length < 6){ errEl.textContent = 'Enter the code from your email, or tap the link in it instead.'; return; }
 
     verifyBtn.disabled = true; codeInputEl.disabled = true; verifyBtn.textContent = 'Verifying…'; statusEl.textContent = '';
 
