@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.126';
+const APP_VERSION = 'Beta 5.127';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -2806,16 +2806,16 @@ function showOnboarding(mode){
       body:`Scale logs your body weight with a trend chart. Phase tracks your bulk/cut progress. Every set you've ever logged stays in that exercise's history, forever.` }
   ];
   const setupSteps = [
-    { kind:'frequency' }, { kind:'preset' }, { kind:'confirm' }, { kind:'superset' }, { kind:'finish' }
+    { kind:'frequency' }, { kind:'preset' }, { kind:'confirm' }, { kind:'superset' }, { kind:'location' }, { kind:'finish' }
   ];
-  // Interleave: welcome -> frequency/preset/confirm -> make it yours -> logging -> superset -> adding -> tracking -> finish
+  // Interleave: welcome -> frequency/preset/confirm -> make it yours -> logging -> superset -> adding -> tracking -> location -> finish
   let steps;
   if (mode === 'teach') steps = teachSteps;
   else if (mode === 'setup') steps = setupSteps;
-  else steps = [teachSteps[0], setupSteps[0], setupSteps[1], setupSteps[2], teachSteps[1], teachSteps[2], setupSteps[3], teachSteps[3], teachSteps[4], setupSteps[4]];
+  else steps = [teachSteps[0], setupSteps[0], setupSteps[1], setupSteps[2], teachSteps[1], teachSteps[2], setupSteps[3], teachSteps[3], teachSteps[4], setupSteps[4], setupSteps[5]];
 
   let idx = 0;
-  const wiz = { numDays: 5, presetKey: 'ppl', week: computeWeekFromPreset(5,'ppl'), superset: null };
+  const wiz = { numDays: 5, presetKey: 'ppl', week: computeWeekFromPreset(5,'ppl'), superset: null, locations: [], defaultLocationIdx: 0 };
   const overlay = document.createElement('div');
   overlay.style = 'position:fixed; inset:0; background:rgba(0,0,0,0.75); z-index:40; display:flex; align-items:center; justify-content:center; padding:20px;';
   document.body.appendChild(overlay);
@@ -2845,6 +2845,7 @@ function showOnboarding(mode){
     else if (step.kind === 'preset') renderPreset();
     else if (step.kind === 'confirm') renderConfirm();
     else if (step.kind === 'superset') renderSuperset();
+    else if (step.kind === 'location') renderLocationStep();
     else if (step.kind === 'finish') renderFinish();
   }
 
@@ -2926,6 +2927,75 @@ function showOnboarding(mode){
     overlay.querySelector('#nextBtn').onclick = () => advance();
   }
 
+  function renderLocationStep(){
+    const expandedIdx = wiz._locExpandedIdx;
+    shell(`
+      <div style="font-family:'Oswald', sans-serif; font-size:19px; text-transform:uppercase; margin-bottom:6px;">Where Do You Train?</div>
+      <div style="font-size:11.5px; color:var(--slate); margin-bottom:14px; line-height:1.5;">Optional, but useful - add each gym you use, and what equipment it has, so suggestions match reality. Skip this and add it anytime from Me → Environments.</div>
+      <div style="display:flex; gap:8px; margin-bottom:12px;">
+        <input id="newLocInput" placeholder="e.g. Home Gym" style="flex:1; background:var(--ink); border:1px solid var(--line); border-radius:10px; padding:11px 12px; color:var(--chalk); font-size:13px;">
+        <button id="addLocBtn" style="background:var(--flame); color:var(--ink); border-radius:10px; padding:0 16px; font-weight:600; font-size:13px;">Add</button>
+      </div>
+      <div id="wizLocList" style="display:flex; flex-direction:column; gap:8px; margin-bottom:6px; max-height:280px; overflow-y:auto;">
+        ${wiz.locations.map((loc, i) => `
+          <div style="background:var(--ink); border:1px solid var(--line); border-radius:10px; padding:10px 12px;">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <div style="display:flex; align-items:center; gap:8px;">
+                <div class="wizLocDefault" data-i="${i}" style="width:16px; height:16px; border-radius:50%; border:1.5px solid ${wiz.defaultLocationIdx===i?'var(--flame)':'var(--slate)'}; display:flex; align-items:center; justify-content:center; cursor:pointer; flex-shrink:0;">${wiz.defaultLocationIdx===i?'<div style="width:8px; height:8px; border-radius:50%; background:var(--flame);"></div>':''}</div>
+                <div style="font-size:13px; color:var(--chalk);">${loc.name}</div>
+              </div>
+              <div style="display:flex; gap:10px; align-items:center;">
+                <div class="wizLocEquipToggle" data-i="${i}" style="font-size:11px; color:#7BA6C9; cursor:pointer;">${loc.equipment_tags.length ? `${loc.equipment_tags.length} set` : 'Equipment'}</div>
+                <div class="wizLocRemove" data-i="${i}" style="color:var(--slate); font-size:15px; cursor:pointer;">✕</div>
+              </div>
+            </div>
+            ${expandedIdx === i ? `
+              <div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; padding-top:10px; border-top:1px solid var(--line);">
+                ${EQUIPMENT_CATEGORIES.map(c => `<div class="wizEquipChip chip ${loc.equipment_tags.includes(c.key)?'active':''}" data-i="${i}" data-key="${c.key}" style="font-size:11px; padding:6px 10px;">${c.label}</div>`).join('')}
+              </div>
+            ` : ''}
+          </div>
+        `).join('')}
+      </div>
+      ${wiz.locations.length > 1 ? `<div class="small" style="color:var(--slate); margin-top:4px;">Tap the circle to set which one is your default.</div>` : ''}
+    `, { nextLabel: wiz.locations.length ? 'Next' : 'Skip for now' });
+    overlay.querySelector('#addLocBtn').onclick = () => {
+      const input = overlay.querySelector('#newLocInput');
+      const name = input.value.trim();
+      if (!name) return;
+      wiz.locations.push({ name, equipment_tags: [] });
+      wiz._locExpandedIdx = wiz.locations.length - 1; // jump straight into equipment for the one just added
+      render();
+    };
+    overlay.querySelector('#newLocInput').onkeydown = (e) => { if (e.key === 'Enter') overlay.querySelector('#addLocBtn').click(); };
+    overlay.querySelectorAll('.wizLocDefault').forEach(el => {
+      el.onclick = () => { wiz.defaultLocationIdx = parseInt(el.dataset.i, 10); render(); };
+    });
+    overlay.querySelectorAll('.wizLocEquipToggle').forEach(el => {
+      el.onclick = () => { const i = parseInt(el.dataset.i, 10); wiz._locExpandedIdx = wiz._locExpandedIdx === i ? null : i; render(); };
+    });
+    overlay.querySelectorAll('.wizLocRemove').forEach(el => {
+      el.onclick = () => {
+        const i = parseInt(el.dataset.i, 10);
+        wiz.locations.splice(i, 1);
+        if (wiz.defaultLocationIdx >= wiz.locations.length) wiz.defaultLocationIdx = 0;
+        if (wiz._locExpandedIdx === i) wiz._locExpandedIdx = null;
+        render();
+      };
+    });
+    overlay.querySelectorAll('.wizEquipChip').forEach(chip => {
+      chip.onclick = () => {
+        const i = parseInt(chip.dataset.i, 10);
+        const key = chip.dataset.key;
+        const tags = wiz.locations[i].equipment_tags;
+        const pos = tags.indexOf(key);
+        if (pos === -1) tags.push(key); else tags.splice(pos, 1);
+        render();
+      };
+    });
+    overlay.querySelector('#nextBtn').onclick = () => advance();
+  }
+
   function renderFinish(){
     shell(`
       <div style="font-family:'Oswald', sans-serif; font-size:19px; text-transform:uppercase; margin-bottom:4px;">You're all set</div>
@@ -2960,6 +3030,17 @@ function showOnboarding(mode){
         }
         if (wiz.superset !== null){
           await supabaseClient.auth.updateUser({ data: { usesSupersets: wiz.superset === 'yes' } });
+        }
+        if (wiz.locations.length){
+          for (let i = 0; i < wiz.locations.length; i++){
+            const loc = wiz.locations[i];
+            const created = await createLocation(loc.name);
+            if (!created) continue;
+            if (loc.equipment_tags.length){
+              await supabaseClient.from('locations').update({ equipment_tags: loc.equipment_tags }).eq('id', created.id);
+            }
+            if (i === wiz.defaultLocationIdx) setDefaultLocationId(created.id);
+          }
         }
       }
       if (state.currentTab === 'track') renderTrack();
