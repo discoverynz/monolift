@@ -1,5 +1,5 @@
-const CACHE_NAME = 'zealift-v178';
-const SHELL = ['./', './index.html', './css/styles.css?v=178', './js/app.js?v=178', './js/supabase-client.js?v=178', './manifest.json'];
+const CACHE_NAME = 'zealift-v179';
+const SHELL = ['./', './index.html', './css/styles.css?v=179', './js/app.js?v=179', './js/supabase-client.js?v=179', './manifest.json'];
 
 self.addEventListener('install', (event) => {
   self.skipWaiting(); // don't wait for old tabs to close — take over immediately
@@ -16,8 +16,16 @@ self.addEventListener('activate', (event) => {
 
 // Network-first: always try to get the latest code. Cache is only a fallback for offline use,
 // never the default — this is what was wrong before.
+// Only ever caches same-origin requests (the app's own shell) - third-party API
+// calls (Supabase, the exercise database, etc.) are never cached here, so a
+// transient network hiccup can't fall back to stale data from before a write.
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
+  const isSameOrigin = new URL(event.request.url).origin === self.location.origin;
+  if (!isSameOrigin){
+    event.respondWith(fetch(event.request));
+    return;
+  }
   event.respondWith(
     fetch(event.request)
       .then((response) => {
