@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.125';
+const APP_VERSION = 'Beta 5.126';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -8834,6 +8834,7 @@ async function renderMe(){
           <div class="chev" style="margin-top:2px;">›</div>
         </div>
         <div class="section-label">App</div>
+        <div class="me-item" id="shareAppBtn"><div>Share Zealift</div><div class="chev">›</div></div>
         <div class="me-item" id="refreshAppBtn"><div>Refresh App</div><div class="chev">›</div></div>
         <div class="me-item" id="updateAppBtn"><div>Check for Updates</div><div class="chev">›</div></div>
         <div class="me-item" id="signOutBtn"><div>Sign Out</div><div class="chev">›</div></div>
@@ -8847,6 +8848,20 @@ async function renderMe(){
   document.getElementById('locationSubPageBtn').onclick = () => openLocationSubPage();
   document.getElementById('environmentsBtn').onclick = () => openEnvironmentsScreen();
   document.getElementById('planSubPageBtn').onclick = () => openPlanSubPage();
+  document.getElementById('shareAppBtn').onclick = async () => {
+    const shareUrl = `${location.origin}${location.pathname}`.replace(/\/index\.html$/, '/');
+    const shareData = { title: 'Zealift', text: 'Check out Zealift - a gym tracking app I use.', url: shareUrl };
+    if (navigator.share){
+      try { await navigator.share(shareData); } catch(e) { /* user cancelled the native share sheet - nothing to do */ }
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      alert('Link copied to clipboard - paste it anywhere to share.');
+    } catch(e){
+      prompt('Copy this link to share:', shareUrl);
+    }
+  };
   document.getElementById('refreshAppBtn').onclick = () => { location.reload(); };
   document.getElementById('updateAppBtn').onclick = async () => {
     const btn = document.getElementById('updateAppBtn');
