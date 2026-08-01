@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.130';
+const APP_VERSION = 'Beta 5.131';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1252,6 +1252,16 @@ async function loadZealiftExerciseDB(){
   return _zealiftDbCache;
 }
 
+const APP_OWNER_USER_ID = '08a8e277-f4e0-4b8f-a466-5f7b72e4dfc1';
+async function isVerifiedContributor(userId){
+  const result = await withTimeout(
+    supabaseClient.from('verified_contributors').select('user_id').eq('user_id', userId).maybeSingle(),
+    15000
+  );
+  if (result.__timeout || result.error) return false; // table may not exist yet if the migration hasn't run
+  return !!result.data;
+}
+
 // Curated overrides for names the fuzzy matcher gets wrong: either it finds nothing
 // (machine names free-exercise-db doesn't have, like "Pec Fly" or "Back Extension Bench"),
 // or it false-positives on shared words (e.g. "Dead Hang" matching "Dead Bug").
@@ -2484,6 +2494,46 @@ const EQUIPMENT_CATEGORIES = [
   { key: 'other', label: 'Other / Misc', dbValues: ['other'] }
 ];
 
+async function openApproveContributorsScreen(){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeApprove">✕</button><h1>Approve Contributors</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll">
+      <div class="small" style="padding:8px 18px 16px 18px; color:var(--slate); line-height:1.5;">Approve someone by their account email so they can contribute to the shared Zealift database. They'll need to have already signed in at least once.</div>
+      <div style="padding:0 18px;">
+        <input id="approveEmailInput" type="email" placeholder="their@email.com" class="input-field" style="margin-bottom:12px;">
+        <button class="save-btn" id="approveBtn" style="margin:0;">Approve</button>
+        <div class="small" id="approveStatus" style="margin-top:10px; text-align:center;"></div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeApprove').onclick = () => overlay.remove();
+  overlay.querySelector('#approveBtn').onclick = async () => {
+    const btn = overlay.querySelector('#approveBtn');
+    const statusEl = overlay.querySelector('#approveStatus');
+    const email = overlay.querySelector('#approveEmailInput').value.trim();
+    if (!email){ statusEl.textContent = 'Enter an email first.'; statusEl.style.color = 'var(--slate)'; return; }
+    await withButtonLoading(btn, 'Approving…', async () => {
+      const { data, error } = await supabaseClient.rpc('approve_contributor_by_email', { target_email: email });
+      if (error){
+        statusEl.textContent = `Error: ${error.message}. If this mentions a missing function, the verified_contributors migration needs to be run first.`;
+        statusEl.style.color = '#E8492A';
+      } else if (data === 'approved'){
+        statusEl.textContent = `Approved - ${email} can now contribute.`;
+        statusEl.style.color = 'var(--good)';
+        overlay.querySelector('#approveEmailInput').value = '';
+      } else if (data === 'user_not_found'){
+        statusEl.textContent = `No account found for ${email} - they need to sign in at least once first.`;
+        statusEl.style.color = '#E8A33D';
+      } else {
+        statusEl.textContent = 'Not authorized to approve contributors.';
+        statusEl.style.color = '#E8492A';
+      }
+    });
+  };
+}
+
 async function openPublishToZealiftScreen(){
   const overlay = document.createElement('div');
   overlay.className = 'overlay-screen';
@@ -2497,6 +2547,11 @@ async function openPublishToZealiftScreen(){
   overlay.querySelector('#closePublishZealift').onclick = () => overlay.remove();
 
   const { data: userData } = await supabaseClient.auth.getUser();
+  const verified = await isVerifiedContributor(userData.user.id);
+  if (!verified){
+    overlay.querySelector('#publishList').innerHTML = `<div class="empty-state" style="padding:24px 18px;">Contributing to the shared Zealift database needs approval first - this keeps it clean and reliable for everyone. Reach out and it'll get sorted quickly.</div>`;
+    return;
+  }
   const [allExercises, publicDb, zealiftDb] = await Promise.all([
     fetchAllExercisesCompat(userData.user.id), loadExerciseDB(), loadZealiftExerciseDB()
   ]);
@@ -9043,6 +9098,7 @@ async function renderMe(){
   const { data: userData } = await supabaseClient.auth.getUser();
   const email = userData && userData.user ? userData.user.email : '';
   const initial = email ? email[0].toUpperCase() : '?';
+  const isOwner = !!(userData && userData.user && userData.user.id === APP_OWNER_USER_ID);
   app.innerHTML = `
     <div class="app-shell">
       <div class="scroll-area">
@@ -9070,6 +9126,10 @@ async function renderMe(){
           <div><div>Zealift Database</div><div class="small" style="color:var(--slate); margin-top:2px;">Contribute exercises you use that aren't in the public database</div></div>
           <div class="chev" style="margin-top:2px;">›</div>
         </div>
+        ${isOwner ? `<div class="me-item" id="approveContributorsBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+          <div><div>Approve Contributors</div><div class="small" style="color:var(--slate); margin-top:2px;">Approve who can add to the Zealift database</div></div>
+          <div class="chev" style="margin-top:2px;">›</div>
+        </div>` : ''}
         <div class="me-item" id="planSubPageBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
           <div><div>Plan</div><div class="small" style="color:var(--slate); margin-top:2px;">Reorganize, swap days, redo setup, tag workouts</div></div>
           <div class="chev" style="margin-top:2px;">›</div>
@@ -9089,6 +9149,7 @@ async function renderMe(){
   document.getElementById('locationSubPageBtn').onclick = () => openLocationSubPage();
   document.getElementById('environmentsBtn').onclick = () => openEnvironmentsScreen();
   document.getElementById('publishZealiftBtn').onclick = () => openPublishToZealiftScreen();
+  if (isOwner) document.getElementById('approveContributorsBtn').onclick = () => openApproveContributorsScreen();
   document.getElementById('planSubPageBtn').onclick = () => openPlanSubPage();
   document.getElementById('shareAppBtn').onclick = async () => {
     const shareUrl = `${location.origin}${location.pathname}`.replace(/\/index\.html$/, '/');
