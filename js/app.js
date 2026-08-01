@@ -2526,8 +2526,15 @@ async function openPublishToZealiftScreen(){
             <div class="check-circle publish-check" data-name="${c.name}" style="opacity:0.3; flex-shrink:0;">${ICON_CHECK}</div>
             <div class="ex-name" style="font-size:13px;">${c.name}</div>
           </div>
-          <div class="publish-muscle-row" data-name="${c.name}" style="display:none; flex-wrap:wrap; gap:6px; margin-top:10px; padding-top:10px; border-top:1px solid var(--line);">
-            ${BALANCE_MUSCLES.map(m => `<div class="chip publish-muscle-chip" data-name="${c.name}" data-muscle="${m}" style="font-size:11px; padding:6px 10px;">${BALANCE_LABELS[m]}</div>`).join('')}
+          <div class="publish-muscle-row" data-name="${c.name}" style="display:none; flex-direction:column; gap:6px; margin-top:10px; padding-top:10px; border-top:1px solid var(--line);">
+            <div class="small" style="color:var(--slate);">Primary muscle</div>
+            <div style="display:flex; flex-wrap:wrap; gap:6px;">
+              ${BALANCE_MUSCLES.map(m => `<div class="chip publish-muscle-chip" data-name="${c.name}" data-muscle="${m}" style="font-size:11px; padding:6px 10px;">${BALANCE_LABELS[m]}</div>`).join('')}
+            </div>
+            <div class="small" style="color:var(--slate); margin-top:4px;">Equipment</div>
+            <div style="display:flex; flex-wrap:wrap; gap:6px;">
+              ${EQUIPMENT_CATEGORIES.map(cat => `<div class="chip publish-equip-chip" data-name="${c.name}" data-equip="${cat.dbValues[0]}" style="font-size:11px; padding:6px 10px;">${cat.label}</div>`).join('')}
+            </div>
           </div>
         </div>
       `).join('')}
@@ -2536,10 +2543,10 @@ async function openPublishToZealiftScreen(){
 
   function updatePublishBtn(){
     const btn = overlay.querySelector('#publishBtn');
-    const ready = Object.keys(selected).filter(name => selected[name].muscle);
+    const ready = Object.keys(selected).filter(name => selected[name].muscle && selected[name].equipment);
     const pending = Object.keys(selected).length - ready.length;
     if (!Object.keys(selected).length){ btn.disabled = true; btn.textContent = 'Select exercises to contribute'; }
-    else if (pending > 0){ btn.disabled = true; btn.textContent = `Pick a muscle for ${pending} more`; }
+    else if (pending > 0){ btn.disabled = true; btn.textContent = `Tag ${pending} more exercise${pending===1?'':'s'}`; }
     else { btn.disabled = false; btn.textContent = `Contribute ${ready.length} Exercise${ready.length===1?'':'s'}`; }
   }
 
@@ -2553,7 +2560,7 @@ async function openPublishToZealiftScreen(){
         checkEl.style.opacity = '0.3';
         muscleRow.style.display = 'none';
       } else {
-        selected[name] = { muscle: null };
+        selected[name] = { muscle: null, equipment: null };
         checkEl.style.opacity = '1';
         muscleRow.style.display = 'flex';
       }
@@ -2571,12 +2578,23 @@ async function openPublishToZealiftScreen(){
       updatePublishBtn();
     };
   });
+  overlay.querySelectorAll('.publish-equip-chip').forEach(chip => {
+    chip.onclick = (e) => {
+      e.stopPropagation();
+      const name = chip.dataset.name;
+      if (!selected[name]) return;
+      selected[name].equipment = chip.dataset.equip;
+      overlay.querySelectorAll('.publish-equip-chip').forEach(c => { if (c.dataset.name === name) c.classList.remove('active'); });
+      chip.classList.add('active');
+      updatePublishBtn();
+    };
+  });
   overlay.querySelector('#publishBtn').onclick = async () => {
     const btn = overlay.querySelector('#publishBtn');
     await withButtonLoading(btn, 'Publishing…', async () => {
       const rows = Object.entries(selected)
-        .filter(([, v]) => v.muscle)
-        .map(([name, v]) => ({ name, primary_muscle: v.muscle, contributed_by: userData.user.id }));
+        .filter(([, v]) => v.muscle && v.equipment)
+        .map(([name, v]) => ({ name, primary_muscle: v.muscle, equipment: v.equipment, contributed_by: userData.user.id }));
       const { error } = await supabaseClient.from('zealift_exercise_db').insert(rows);
       if (error){
         alert(`Could not publish: ${error.message}\n\nIf this mentions a missing table, the Zealift database migration needs to be run first.`);
@@ -2588,6 +2606,7 @@ async function openPublishToZealiftScreen(){
     });
   };
 }
+
 
 async function openEnvironmentsScreen(){
   const overlay = document.createElement('div');
