@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.129';
+const APP_VERSION = 'Beta 5.130';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1234,6 +1234,22 @@ async function loadExerciseDB(){
     }
   })();
   return _exdbPromise;
+}
+
+let _zealiftDbCache = null;
+async function loadZealiftExerciseDB(){
+  if (_zealiftDbCache) return _zealiftDbCache;
+  const result = await withTimeout(
+    supabaseClient.from('zealift_exercise_db').select('id, name, primary_muscle, secondary_muscles, equipment, mechanic, level, instructions').order('name'),
+    15000
+  );
+  if (result.__timeout || result.error){ return []; } // table may not exist yet if the migration hasn't run
+  _zealiftDbCache = (result.data || []).map(e => ({
+    name: e.name, primaryMuscles: e.primary_muscle ? [e.primary_muscle] : [], secondaryMuscles: e.secondary_muscles || [],
+    equipment: e.equipment, mechanic: e.mechanic, level: e.level, instructions: e.instructions,
+    _source: 'zealift'
+  }));
+  return _zealiftDbCache;
 }
 
 // Curated overrides for names the fuzzy matcher gets wrong: either it finds nothing
@@ -2467,6 +2483,111 @@ const EQUIPMENT_CATEGORIES = [
   { key: 'foam roll', label: 'Foam Roller', dbValues: ['foam roll'] },
   { key: 'other', label: 'Other / Misc', dbValues: ['other'] }
 ];
+
+async function openPublishToZealiftScreen(){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closePublishZealift">✕</button><h1>Zealift Database</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll">
+      <div class="small" style="padding:8px 18px 16px 18px; color:var(--slate); line-height:1.5;">A shared exercise library, separate from the public database, built from what real users have actually added - gym-specific machines and variants the public one doesn't have. Anything you contribute here becomes visible to every Zealift user, tagged with a ⚡ Zealift badge in the picker.</div>
+      <div id="publishList"><div class="small" style="padding:16px 18px; color:var(--slate);">Scanning your library…</div></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closePublishZealift').onclick = () => overlay.remove();
+
+  const { data: userData } = await supabaseClient.auth.getUser();
+  const [allExercises, publicDb, zealiftDb] = await Promise.all([
+    fetchAllExercisesCompat(userData.user.id), loadExerciseDB(), loadZealiftExerciseDB()
+  ]);
+  const zealiftNamesLower = new Set(zealiftDb.map(e => e.name.toLowerCase()));
+  const seenNames = new Set();
+  const candidates = [];
+  allExercises.forEach(ex => {
+    const lower = ex.name.toLowerCase();
+    if (seenNames.has(lower)) return;
+    seenNames.add(lower);
+    if (zealiftNamesLower.has(lower)) return; // already contributed
+    if (publicDb && matchExercise(ex.name, publicDb)) return; // already covered by the public database
+    candidates.push({ name: ex.name });
+  });
+
+  const selected = {}; // name -> { muscle }
+  const listArea = overlay.querySelector('#publishList');
+  if (!candidates.length){
+    listArea.innerHTML = `<div class="empty-state" style="padding:20px 18px;">Nothing to contribute right now - every exercise in your library is either already covered by the public database or already in the Zealift database.</div>`;
+    return;
+  }
+  listArea.innerHTML = `
+    <div style="padding:0 18px;">
+      ${candidates.map(c => `
+        <div style="background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:8px;">
+          <div class="publish-row" data-name="${c.name}" style="display:flex; align-items:center; gap:10px; cursor:pointer;">
+            <div class="check-circle publish-check" data-name="${c.name}" style="opacity:0.3; flex-shrink:0;">${ICON_CHECK}</div>
+            <div class="ex-name" style="font-size:13px;">${c.name}</div>
+          </div>
+          <div class="publish-muscle-row" data-name="${c.name}" style="display:none; flex-wrap:wrap; gap:6px; margin-top:10px; padding-top:10px; border-top:1px solid var(--line);">
+            ${BALANCE_MUSCLES.map(m => `<div class="chip publish-muscle-chip" data-name="${c.name}" data-muscle="${m}" style="font-size:11px; padding:6px 10px;">${BALANCE_LABELS[m]}</div>`).join('')}
+          </div>
+        </div>
+      `).join('')}
+      <button class="save-btn" id="publishBtn" style="margin:14px 0 24px 0;" disabled>Select exercises to contribute</button>
+    </div>`;
+
+  function updatePublishBtn(){
+    const btn = overlay.querySelector('#publishBtn');
+    const ready = Object.keys(selected).filter(name => selected[name].muscle);
+    const pending = Object.keys(selected).length - ready.length;
+    if (!Object.keys(selected).length){ btn.disabled = true; btn.textContent = 'Select exercises to contribute'; }
+    else if (pending > 0){ btn.disabled = true; btn.textContent = `Pick a muscle for ${pending} more`; }
+    else { btn.disabled = false; btn.textContent = `Contribute ${ready.length} Exercise${ready.length===1?'':'s'}`; }
+  }
+
+  overlay.querySelectorAll('.publish-row').forEach(row => {
+    row.onclick = () => {
+      const name = row.dataset.name;
+      const checkEl = [...overlay.querySelectorAll('.publish-check')].find(el => el.dataset.name === name);
+      const muscleRow = [...overlay.querySelectorAll('.publish-muscle-row')].find(el => el.dataset.name === name);
+      if (selected[name]){
+        delete selected[name];
+        checkEl.style.opacity = '0.3';
+        muscleRow.style.display = 'none';
+      } else {
+        selected[name] = { muscle: null };
+        checkEl.style.opacity = '1';
+        muscleRow.style.display = 'flex';
+      }
+      updatePublishBtn();
+    };
+  });
+  overlay.querySelectorAll('.publish-muscle-chip').forEach(chip => {
+    chip.onclick = (e) => {
+      e.stopPropagation();
+      const name = chip.dataset.name;
+      if (!selected[name]) return;
+      selected[name].muscle = chip.dataset.muscle;
+      overlay.querySelectorAll('.publish-muscle-chip').forEach(c => { if (c.dataset.name === name) c.classList.remove('active'); });
+      chip.classList.add('active');
+      updatePublishBtn();
+    };
+  });
+  overlay.querySelector('#publishBtn').onclick = async () => {
+    const btn = overlay.querySelector('#publishBtn');
+    await withButtonLoading(btn, 'Publishing…', async () => {
+      const rows = Object.entries(selected)
+        .filter(([, v]) => v.muscle)
+        .map(([name, v]) => ({ name, primary_muscle: v.muscle, contributed_by: userData.user.id }));
+      const { error } = await supabaseClient.from('zealift_exercise_db').insert(rows);
+      if (error){
+        alert(`Could not publish: ${error.message}\n\nIf this mentions a missing table, the Zealift database migration needs to be run first.`);
+        return;
+      }
+      _zealiftDbCache = null; // force a fresh load next time the database tab opens
+      overlay.remove();
+      alert(`Published! ${rows.length} exercise${rows.length===1?'':'s'} now visible to every Zealift user.`);
+    });
+  };
+}
 
 async function openEnvironmentsScreen(){
   const overlay = document.createElement('div');
@@ -4403,28 +4524,40 @@ async function openPicker(initialTab, jumpToMuscle){
   async function renderDatabaseTab(){
     const body = overlay.querySelector('#pickerBody');
     body.innerHTML = `<div class="small" style="padding:12px 18px; color:var(--slate);">Loading database…</div>`;
-    const db = await loadExerciseDB();
-    if (!db){
+    const [publicDb, zealiftDb] = await Promise.all([loadExerciseDB(), loadZealiftExerciseDB()]);
+    if (!publicDb){
       body.innerHTML = `<div class="empty-state">Database unavailable offline.</div>`;
       return;
     }
+    publicDb.forEach(e => { if (!e._source) e._source = 'public'; });
+    const db = [...publicDb, ...zealiftDb];
+    const sourceFilter = state._pickerSourceFilter || 'all';
     const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
     const filterBannerHtml = allowedEquipmentValues ? `
       <div style="margin:10px 18px 0 18px; background:rgba(123,166,201,0.12); border:1px solid rgba(123,166,201,0.3); border-radius:10px; padding:10px 12px; display:flex; justify-content:space-between; align-items:center;">
         <div class="small" style="color:#7BA6C9;">Filtered to what's set up for this location</div>
         <button id="showAllEquipBtn" style="background:none; color:#7BA6C9; font-size:11px; text-decoration:underline; flex-shrink:0; margin-left:8px;">Show all</button>
       </div>` : '';
+    const sourceToggleHtml = zealiftDb.length ? `
+      <div style="display:flex; gap:8px; margin:10px 18px 0 18px;">
+        <div class="db-source-chip ${sourceFilter==='all'?'active':''}" data-src="all" style="flex:1; text-align:center; padding:7px 0; border-radius:10px; background:${sourceFilter==='all'?'var(--flame)':'var(--panel)'}; color:${sourceFilter==='all'?'var(--ink)':'var(--chalk)'}; font-size:11.5px; border:1px solid var(--line); cursor:pointer;">All (${db.length})</div>
+        <div class="db-source-chip ${sourceFilter==='zealift'?'active':''}" data-src="zealift" style="flex:1; text-align:center; padding:7px 0; border-radius:10px; background:${sourceFilter==='zealift'?'var(--flame)':'var(--panel)'}; color:${sourceFilter==='zealift'?'var(--ink)':'var(--chalk)'}; font-size:11.5px; border:1px solid var(--line); cursor:pointer;">⚡ Zealift DB (${zealiftDb.length})</div>
+      </div>` : '';
     body.innerHTML = `
       ${filterBannerHtml}
+      ${sourceToggleHtml}
       <div class="search-bar">🔍 <input id="dbSearch" placeholder="Search ${db.length} exercises…"></div>
       <div id="starterBlock"></div>
       <div id="dbGroupToggle"></div>
       <div id="dbList" style="padding-right:26px;"></div>`;
     const showAllBtn = body.querySelector('#showAllEquipBtn');
     if (showAllBtn) showAllBtn.onclick = () => { allowedEquipmentValues = null; renderDatabaseTab(); };
+    body.querySelectorAll('.db-source-chip').forEach(chip => {
+      chip.onclick = () => { state._pickerSourceFilter = chip.dataset.src; renderDatabaseTab(); };
+    });
 
     const starterNames = ['Chest Press','Shoulder Press','Lat Pulldown','Tricep Pushdown','Bicep Curl','Leg Press','Seated Row','Plank'];
-    const starterMatches = starterNames.map(n => matchExercise(n, db)).filter(Boolean);
+    const starterMatches = sourceFilter === 'zealift' ? [] : starterNames.map(n => matchExercise(n, publicDb)).filter(Boolean);
     if (starterMatches.length){
       body.querySelector('#starterBlock').innerHTML = `
         <div style="margin:14px 18px 14px 18px; background:var(--panel); border-radius:14px; padding:14px 16px;">
@@ -4442,6 +4575,7 @@ async function openPicker(initialTab, jumpToMuscle){
     function renderDbList(filter){
       const f = (filter || '').toLowerCase();
       let filtered = db.filter(e => e.name.toLowerCase().includes(f));
+      if (sourceFilter === 'zealift') filtered = filtered.filter(e => e._source === 'zealift');
       if (allowedEquipmentValues){
         filtered = filtered.filter(e => !e.equipment || allowedEquipmentValues.has(e.equipment));
       }
@@ -4475,6 +4609,8 @@ async function openPicker(initialTab, jumpToMuscle){
         flatOrder.push({ name: e.name, equipment: e.equipment });
         const star = POPULAR_EXERCISES.has(e.name)
           ? `<span title="Popular staple" style="color:#F0C542; margin-left:5px;">★</span>` : '';
+        const zealiftBadge = e._source === 'zealift'
+          ? `<span title="Contributed to the shared Zealift database" style="font-size:9px; padding:2px 6px; border-radius:4px; margin-left:5px; background:rgba(232,73,42,0.15); color:var(--flame);">⚡ Zealift</span>` : '';
         const alreadyToday = todayNames.has(e.name.toLowerCase())
           ? `<span style="font-size:9px; padding:2px 6px; border-radius:4px; margin-left:5px; background:rgba(143,191,122,0.15); color:var(--good);">✓ On ${DAY_NAMES[state.selectedDay]}</span>` : '';
         const muscles = muscleSubtitle(e.primaryMuscles, e.secondaryMuscles);
@@ -4487,7 +4623,7 @@ async function openPicker(initialTab, jumpToMuscle){
         const altHint = todayHintName
           ? `<div class="small" style="color:var(--slate); opacity:0.7; font-style:italic; margin-top:1px;">alt for ${todayHintName} (on ${DAY_NAMES[state.selectedDay]})</div>`
           : listHintName ? `<div class="small" style="color:var(--slate); opacity:0.7; font-style:italic; margin-top:1px;">alt for ${listHintName}</div>` : '';
-        return `<div class="pick-row db-pick" data-name="${e.name}" data-equip="${e.equipment||''}" style="${selection.active ? 'display:flex; align-items:center; gap:10px;' : ''}">${selection.active ? `<div class="check-circle" style="opacity:${selection.items.has(e.name)?1:0.3}; flex-shrink:0;">${ICON_CHECK}</div>` : ''}<div style="flex:1;"><div class="ex-name">${e.name}${star}${mechTag}${alreadyToday}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}${equipLine ? `<div class="small" style="color:var(--slate); opacity:0.7; font-size:10.5px;">${equipLine}</div>` : ''}${altHint}</div>${selection.active ? '' : '<div class="chev">›</div>'}</div>`;
+        return `<div class="pick-row db-pick" data-name="${e.name}" data-equip="${e.equipment||''}" style="${selection.active ? 'display:flex; align-items:center; gap:10px;' : ''}">${selection.active ? `<div class="check-circle" style="opacity:${selection.items.has(e.name)?1:0.3}; flex-shrink:0;">${ICON_CHECK}</div>` : ''}<div style="flex:1;"><div class="ex-name">${e.name}${star}${zealiftBadge}${mechTag}${alreadyToday}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}${equipLine ? `<div class="small" style="color:var(--slate); opacity:0.7; font-size:10.5px;">${equipLine}</div>` : ''}${altHint}</div>${selection.active ? '' : '<div class="chev">›</div>'}</div>`;
       }
 
       presentKeys.forEach(cat => {
@@ -8911,6 +9047,10 @@ async function renderMe(){
           <div><div>Environments</div><div class="small" style="color:var(--slate); margin-top:2px;">Set what equipment each gym has, so suggestions match reality</div></div>
           <div class="chev" style="margin-top:2px;">›</div>
         </div>
+        <div class="me-item" id="publishZealiftBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+          <div><div>Zealift Database</div><div class="small" style="color:var(--slate); margin-top:2px;">Contribute exercises you use that aren't in the public database</div></div>
+          <div class="chev" style="margin-top:2px;">›</div>
+        </div>
         <div class="me-item" id="planSubPageBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
           <div><div>Plan</div><div class="small" style="color:var(--slate); margin-top:2px;">Reorganize, swap days, redo setup, tag workouts</div></div>
           <div class="chev" style="margin-top:2px;">›</div>
@@ -8929,6 +9069,7 @@ async function renderMe(){
   document.getElementById('backupPlanBtn').onclick = openBackupPlanScreen;
   document.getElementById('locationSubPageBtn').onclick = () => openLocationSubPage();
   document.getElementById('environmentsBtn').onclick = () => openEnvironmentsScreen();
+  document.getElementById('publishZealiftBtn').onclick = () => openPublishToZealiftScreen();
   document.getElementById('planSubPageBtn').onclick = () => openPlanSubPage();
   document.getElementById('shareAppBtn').onclick = async () => {
     const shareUrl = `${location.origin}${location.pathname}`.replace(/\/index\.html$/, '/');
