@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.134';
+const APP_VERSION = 'Beta 5.135';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1431,7 +1431,7 @@ async function quickSaveSet(exerciseId, exerciseName, best){
   const { data: userData } = await supabaseClient.auth.getUser();
   const useMaster = getUseExerciseMasterFlag();
   const idField = useMaster ? 'exercise_master_id' : 'exercise_id';
-  const weight = best.weight, unit = best.weight_unit, weightType = best.weight_type;
+  const weight = best.weight, unit = best.weight_unit, weightType = best.weight_type || 'total';
 
   let priorBest = null;
   if (weight !== null && (unit === 'kg' || unit === 'lb')){
@@ -1475,7 +1475,7 @@ function exerciseRow(ex){
     : '';
   const topPad = groupName ? 'padding-top:5px;' : '';
 
-  let subtitle, showCheck, isDone = false;
+  let subtitle, showCheck, isDone = false, hasQuickButtons = false;
   let quickSaveBtn = '';
   if (ex.loggedToday){
     subtitle = `<div class="ex-last done">✓ Logged today — ${formatSetValue(ex.lastSet)}</div>`;
@@ -1490,9 +1490,16 @@ function exerciseRow(ex){
     if (best){
       state.trackBestSetById = state.trackBestSetById || {};
       state.trackBestSetById[ex.id] = best;
+      // Always state Per or Total explicitly for weight-based units - omitting
+      // the word for "Total" reads as undefined/missing, not as a real answer.
+      const isWeightUnit = best.weight_unit === 'kg' || best.weight_unit === 'lb';
+      const quickLabel = isWeightUnit
+        ? `${best.weight}${best.weight_unit} ${best.weight_type === 'per' ? 'Per' : 'Total'}`
+        : formatSetValue(best);
+      hasQuickButtons = true;
       subtitle = `<div style="display:flex; gap:8px; margin-top:8px;">
         <div class="ex-save-set-btn" data-id="${ex.id}" data-name="${ex.name}" style="flex:3; text-align:center; padding:9px 0; border-radius:9px; background:var(--ink); border:1px solid var(--line); font-size:11.5px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:0.3px; color:var(--chalk);">Save Set</div>
-        <div class="ex-quick-save-btn" data-id="${ex.id}" data-name="${ex.name}" style="flex:1; text-align:center; padding:9px 0; border-radius:9px; background:var(--flame); font-size:11.5px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:0.3px; color:var(--ink); font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">⚡ ${formatSetValue(best)}</div>
+        <div class="ex-quick-save-btn" data-id="${ex.id}" data-name="${ex.name}" style="flex:1; text-align:center; padding:9px 0; border-radius:9px; background:var(--flame); font-size:11.5px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:0.3px; color:var(--ink); font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">⚡ ${quickLabel}</div>
       </div>`;
     } else {
       subtitle = `<div class="ex-last">Not logged yet</div>`;
@@ -1518,7 +1525,7 @@ function exerciseRow(ex){
       <div class="ex-name">${ex.name}${splitTag}${mechTag}</div>
       ${subtitle}
     </div>
-    ${showCheck ? `<div class="check-circle">${ICON_CHECK}</div>` : `<div class="chev">›</div>`}
+    ${showCheck ? `<div class="check-circle">${ICON_CHECK}</div>` : (hasQuickButtons ? '' : `<div class="chev">›</div>`)}
   </div>`;
 }
 
