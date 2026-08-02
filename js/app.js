@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.143';
+const APP_VERSION = 'Beta 5.144';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -883,13 +883,18 @@ function detectWeightStagnation(setsForExercise){
     if (!byDate[s.logged_at] || perSideKg > byDate[s.logged_at]) byDate[s.logged_at] = perSideKg;
   });
   const today = todayStr();
-  const sessions = Object.entries(byDate)
+  // Need at least 3 completed (pre-today) sessions before judging anything -
+  // not enough history otherwise.
+  const priorSessions = Object.entries(byDate)
     .filter(([date]) => date !== today)
     .sort((a,b) => b[0].localeCompare(a[0]))
     .slice(0, 4);
-  if (sessions.length < 3) return false;
-  const mostRecentWeight = sessions[0][1];
-  const oldestWeight = sessions[sessions.length-1][1];
+  if (priorSessions.length < 3) return false;
+  const oldestWeight = priorSessions[priorSessions.length-1][1];
+  // Whatever's most recent overall - today's own log if it exists, otherwise
+  // the last completed session - is what actually gets compared. A real
+  // increase logged today clears the note immediately, same day.
+  const mostRecentWeight = byDate[today] !== undefined ? byDate[today] : priorSessions[0][1];
   return mostRecentWeight <= oldestWeight + 0.01;
 }
 
@@ -1532,7 +1537,7 @@ function exerciseRow(ex){
       hasQuickButtons = true;
       subtitle = `<div style="display:flex; gap:8px; margin-top:12px;">
         <div class="ex-save-set-btn" data-id="${ex.id}" data-name="${ex.name}" style="flex:3; text-align:center; padding:10px 0; border-radius:10px; ${glassBtnStyle} font-size:11px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:0.4px;">Save Set</div>
-        <div class="ex-quick-save-btn" data-id="${ex.id}" data-name="${ex.name}" style="flex:2; text-align:center; padding:10px 0; border-radius:10px; ${glassBtnStyle} font-size:11px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:0.4px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${quickLabel}</div>
+        <div class="ex-quick-save-btn" data-id="${ex.id}" data-name="${ex.name}" style="flex:2; text-align:center; padding:10px 0; border-radius:10px; background:rgba(255,107,26,0.14); border:1px solid rgba(255,107,26,0.35); color:#FF9552; font-size:11px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:0.4px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${quickLabel}</div>
       </div>`;
     } else {
       hasQuickButtons = true;
@@ -1556,7 +1561,7 @@ function exerciseRow(ex){
   const splitTag = splitInfo ? `<span style="font-size:9px; padding:2px 5px; border-radius:4px; margin-left:5px; background:${splitInfo[0]}26; color:${splitInfo[0]};">${splitInfo[1]}</span>` : '';
 
   const stagnantNote = ex.stagnant
-    ? `<div style="font-size:10.5px; color:#E8A33D; margin-top:8px; display:flex; align-items:center; gap:5px;"><span>📈</span>Same weight a few sessions running — try adding some</div>`
+    ? `<div style="font-size:10.5px; color:#E8A33D; margin-top:8px; display:flex; align-items:center; gap:5px;"><span>📈</span>Same weight a few sessions running — try increasing</div>`
     : '';
 
   return `<div class="exercise" style="${borderStyle}" data-id="${ex.id}" data-name="${ex.name}">
