@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.141';
+const APP_VERSION = 'Beta 5.142';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -6903,11 +6903,11 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
     // Capture prior best BEFORE inserting, for PR detection (weight-based only).
     let priorBest = null;
     if (weight !== null && (unit === 'kg' || unit === 'lb')){
-      const prevSets = await supabaseClient.from('sets')
-        .select('weight, weight_unit')
-        .eq(idField, exerciseId)
-        .in('weight_unit', ['kg','lb']);
-      if (prevSets.data && prevSets.data.length){
+      const prevSets = await withTimeout(
+        supabaseClient.from('sets').select('weight, weight_unit').eq(idField, exerciseId).in('weight_unit', ['kg','lb']),
+        10000
+      );
+      if (!prevSets.__timeout && !prevSets.error && prevSets.data && prevSets.data.length){
         priorBest = Math.max(...prevSets.data.map(s => convertWeight(s.weight, s.weight_unit, unit)));
       }
     }
