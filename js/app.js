@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.135';
+const APP_VERSION = 'Beta 5.136';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1478,7 +1478,9 @@ function exerciseRow(ex){
   let subtitle, showCheck, isDone = false, hasQuickButtons = false;
   let quickSaveBtn = '';
   if (ex.loggedToday){
-    subtitle = `<div class="ex-last done">✓ Logged today — ${formatSetValue(ex.lastSet)}</div>`;
+    subtitle = `<div style="margin-top:12px;">
+      <div style="text-align:center; padding:9px 0; border-radius:9px; background:var(--good); font-size:11.5px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:0.3px; color:var(--ink); font-weight:600;">✓ Logged today — ${formatSetValue(ex.lastSet)}</div>
+    </div>`;
     showCheck = true; isDone = true;
   } else if (ex.completeVia){
     subtitle = `<div class="ex-last via">↳ Complete via ${ex.completeVia}</div>`;
@@ -1497,9 +1499,9 @@ function exerciseRow(ex){
         ? `${best.weight}${best.weight_unit} ${best.weight_type === 'per' ? 'Per' : 'Total'}`
         : formatSetValue(best);
       hasQuickButtons = true;
-      subtitle = `<div style="display:flex; gap:8px; margin-top:8px;">
+      subtitle = `<div style="display:flex; gap:8px; margin-top:12px;">
         <div class="ex-save-set-btn" data-id="${ex.id}" data-name="${ex.name}" style="flex:3; text-align:center; padding:9px 0; border-radius:9px; background:var(--ink); border:1px solid var(--line); font-size:11.5px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:0.3px; color:var(--chalk);">Save Set</div>
-        <div class="ex-quick-save-btn" data-id="${ex.id}" data-name="${ex.name}" style="flex:1; text-align:center; padding:9px 0; border-radius:9px; background:var(--flame); font-size:11.5px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:0.3px; color:var(--ink); font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">⚡ ${quickLabel}</div>
+        <div class="ex-quick-save-btn" data-id="${ex.id}" data-name="${ex.name}" style="flex:2; text-align:center; padding:9px 0; border-radius:9px; background:var(--flame); font-size:11.5px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:0.3px; color:var(--ink); font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">⚡ ${quickLabel}</div>
       </div>`;
     } else {
       subtitle = `<div class="ex-last">Not logged yet</div>`;
