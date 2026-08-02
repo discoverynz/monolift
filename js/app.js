@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.139';
+const APP_VERSION = 'Beta 5.140';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1477,14 +1477,15 @@ function exerciseRow(ex){
 
   let subtitle, showCheck, isDone = false, hasQuickButtons = false;
   let quickSaveBtn = '';
+  const glassBtnStyle = "background:linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.015)); border:1px solid rgba(255,255,255,0.08); color:#C9CBD1;";
   if (ex.loggedToday){
     subtitle = `<div style="margin-top:12px;">
-      <div style="text-align:center; padding:9px 0; border-radius:9px; background:var(--good); font-size:11.5px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:0.3px; color:var(--ink); font-weight:600;">✓ Logged today — ${formatSetValue(ex.lastSet)}</div>
+      <div style="text-align:center; padding:10px 0; border-radius:10px; background:linear-gradient(155deg, #9ED486, #6FA457); box-shadow:0 4px 12px rgba(143,191,122,0.25), inset 0 1px 0 rgba(255,255,255,0.3); font-size:11.5px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:0.3px; color:#0F1A0C; font-weight:700;">✓ Logged today — ${formatSetValue(ex.lastSet)}</div>
     </div>`;
     showCheck = false; isDone = true;
   } else if (ex.completeVia){
     subtitle = `<div style="margin-top:12px;">
-      <div style="text-align:center; padding:9px 0; border-radius:9px; background:rgba(143,191,122,0.18); border:1px solid rgba(143,191,122,0.35); font-size:11.5px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:0.3px; color:var(--good); font-weight:600;">↳ Complete via ${ex.completeVia}</div>
+      <div style="text-align:center; padding:9px 0; border-radius:10px; background:rgba(143,191,122,0.18); border:1px solid rgba(143,191,122,0.35); font-size:11.5px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:0.3px; color:var(--good); font-weight:600;">↳ Complete via ${ex.completeVia}</div>
     </div>`;
     showCheck = false; isDone = true;
   } else {
@@ -1502,13 +1503,13 @@ function exerciseRow(ex){
         : formatSetValue(best);
       hasQuickButtons = true;
       subtitle = `<div style="display:flex; gap:8px; margin-top:12px;">
-        <div class="ex-save-set-btn" data-id="${ex.id}" data-name="${ex.name}" style="flex:3; text-align:center; padding:9px 0; border-radius:9px; background:var(--ink); border:1px solid var(--line); font-size:11.5px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:0.3px; color:var(--chalk);">Save Set</div>
-        <div class="ex-quick-save-btn" data-id="${ex.id}" data-name="${ex.name}" style="flex:2; text-align:center; padding:9px 0; border-radius:9px; background:var(--ink); border:1px solid var(--line); font-size:11.5px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:0.3px; color:var(--chalk); font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${quickLabel}</div>
+        <div class="ex-save-set-btn" data-id="${ex.id}" data-name="${ex.name}" style="flex:3; text-align:center; padding:10px 0; border-radius:10px; ${glassBtnStyle} font-size:11px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:0.4px;">Save Set</div>
+        <div class="ex-quick-save-btn" data-id="${ex.id}" data-name="${ex.name}" style="flex:2; text-align:center; padding:10px 0; border-radius:10px; ${glassBtnStyle} font-size:11px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:0.4px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${quickLabel}</div>
       </div>`;
     } else {
       hasQuickButtons = true;
       subtitle = `<div style="margin-top:12px;">
-        <div class="ex-save-set-btn" data-id="${ex.id}" data-name="${ex.name}" style="text-align:center; padding:9px 0; border-radius:9px; background:var(--ink); border:1px solid var(--line); font-size:11.5px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:0.3px; color:var(--chalk);">Save Set</div>
+        <div class="ex-save-set-btn" data-id="${ex.id}" data-name="${ex.name}" style="text-align:center; padding:10px 0; border-radius:10px; ${glassBtnStyle} font-size:11px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:0.4px;">Save Set</div>
       </div>`;
     }
     showCheck = false;
@@ -3617,8 +3618,8 @@ async function renderTrack(){
             <span style="font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px;">HIDE</span>
           </button>` : ''}
         </div>
-        <div style="margin:12px 18px 14px 18px; height:4px; background:var(--panel); border-radius:4px; overflow:hidden;">
-          <div style="height:100%; width:${pct}%; background:var(--good); border-radius:4px;"></div>
+        <div style="margin:12px 18px 14px 18px; height:5px; background:rgba(255,255,255,0.04); border-radius:3px; overflow:hidden;">
+          <div style="height:100%; width:${pct}%; border-radius:3px; background:linear-gradient(90deg, #FF7A2E, #FFAA5C); box-shadow:0 0 10px rgba(255,107,26,0.5);"></div>
         </div>
         ${state.exercises.length > 0 ? groupByToggleHtml(groupBy) : ''}
         ${listHtml}

@@ -5,7 +5,11 @@
 *{ box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent; }
 html,body,#app{ height:100%; height:100dvh; }
 body{
-  background:var(--ink); color:var(--chalk); font-family:'Inter', sans-serif;
+  background:
+    radial-gradient(ellipse 140% 45% at 50% -8%, rgba(255,107,26,0.07), transparent 55%),
+    repeating-linear-gradient(115deg, rgba(255,255,255,0.010) 0px, rgba(255,255,255,0.010) 1px, transparent 1px, transparent 3px),
+    var(--ink);
+  color:var(--chalk); font-family:'Inter', sans-serif;
   -webkit-font-smoothing:antialiased; overscroll-behavior:none;
 }
 button, input{ font-family:inherit; border:none; background:none; color:inherit; }
@@ -28,15 +32,17 @@ input:focus, button:focus{ outline:none; }
 .login-error{ font-size:14.5px; color:var(--flame); margin-top:14px; min-height:16px; }
 
 /* ---------- Brand / header ---------- */
-.brandbar{ display:flex; align-items:center; gap:7px; padding:calc(14px + env(safe-area-inset-top, 0px)) 18px 0 18px; }
-.brandbar img{ width:28px; height:28px; }
-.brandbar .name{ font-family:'Bebas Neue', sans-serif; font-size:19px; letter-spacing:3px; color:var(--flame); font-weight:400; }
+.brandbar{ display:flex; align-items:center; gap:9px; padding:calc(14px + env(safe-area-inset-top, 0px)) 18px 0 18px; }
+.brandbar img{ width:28px; height:28px; filter:drop-shadow(0 2px 6px rgba(255,107,26,0.35)); }
+.brandbar .name{ font-family:'Bebas Neue', sans-serif; font-size:19px; letter-spacing:3px; font-weight:400;
+  background:linear-gradient(180deg, #FF8A42, #E8492A); -webkit-background-clip:text; background-clip:text; color:transparent;
+}
 
-.day-strip{ display:flex; justify-content:space-between; padding:10px 18px 10px 18px; border-bottom:1px solid var(--line); }
-.day{ font-family:'JetBrains Mono', monospace; font-size:12px; color:var(--slate); text-align:center; padding:6px 0; width:13%; border:1px solid var(--line); border-radius:2px; }
-.day.active{ color:var(--ink); background:var(--flame); font-weight:600; border-color:var(--flame); }
+.day-strip{ display:flex; justify-content:space-between; padding:10px 18px 10px 18px; border-bottom:1px solid var(--line); gap:4px; }
+.day{ font-family:'JetBrains Mono', monospace; font-size:12px; color:var(--slate); text-align:center; padding:7px 0; width:13%; border:1px solid var(--line); border-radius:8px; background:rgba(255,255,255,0.015); }
+.day.active{ color:#1A0D06; background:linear-gradient(155deg, #FF7A2E, #E8492A); font-weight:600; border-color:transparent; box-shadow:0 4px 12px rgba(255,107,26,0.3), inset 0 1px 0 rgba(255,255,255,0.25); }
 .day.today-marker::after{ content:""; display:block; width:4px; height:4px; border-radius:50%; background:var(--flame); margin:3px auto 0 auto; }
-.day.active.today-marker::after{ background:var(--ink); }
+.day.active.today-marker::after{ background:#1A0D06; }
 
 .header{ padding:14px 18px 0 18px; }
 .eyebrow{ font-family:'JetBrains Mono', monospace; font-size:11px; color:var(--slate); letter-spacing:2px; margin-bottom:4px; }
@@ -44,8 +50,13 @@ input:focus, button:focus{ outline:none; }
 .quote{ font-size:11px; color:var(--slate); font-style:italic; margin-top:6px; line-height:1.4; }
 
 /* ---------- Exercise list ---------- */
-.category{ font-family:'Bebas Neue', sans-serif; font-size:16px; font-weight:400; letter-spacing:1.5px; color:var(--flame); text-transform:uppercase; padding:16px 18px 6px 18px; }
-.exercise{ display:flex; align-items:center; justify-content:space-between; padding:14px 18px; margin:0 12px 10px 12px; background:var(--panel); border:1px solid var(--line); position:relative; overflow:hidden; }
+.category{ font-family:'Bebas Neue', sans-serif; font-size:16px; font-weight:400; letter-spacing:1.5px; color:var(--flame); text-transform:uppercase; padding:16px 18px 6px 18px; display:flex; align-items:center; gap:10px; }
+.category::after{ content:''; flex:1; height:1px; background:linear-gradient(90deg, rgba(255,107,26,0.3), transparent); }
+.exercise{ display:flex; align-items:center; justify-content:space-between; padding:14px 18px; margin:0 12px 10px 12px; border-radius:14px;
+  background:linear-gradient(165deg, #202226, #191a1d); border:1px solid rgba(255,255,255,0.06);
+  box-shadow:0 8px 20px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.03);
+  position:relative; overflow:hidden;
+}
 .ex-name{ font-size:17.5px; font-weight:500; }
 .ex-last{ font-family:'JetBrains Mono', monospace; font-size:14px; color:var(--slate); margin-top:4px; }
 .ex-last.done{ color:var(--good); font-weight:600; }
