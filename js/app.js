@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.133';
+const APP_VERSION = 'Beta 5.134';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1447,7 +1447,7 @@ async function quickSaveSet(exerciseId, exerciseName, best){
     user_id: userData.user.id,
     weight, weight_unit: weight !== null ? unit : 'bodyweight',
     weight_type: weightType,
-    num_sets: best.num_sets || 1, reps: best.reps,
+    num_sets: null, reps: best.reps,
     notes: null,
     logged_at: todayStr(),
     location_id: getCurrentLocationId() || getDefaultLocationId()
@@ -1491,8 +1491,8 @@ function exerciseRow(ex){
       state.trackBestSetById = state.trackBestSetById || {};
       state.trackBestSetById[ex.id] = best;
       subtitle = `<div style="display:flex; gap:8px; margin-top:8px;">
-        <div class="ex-save-set-btn" data-id="${ex.id}" data-name="${ex.name}" style="flex:1; text-align:center; padding:9px 0; border-radius:9px; background:var(--ink); border:1px solid var(--line); font-size:11.5px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:0.3px; color:var(--chalk);">Save Set</div>
-        <div class="ex-quick-save-btn" data-id="${ex.id}" data-name="${ex.name}" style="flex:1; text-align:center; padding:9px 0; border-radius:9px; background:var(--flame); font-size:11.5px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:0.3px; color:var(--ink); font-weight:600;">⚡ ${formatSetValue(best)}</div>
+        <div class="ex-save-set-btn" data-id="${ex.id}" data-name="${ex.name}" style="flex:3; text-align:center; padding:9px 0; border-radius:9px; background:var(--ink); border:1px solid var(--line); font-size:11.5px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:0.3px; color:var(--chalk);">Save Set</div>
+        <div class="ex-quick-save-btn" data-id="${ex.id}" data-name="${ex.name}" style="flex:1; text-align:center; padding:9px 0; border-radius:9px; background:var(--flame); font-size:11.5px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:0.3px; color:var(--ink); font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">⚡ ${formatSetValue(best)}</div>
       </div>`;
     } else {
       subtitle = `<div class="ex-last">Not logged yet</div>`;
