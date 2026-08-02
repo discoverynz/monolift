@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.131';
+const APP_VERSION = 'Beta 5.132';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1463,11 +1463,14 @@ function exerciseRow(ex){
 
   const mech = ex.mechanicInfo;
   const mechTag = mech ? `<span style="font-size:9px; padding:2px 5px; border-radius:4px; margin-left:5px; background:${mech.value==='compound'?'rgba(255,107,26,0.15)':'rgba(122,150,220,0.15)'}; color:${mech.value==='compound'?'#FF6B1A':'#7BA6C9'}; opacity:${mech.guessed?0.75:1};">${mech.guessed?'~':''}${mech.value==='compound'?'Compound':'Isolation'}</span>` : '';
+  const SPLIT_TAG_STYLE = { push:['#FF6B1A','Push'], pull:['#7BA6C9','Pull'], legs:['#C9A227','Legs'], upper:['#FF6B1A','Upper'], lower:['#C9A227','Lower'] };
+  const splitInfo = ex.splitLabel ? SPLIT_TAG_STYLE[ex.splitLabel] : null;
+  const splitTag = splitInfo ? `<span style="font-size:9px; padding:2px 5px; border-radius:4px; margin-left:5px; background:${splitInfo[0]}26; color:${splitInfo[0]};">${splitInfo[1]}</span>` : '';
 
   return `<div class="exercise" style="${borderStyle}" data-id="${ex.id}" data-name="${ex.name}">
     ${cornerTag}
     <div style="flex:1; min-width:0; ${topPad}">
-      <div class="ex-name">${ex.name}${mechTag}</div>
+      <div class="ex-name">${ex.name}${splitTag}${mechTag}</div>
       ${subtitle}
     </div>
     ${showCheck ? `<div class="check-circle">${ICON_CHECK}</div>` : `<div class="chev">›</div>`}
@@ -3434,6 +3437,19 @@ async function renderTrack(){
     loadLocations()
   ]);
   state.exercises.forEach(ex => { ex.mechanicInfo = classifyMechanic(matchExercise(ex.name, exdb)); });
+  const splitModePref = getSplitModePref();
+  const isUpperLowerMode = splitModePref === 'upperlower';
+  state.exercises.forEach(ex => {
+    const match = matchExercise(ex.name, exdb);
+    const muscle = match && match.primaryMuscles && match.primaryMuscles[0];
+    const ul = ex.upper_lower || classifyUpperLower(muscle);
+    if (isUpperLowerMode){
+      ex.splitLabel = ul === 'upper' ? 'upper' : ul === 'lower' ? 'lower' : null;
+    } else {
+      const pp = ex.push_pull || classifyPushPull(muscle, ex.name);
+      ex.splitLabel = ul === 'lower' ? 'legs' : (pp === 'push' ? 'push' : pp === 'pull' ? 'pull' : null);
+    }
+  });
   const currentLocationId = getCurrentLocationId() || getDefaultLocationId();
   state.exercises.forEach(ex => { ex.locationAvailable = isAvailableAtLocation(ex, currentLocationId); });
   const currentLocationName = allLocations.find(l => l.id === currentLocationId)?.name || null;
