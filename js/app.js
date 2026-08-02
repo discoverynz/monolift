@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.136';
+const APP_VERSION = 'Beta 5.137';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1481,10 +1481,12 @@ function exerciseRow(ex){
     subtitle = `<div style="margin-top:12px;">
       <div style="text-align:center; padding:9px 0; border-radius:9px; background:var(--good); font-size:11.5px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:0.3px; color:var(--ink); font-weight:600;">✓ Logged today — ${formatSetValue(ex.lastSet)}</div>
     </div>`;
-    showCheck = true; isDone = true;
+    showCheck = false; isDone = true;
   } else if (ex.completeVia){
-    subtitle = `<div class="ex-last via">↳ Complete via ${ex.completeVia}</div>`;
-    showCheck = true; isDone = true;
+    subtitle = `<div style="margin-top:12px;">
+      <div style="text-align:center; padding:9px 0; border-radius:9px; background:rgba(143,191,122,0.18); border:1px solid rgba(143,191,122,0.35); font-size:11.5px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:0.3px; color:var(--good); font-weight:600;">↳ Complete via ${ex.completeVia}</div>
+    </div>`;
+    showCheck = false; isDone = true;
   } else {
     // Shows the best set ever recorded (any day), not just the most recent one -
     // one line, whichever number is actually the most useful to see.
@@ -1527,7 +1529,7 @@ function exerciseRow(ex){
       <div class="ex-name">${ex.name}${splitTag}${mechTag}</div>
       ${subtitle}
     </div>
-    ${showCheck ? `<div class="check-circle">${ICON_CHECK}</div>` : (hasQuickButtons ? '' : `<div class="chev">›</div>`)}
+    ${showCheck ? `<div class="check-circle">${ICON_CHECK}</div>` : (hasQuickButtons || isDone ? '' : `<div class="chev">›</div>`)}
   </div>`;
 }
 
