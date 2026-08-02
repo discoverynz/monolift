@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.132';
+const APP_VERSION = 'Beta 5.133';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1426,6 +1426,41 @@ async function showAltGroupHistory(groupId, groupName){
     </div>`).join('');
 }
 
+async function quickSaveSet(exerciseId, exerciseName, best){
+  if (!best) return false;
+  const { data: userData } = await supabaseClient.auth.getUser();
+  const useMaster = getUseExerciseMasterFlag();
+  const idField = useMaster ? 'exercise_master_id' : 'exercise_id';
+  const weight = best.weight, unit = best.weight_unit, weightType = best.weight_type;
+
+  let priorBest = null;
+  if (weight !== null && (unit === 'kg' || unit === 'lb')){
+    const prevSets = await supabaseClient.from('sets')
+      .select('weight, weight_unit')
+      .eq(idField, exerciseId)
+      .in('weight_unit', ['kg','lb']);
+    if (prevSets.data && prevSets.data.length){
+      priorBest = Math.max(...prevSets.data.map(s => convertWeight(s.weight, s.weight_unit, unit)));
+    }
+  }
+  const insertPayload = {
+    user_id: userData.user.id,
+    weight, weight_unit: weight !== null ? unit : 'bodyweight',
+    weight_type: weightType,
+    num_sets: best.num_sets || 1, reps: best.reps,
+    notes: null,
+    logged_at: todayStr(),
+    location_id: getCurrentLocationId() || getDefaultLocationId()
+  };
+  insertPayload[idField] = exerciseId;
+  const { data, error } = await supabaseClient.from('sets').insert(insertPayload).select();
+  if (error || !data || !data.length){ alert(error ? error.message : 'Could not save that set.'); return false; }
+  if (priorBest !== null && weight !== null && weight > priorBest + 0.01){
+    celebratePR(exerciseName, weight, unit, priorBest);
+  }
+  return true;
+}
+
 function exerciseRow(ex){
   const groupNameRaw = ex.alt_groups ? ex.alt_groups.name : null;
   // Never show a day-of-week reference in the tag itself - a group can
@@ -1441,6 +1476,7 @@ function exerciseRow(ex){
   const topPad = groupName ? 'padding-top:5px;' : '';
 
   let subtitle, showCheck, isDone = false;
+  let quickSaveBtn = '';
   if (ex.loggedToday){
     subtitle = `<div class="ex-last done">✓ Logged today — ${formatSetValue(ex.lastSet)}</div>`;
     showCheck = true; isDone = true;
@@ -1451,7 +1487,16 @@ function exerciseRow(ex){
     // Shows the best set ever recorded (any day), not just the most recent one -
     // one line, whichever number is actually the most useful to see.
     const best = ex.maxSet || ex.lastSet;
-    subtitle = `<div class="ex-last">${best ? formatSetValue(best) + ' · ' + formatLoggedDate(best.logged_at) : 'Not logged yet'}</div>`;
+    if (best){
+      state.trackBestSetById = state.trackBestSetById || {};
+      state.trackBestSetById[ex.id] = best;
+      subtitle = `<div style="display:flex; gap:8px; margin-top:8px;">
+        <div class="ex-save-set-btn" data-id="${ex.id}" data-name="${ex.name}" style="flex:1; text-align:center; padding:9px 0; border-radius:9px; background:var(--ink); border:1px solid var(--line); font-size:11.5px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:0.3px; color:var(--chalk);">Save Set</div>
+        <div class="ex-quick-save-btn" data-id="${ex.id}" data-name="${ex.name}" style="flex:1; text-align:center; padding:9px 0; border-radius:9px; background:var(--flame); font-size:11.5px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:0.3px; color:var(--ink); font-weight:600;">⚡ ${formatSetValue(best)}</div>
+      </div>`;
+    } else {
+      subtitle = `<div class="ex-last">Not logged yet</div>`;
+    }
     showCheck = false;
   }
   // Once something's done, the thick green rail + faint wash takes priority
@@ -3488,6 +3533,7 @@ async function renderTrack(){
 
   let listHtml = '';
   state.trackFlatOrder = [];
+  state.trackBestSetById = {};
   orderedKeys.forEach(cat => {
     const items = grouped[cat] || [];
     if (items.length === 0) return;
@@ -3623,6 +3669,22 @@ async function renderTrack(){
     el.addEventListener('pointerleave', cancel);
     el.addEventListener('pointercancel', cancel);
     el.onclick = () => { if (!longPressed) openLogForm(el.dataset.id, el.dataset.name); };
+  });
+  document.querySelectorAll('.ex-save-set-btn').forEach(el => {
+    el.onclick = (e) => { e.stopPropagation(); openLogForm(el.dataset.id, el.dataset.name); };
+  });
+  document.querySelectorAll('.ex-quick-save-btn').forEach(el => {
+    el.onclick = async (e) => {
+      e.stopPropagation();
+      if (el.dataset.saving) return; // guards against a double-tap firing two inserts
+      el.dataset.saving = '1';
+      const originalText = el.textContent;
+      el.textContent = 'Saving…';
+      const best = (state.trackBestSetById || {})[el.dataset.id];
+      const ok = await quickSaveSet(el.dataset.id, el.dataset.name, best);
+      if (ok) renderTrack();
+      else { el.textContent = originalText; delete el.dataset.saving; }
+    };
   });
   document.querySelectorAll('.alt-badge-tap').forEach(el => {
     el.onclick = (e) => {
