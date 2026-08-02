@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.142';
+const APP_VERSION = 'Beta 5.143';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -870,6 +870,29 @@ async function loadExercises(){
 // exercise used to live as separate isolated records per day) simply isn't
 // needed anymore. Produces the exact same output shape as loadExercises so
 // everything downstream (renderTrack, exerciseRow, etc.) works unmodified.
+// Flags an exercise as stagnant if its top weight hasn't increased across
+// the last 3-4 completed sessions (today's own attempt is excluded, since
+// it's in progress, not yet a completed comparison point). Needs at least 3
+// distinct prior sessions before judging - not enough history otherwise.
+function detectWeightStagnation(setsForExercise){
+  const byDate = {};
+  setsForExercise.forEach(s => {
+    if (typeof s.weight !== 'number' || (s.weight_unit !== 'kg' && s.weight_unit !== 'lb')) return;
+    const kg = s.weight_unit === 'lb' ? convertWeight(s.weight, 'lb', 'kg') : s.weight;
+    const perSideKg = s.weight_type === 'per' ? kg * 2 : kg;
+    if (!byDate[s.logged_at] || perSideKg > byDate[s.logged_at]) byDate[s.logged_at] = perSideKg;
+  });
+  const today = todayStr();
+  const sessions = Object.entries(byDate)
+    .filter(([date]) => date !== today)
+    .sort((a,b) => b[0].localeCompare(a[0]))
+    .slice(0, 4);
+  if (sessions.length < 3) return false;
+  const mostRecentWeight = sessions[0][1];
+  const oldestWeight = sessions[sessions.length-1][1];
+  return mostRecentWeight <= oldestWeight + 0.01;
+}
+
 async function loadExercisesFromMaster(){
   const { data: userData } = await supabaseClient.auth.getUser();
   const uid = userData.user.id;
@@ -891,6 +914,7 @@ async function loadExercisesFromMaster(){
   const masterIds = exercises.map(ex => ex.id);
   let lastSetByExercise = {};
   let maxSetByExercise = {};
+  let setsByExerciseId = {};
   if (masterIds.length){
     let setsResult = await withTimeout(
       supabaseClient.from('sets').select('exercise_master_id, weight, weight_unit, weight_type, reps, num_sets, logged_at, location_id')
@@ -912,6 +936,9 @@ async function loadExercisesFromMaster(){
     if (activeLocationId && locationDataAvailable) allSets = allSets.filter(s => s.location_id === activeLocationId);
     allSets.forEach(s => { if (!lastSetByExercise[s.exercise_master_id]) lastSetByExercise[s.exercise_master_id] = s; });
     allSets.forEach(s => {
+      (setsByExerciseId[s.exercise_master_id] = setsByExerciseId[s.exercise_master_id] || []).push(s);
+    });
+    allSets.forEach(s => {
       if (s.weight === null || s.weight === undefined) return;
       const key = s.exercise_master_id;
       const current = maxSetByExercise[key];
@@ -929,7 +956,8 @@ async function loadExercisesFromMaster(){
     const loggedToday = lastSet && lastSet.logged_at === todayStr();
     const maxSet = maxSetByExercise[ex.id] || null;
     const showPr = maxSet && lastSet && maxSet.logged_at !== lastSet.logged_at;
-    return { ...ex, lastSet, loggedToday, maxSet, showPr };
+    const stagnant = detectWeightStagnation(setsByExerciseId[ex.id] || []);
+    return { ...ex, lastSet, loggedToday, maxSet, showPr, stagnant };
   });
 
   const doneGroupMember = {};
@@ -1527,11 +1555,16 @@ function exerciseRow(ex){
   const splitInfo = ex.splitLabel ? SPLIT_TAG_STYLE[ex.splitLabel] : null;
   const splitTag = splitInfo ? `<span style="font-size:9px; padding:2px 5px; border-radius:4px; margin-left:5px; background:${splitInfo[0]}26; color:${splitInfo[0]};">${splitInfo[1]}</span>` : '';
 
+  const stagnantNote = ex.stagnant
+    ? `<div style="font-size:10.5px; color:#E8A33D; margin-top:8px; display:flex; align-items:center; gap:5px;"><span>📈</span>Same weight a few sessions running — try adding some</div>`
+    : '';
+
   return `<div class="exercise" style="${borderStyle}" data-id="${ex.id}" data-name="${ex.name}">
     ${cornerTag}
     <div style="flex:1; min-width:0; ${topPad}">
       <div class="ex-name">${ex.name}${splitTag}${mechTag}</div>
       ${subtitle}
+      ${stagnantNote}
     </div>
     ${showCheck ? `<div class="check-circle">${ICON_CHECK}</div>` : (hasQuickButtons || isDone ? '' : `<div class="chev">›</div>`)}
   </div>`;
