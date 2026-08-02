@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.140';
+const APP_VERSION = 'Beta 5.141';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -3475,9 +3475,32 @@ async function openSuggestionPreview(name, category, navList){
   }); };
 }
 
+async function fetchTrackHeaderStats(){
+  const { data: userData } = await supabaseClient.auth.getUser();
+  const since = new Date(Date.now() - 60*86400000).toISOString().slice(0,10);
+  const result = await withTimeout(
+    supabaseClient.from('sets').select('weight, weight_unit, weight_type, reps, num_sets, logged_at').gte('logged_at', since),
+    15000
+  );
+  const sets = result.__timeout || result.error ? [] : (result.data || []);
+  const today = todayStr();
+  const todaysSets = sets.filter(s => s.logged_at === today);
+  const setsToday = todaysSets.reduce((sum, s) => sum + (s.num_sets || 1), 0);
+  let volumeKg = 0;
+  todaysSets.forEach(s => {
+    if (typeof s.weight !== 'number' || !s.reps) return;
+    if (s.weight_unit !== 'kg' && s.weight_unit !== 'lb') return;
+    const kgWeight = s.weight_unit === 'lb' ? convertWeight(s.weight, 'lb', 'kg') : s.weight;
+    const perSideMultiplier = s.weight_type === 'per' ? 2 : 1;
+    volumeKg += kgWeight * perSideMultiplier * s.reps * (s.num_sets || 1);
+  });
+  const streak = computeConsistencyStreak(sets);
+  return { volumeKg: Math.round(volumeKg), setsToday, streak: streak.current };
+}
+
 async function renderTrack(){
   app.innerHTML = `<div class="app-shell"><div class="login-wrap"><div class="login-sub">Loading your exercises…</div></div></div>`;
-  const [, dayTypeLabel] = await Promise.all([loadExercises(), loadDayType(state.selectedDay)]);
+  const [, dayTypeLabel, headerStats] = await Promise.all([loadExercises(), loadDayType(state.selectedDay), fetchTrackHeaderStats()]);
 
   // slot-based progress: exercises sharing an alt_group_id count once
   const seenGroups = new Set();
@@ -3606,6 +3629,22 @@ async function renderTrack(){
           <div class="eyebrow">${DAY_LABELS[state.selectedDay].toUpperCase()}</div>
           <h1 id="dayTypeHeader" style="cursor:pointer;">${dayTypeLabel}</h1>
           <div class="quote">"${q.t}" — ${q.a}</div>
+        </div>
+        <div style="display:flex; margin:14px 18px 0 18px; border-radius:14px; overflow:hidden;
+          background:linear-gradient(165deg, #202226, #191a1d); border:1px solid rgba(255,255,255,0.06);
+          box-shadow:0 8px 20px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.03);">
+          <div style="flex:1; text-align:center; padding:14px 6px; border-right:1px solid rgba(255,255,255,0.06);">
+            <div style="font-family:'JetBrains Mono',monospace; font-size:17px; font-weight:600; color:var(--chalk);">${headerStats.volumeKg.toLocaleString()}kg</div>
+            <div style="font-size:8.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px; margin-top:2px;">Volume Today</div>
+          </div>
+          <div style="flex:1; text-align:center; padding:14px 6px; border-right:1px solid rgba(255,255,255,0.06);">
+            <div style="font-family:'JetBrains Mono',monospace; font-size:17px; font-weight:600; color:var(--flame);">${headerStats.streak}</div>
+            <div style="font-size:8.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px; margin-top:2px;">Day Streak</div>
+          </div>
+          <div style="flex:1; text-align:center; padding:14px 6px;">
+            <div style="font-family:'JetBrains Mono',monospace; font-size:17px; font-weight:600; color:var(--chalk);">${headerStats.setsToday}</div>
+            <div style="font-size:8.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px; margin-top:2px;">Sets Today</div>
+          </div>
         </div>
         <div style="padding:8px 18px 0 18px; display:flex; gap:8px; flex-wrap:wrap;">
           <button id="toolbarTimerBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:var(--panel); border:1px solid var(--line); color:var(--slate);">
