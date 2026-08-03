@@ -1,6 +1,6 @@
 {
-  "name": "Zealift",
-  "short_name": "Zealift",
+  "name": "MonoLift",
+  "short_name": "MonoLift",
   "description": "Track your lifts, body weight, and bulk/cut phase.",
   "start_url": "./",
   "scope": "./",

@@ -1,9 +1,9 @@
-// Zealift — app.js (Pass 2: Track + Scale + Phase + Me, alt groups, fixed tab bar)
+// MonoLift — app.js (Pass 2: Track + Scale + Phase + Me, alt groups, fixed tab bar)
 
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.145';
+const APP_VERSION = 'Beta 5.146';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -657,7 +657,7 @@ function renderLogin(){
     <div class="app-shell">
       <div class="login-wrap">
         <div class="logo-circle"><img src="icons/icon-inapp-192.png" width="48" height="48" alt=""></div>
-        <div class="app-name">Zealift</div>
+        <div class="app-name">MonoLift</div>
         <div class="login-sub">Sign in to sync your data</div>
         <input class="input-field" id="emailInput" type="email" placeholder="you@email.com" autocomplete="email">
         <button class="btn-primary" id="sendCodeBtn">Send Code</button>
@@ -691,7 +691,7 @@ function renderCodeEntry(email){
     <div class="app-shell">
       <div class="login-wrap">
         <div class="logo-circle"><img src="icons/icon-inapp-192.png" width="48" height="48" alt=""></div>
-        <div class="app-name">Zealift</div>
+        <div class="app-name">MonoLift</div>
         <div class="login-sub">Check ${email} for a sign-in email</div>
         <div class="small" style="text-align:center; color:var(--slate); margin:-8px 0 4px 0; padding:0 20px; line-height:1.4;">If it has a code, enter it below. If it's a link instead, just tap it — that signs you in directly, no code needed.</div>
         <input class="input-field" id="codeInput" type="text" inputmode="numeric" placeholder="123456" maxlength="10" autocomplete="one-time-code" style="text-align:center; letter-spacing:4px; font-family:'JetBrains Mono', monospace;">
@@ -1270,7 +1270,7 @@ async function loadExerciseDB(){
 }
 
 let _zealiftDbCache = null;
-async function loadZealiftExerciseDB(){
+async function loadMonoLiftExerciseDB(){
   if (_zealiftDbCache) return _zealiftDbCache;
   const result = await withTimeout(
     supabaseClient.from('zealift_exercise_db').select('id, name, primary_muscle, secondary_muscles, equipment, mechanic, level, instructions').order('name'),
@@ -1691,7 +1691,7 @@ function openPlanSubPage(){
     <div class="form-header"><button id="closePlanSubPage">✕</button><h1>Plan</h1><div style="width:18px;"></div></div>
     <div class="overlay-scroll">
       <div class="me-item" id="subReorganizeBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
-        <div><div>Reorganize</div><div class="small" style="color:var(--slate); margin-top:2px;">Whole week or just one day - Zealift rebuilds it for you</div></div>
+        <div><div>Reorganize</div><div class="small" style="color:var(--slate); margin-top:2px;">Whole week or just one day - MonoLift rebuilds it for you</div></div>
         <div class="chev" style="margin-top:2px;">›</div>
       </div>
       <div class="me-item" id="subSwapDaysBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
@@ -2601,7 +2601,7 @@ async function openApproveContributorsScreen(){
   overlay.innerHTML = `
     <div class="form-header"><button id="closeApprove">✕</button><h1>Approve Contributors</h1><div style="width:18px;"></div></div>
     <div class="overlay-scroll">
-      <div class="small" style="padding:8px 18px 16px 18px; color:var(--slate); line-height:1.5;">Approve someone by their account email so they can contribute to the shared Zealift database. They'll need to have already signed in at least once.</div>
+      <div class="small" style="padding:8px 18px 16px 18px; color:var(--slate); line-height:1.5;">Approve someone by their account email so they can contribute to the shared MonoLift database. They'll need to have already signed in at least once.</div>
       <div style="padding:0 18px;">
         <input id="approveEmailInput" type="email" placeholder="their@email.com" class="input-field" style="margin-bottom:12px;">
         <button class="save-btn" id="approveBtn" style="margin:0;">Approve</button>
@@ -2635,26 +2635,26 @@ async function openApproveContributorsScreen(){
   };
 }
 
-async function openPublishToZealiftScreen(){
+async function openPublishToMonoLiftScreen(){
   const overlay = document.createElement('div');
   overlay.className = 'overlay-screen';
   overlay.innerHTML = `
-    <div class="form-header"><button id="closePublishZealift">✕</button><h1>Zealift Database</h1><div style="width:18px;"></div></div>
+    <div class="form-header"><button id="closePublishMonoLift">✕</button><h1>MonoLift Database</h1><div style="width:18px;"></div></div>
     <div class="overlay-scroll">
-      <div class="small" style="padding:8px 18px 16px 18px; color:var(--slate); line-height:1.5;">A shared exercise library, separate from the public database, built from what real users have actually added - gym-specific machines and variants the public one doesn't have. Anything you contribute here becomes visible to every Zealift user, tagged with a ⚡ Zealift badge in the picker.</div>
+      <div class="small" style="padding:8px 18px 16px 18px; color:var(--slate); line-height:1.5;">A shared exercise library, separate from the public database, built from what real users have actually added - gym-specific machines and variants the public one doesn't have. Anything you contribute here becomes visible to every MonoLift user, tagged with a ⚡ MonoLift badge in the picker.</div>
       <div id="publishList"><div class="small" style="padding:16px 18px; color:var(--slate);">Scanning your library…</div></div>
     </div>`;
   document.body.appendChild(overlay);
-  overlay.querySelector('#closePublishZealift').onclick = () => overlay.remove();
+  overlay.querySelector('#closePublishMonoLift').onclick = () => overlay.remove();
 
   const { data: userData } = await supabaseClient.auth.getUser();
   const verified = await isVerifiedContributor(userData.user.id);
   if (!verified){
-    overlay.querySelector('#publishList').innerHTML = `<div class="empty-state" style="padding:24px 18px;">Contributing to the shared Zealift database needs approval first - this keeps it clean and reliable for everyone. Reach out and it'll get sorted quickly.</div>`;
+    overlay.querySelector('#publishList').innerHTML = `<div class="empty-state" style="padding:24px 18px;">Contributing to the shared MonoLift database needs approval first - this keeps it clean and reliable for everyone. Reach out and it'll get sorted quickly.</div>`;
     return;
   }
   const [allExercises, publicDb, zealiftDb] = await Promise.all([
-    fetchAllExercisesCompat(userData.user.id), loadExerciseDB(), loadZealiftExerciseDB()
+    fetchAllExercisesCompat(userData.user.id), loadExerciseDB(), loadMonoLiftExerciseDB()
   ]);
   const zealiftNamesLower = new Set(zealiftDb.map(e => e.name.toLowerCase()));
   const seenNames = new Set();
@@ -2671,7 +2671,7 @@ async function openPublishToZealiftScreen(){
   const selected = {}; // name -> { muscle }
   const listArea = overlay.querySelector('#publishList');
   if (!candidates.length){
-    listArea.innerHTML = `<div class="empty-state" style="padding:20px 18px;">Nothing to contribute right now - every exercise in your library is either already covered by the public database or already in the Zealift database.</div>`;
+    listArea.innerHTML = `<div class="empty-state" style="padding:20px 18px;">Nothing to contribute right now - every exercise in your library is either already covered by the public database or already in the MonoLift database.</div>`;
     return;
   }
   listArea.innerHTML = `
@@ -2753,12 +2753,12 @@ async function openPublishToZealiftScreen(){
         .map(([name, v]) => ({ name, primary_muscle: v.muscle, equipment: v.equipment, contributed_by: userData.user.id }));
       const { error } = await supabaseClient.from('zealift_exercise_db').insert(rows);
       if (error){
-        alert(`Could not publish: ${error.message}\n\nIf this mentions a missing table, the Zealift database migration needs to be run first.`);
+        alert(`Could not publish: ${error.message}\n\nIf this mentions a missing table, the MonoLift database migration needs to be run first.`);
         return;
       }
       _zealiftDbCache = null; // force a fresh load next time the database tab opens
       overlay.remove();
-      alert(`Published! ${rows.length} exercise${rows.length===1?'':'s'} now visible to every Zealift user.`);
+      alert(`Published! ${rows.length} exercise${rows.length===1?'':'s'} now visible to every MonoLift user.`);
     });
   };
 }
@@ -2770,7 +2770,7 @@ async function openEnvironmentsScreen(){
   overlay.innerHTML = `
     <div class="form-header"><button id="closeEnvironments">✕</button><h1>Environments</h1><div style="width:18px;"></div></div>
     <div class="overlay-scroll">
-      <div class="small" style="padding:8px 18px 16px 18px; color:var(--slate);">Tell Zealift what equipment each gym actually has - a place with only dumbbells and a bench won't get suggested barbell or machine exercises when it's the active location.</div>
+      <div class="small" style="padding:8px 18px 16px 18px; color:var(--slate);">Tell MonoLift what equipment each gym actually has - a place with only dumbbells and a bench won't get suggested barbell or machine exercises when it's the active location.</div>
       <div class="action-row" id="newEnvRow"><div class="ex-name" style="color:var(--flame);">+ New Environment</div></div>
       <div id="envList"><div class="small" style="padding:16px 18px; color:var(--slate);">Loading…</div></div>
     </div>`;
@@ -3091,7 +3091,7 @@ const ONBOARD_VISUALS = {
 function showOnboarding(mode){
   mode = mode || 'full'; // 'full' (new user), 'teach' (tutorial replay), 'setup' (redo week only)
   const teachSteps = [
-    { kind:'teach', title:'Welcome to Zealift',
+    { kind:'teach', title:'Welcome to MonoLift',
       body:'Your gym plan, alt groups, and history — all in one place, synced to your account. A few quick things before you dive in.' },
     { kind:'teach', title:'Make It Yours', visual: ONBOARD_VISUALS.makeItYours,
       body:`Tap the workout type at the top of Track (e.g. "Back & Biceps") to rename it. Want to rearrange your whole week? Me → Swap Days moves an entire day's plan — and history — to a new weekday.` },
@@ -3656,7 +3656,7 @@ async function renderTrack(){
   app.innerHTML = `
     <div class="app-shell">
       <div class="scroll-area">
-        <div class="brandbar"><img src="icons/icon-inapp-32.png" alt=""><div class="name">ZEALIFT</div>
+        <div class="brandbar"><img src="icons/icon-inapp-32.png" alt=""><div class="name">MONOLIFT</div>
           ${allLocations.length > 0 ? `<div id="locSwitcher" style="margin-left:auto; display:flex; align-items:center; gap:5px; background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:5px 10px 5px 8px; cursor:pointer;">
             <span style="font-size:10px;">📍</span>
             <span style="font-family:'Bebas Neue',sans-serif; font-size:10px; color:var(--flame); letter-spacing:0.5px;">${currentLocationName ? currentLocationName.toUpperCase() : 'ANYWHERE'}</span>
@@ -4768,7 +4768,7 @@ async function openPicker(initialTab, jumpToMuscle){
   async function renderDatabaseTab(){
     const body = overlay.querySelector('#pickerBody');
     body.innerHTML = `<div class="small" style="padding:12px 18px; color:var(--slate);">Loading database…</div>`;
-    const [publicDb, zealiftDb] = await Promise.all([loadExerciseDB(), loadZealiftExerciseDB()]);
+    const [publicDb, zealiftDb] = await Promise.all([loadExerciseDB(), loadMonoLiftExerciseDB()]);
     if (!publicDb){
       body.innerHTML = `<div class="empty-state">Database unavailable offline.</div>`;
       return;
@@ -4785,7 +4785,7 @@ async function openPicker(initialTab, jumpToMuscle){
     const sourceToggleHtml = zealiftDb.length ? `
       <div style="display:flex; gap:8px; margin:10px 18px 0 18px;">
         <div class="db-source-chip ${sourceFilter==='all'?'active':''}" data-src="all" style="flex:1; text-align:center; padding:7px 0; border-radius:10px; background:${sourceFilter==='all'?'var(--flame)':'var(--panel)'}; color:${sourceFilter==='all'?'var(--ink)':'var(--chalk)'}; font-size:11.5px; border:1px solid var(--line); cursor:pointer;">All (${db.length})</div>
-        <div class="db-source-chip ${sourceFilter==='zealift'?'active':''}" data-src="zealift" style="flex:1; text-align:center; padding:7px 0; border-radius:10px; background:${sourceFilter==='zealift'?'var(--flame)':'var(--panel)'}; color:${sourceFilter==='zealift'?'var(--ink)':'var(--chalk)'}; font-size:11.5px; border:1px solid var(--line); cursor:pointer;">⚡ Zealift DB (${zealiftDb.length})</div>
+        <div class="db-source-chip ${sourceFilter==='zealift'?'active':''}" data-src="zealift" style="flex:1; text-align:center; padding:7px 0; border-radius:10px; background:${sourceFilter==='zealift'?'var(--flame)':'var(--panel)'}; color:${sourceFilter==='zealift'?'var(--ink)':'var(--chalk)'}; font-size:11.5px; border:1px solid var(--line); cursor:pointer;">⚡ MonoLift DB (${zealiftDb.length})</div>
       </div>` : '';
     body.innerHTML = `
       ${filterBannerHtml}
@@ -4854,7 +4854,7 @@ async function openPicker(initialTab, jumpToMuscle){
         const star = POPULAR_EXERCISES.has(e.name)
           ? `<span title="Popular staple" style="color:#F0C542; margin-left:5px;">★</span>` : '';
         const zealiftBadge = e._source === 'zealift'
-          ? `<span title="Contributed to the shared Zealift database" style="font-size:9px; padding:2px 6px; border-radius:4px; margin-left:5px; background:rgba(232,73,42,0.15); color:var(--flame);">⚡ Zealift</span>` : '';
+          ? `<span title="Contributed to the shared MonoLift database" style="font-size:9px; padding:2px 6px; border-radius:4px; margin-left:5px; background:rgba(232,73,42,0.15); color:var(--flame);">⚡ MonoLift</span>` : '';
         const alreadyToday = todayNames.has(e.name.toLowerCase())
           ? `<span style="font-size:9px; padding:2px 6px; border-radius:4px; margin-left:5px; background:rgba(143,191,122,0.15); color:var(--good);">✓ On ${DAY_NAMES[state.selectedDay]}</span>` : '';
         const muscles = muscleSubtitle(e.primaryMuscles, e.secondaryMuscles);
@@ -7539,7 +7539,7 @@ async function renderScale(){
   app.innerHTML = `
     <div class="app-shell">
       <div class="scroll-area">
-        <div class="brandbar"><img src="icons/icon-inapp-32.png" alt=""><div class="name">ZEALIFT</div><button class="brandbar-timer" onclick="openTimer()" aria-label="Timer" style="margin-left:auto; background:none; color:var(--slate); padding:6px; display:flex; align-items:center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg></button></div>
+        <div class="brandbar"><img src="icons/icon-inapp-32.png" alt=""><div class="name">MONOLIFT</div><button class="brandbar-timer" onclick="openTimer()" aria-label="Timer" style="margin-left:auto; background:none; color:var(--slate); padding:6px; display:flex; align-items:center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg></button></div>
         <div class="header"><div class="eyebrow">BODY</div><h1>Scale</h1></div>
         <div class="stat-card">
           ${latest ? `<div class="big">${latest.weight}${latest.unit}</div><div class="small">${latest.logged_at}</div>${deltaHtml}` : `<div class="small">No entries yet — tap + to log your weight.</div>`}
@@ -7693,7 +7693,7 @@ async function renderPhase(){
   app.innerHTML = `
     <div class="app-shell">
       <div class="scroll-area">
-        <div class="brandbar"><img src="icons/icon-inapp-32.png" alt=""><div class="name">ZEALIFT</div><button class="brandbar-timer" onclick="openTimer()" aria-label="Timer" style="margin-left:auto; background:none; color:var(--slate); padding:6px; display:flex; align-items:center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg></button></div>
+        <div class="brandbar"><img src="icons/icon-inapp-32.png" alt=""><div class="name">MONOLIFT</div><button class="brandbar-timer" onclick="openTimer()" aria-label="Timer" style="margin-left:auto; background:none; color:var(--slate); padding:6px; display:flex; align-items:center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg></button></div>
         <div class="header"><div class="eyebrow">BULK / CUT</div><h1>Phase</h1></div>
         <div class="section-label">Bulk</div>
         ${bulkHtml}
@@ -9050,7 +9050,7 @@ async function renderBalance(mode, view){
   app.innerHTML = `
     <div class="app-shell">
       <div class="scroll-area">
-        <div class="brandbar"><img src="icons/icon-inapp-32.png" alt=""><div class="name">ZEALIFT</div></div>
+        <div class="brandbar"><img src="icons/icon-inapp-32.png" alt=""><div class="name">MONOLIFT</div></div>
         <div class="header"><div class="eyebrow">${mode === 'logged' ? 'LAST 7 DAYS' : 'WHOLE WEEKLY PLAN'}</div><h1>Balance</h1></div>
         <div class="seg" style="margin:10px 18px; display:flex; border:1px solid var(--line);">
           <div class="bal-seg-chip ${mode==='logged'?'active':''}" data-mode="logged" style="flex:1; text-align:center; padding:7px 0; font-family:'Bebas Neue',sans-serif; font-size:11.5px; letter-spacing:0.5px; color:${mode==='logged'?'var(--ink)':'var(--slate)'}; background:${mode==='logged'?'var(--flame)':'transparent'};">LOGGED THIS WEEK</div>
@@ -9272,13 +9272,13 @@ async function renderMe(){
   app.innerHTML = `
     <div class="app-shell">
       <div class="scroll-area">
-        <div class="brandbar"><img src="icons/icon-inapp-32.png" alt=""><div class="name">ZEALIFT</div><button class="brandbar-timer" onclick="openTimer()" aria-label="Timer" style="margin-left:auto; background:none; color:var(--slate); padding:6px; display:flex; align-items:center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg></button></div>
+        <div class="brandbar"><img src="icons/icon-inapp-32.png" alt=""><div class="name">MONOLIFT</div><button class="brandbar-timer" onclick="openTimer()" aria-label="Timer" style="margin-left:auto; background:none; color:var(--slate); padding:6px; display:flex; align-items:center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg></button></div>
         <div class="header"><div class="eyebrow">ACCOUNT</div><h1>Me</h1></div>
         <div class="account-card">
           <div class="avatar">${initial}</div>
           <div><div class="account-email">${email}</div><div class="account-tag">● Signed in</div></div>
         </div>
-        <div class="me-item" id="replayTourBtn"><div>How Zealift Works</div><div class="chev">›</div></div>
+        <div class="me-item" id="replayTourBtn"><div>How MonoLift Works</div><div class="chev">›</div></div>
         <div class="me-item" id="backupPlanBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
           <div><div>Backup Plan</div><div class="small" style="color:var(--slate); margin-top:2px;">Save a snapshot before you shake things up</div></div>
           <div class="chev" style="margin-top:2px;">›</div>
@@ -9292,12 +9292,12 @@ async function renderMe(){
           <div><div>Environments</div><div class="small" style="color:var(--slate); margin-top:2px;">Set what equipment each gym has, so suggestions match reality</div></div>
           <div class="chev" style="margin-top:2px;">›</div>
         </div>
-        <div class="me-item" id="publishZealiftBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
-          <div><div>Zealift Database</div><div class="small" style="color:var(--slate); margin-top:2px;">Contribute exercises you use that aren't in the public database</div></div>
+        <div class="me-item" id="publishMonoLiftBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+          <div><div>MonoLift Database</div><div class="small" style="color:var(--slate); margin-top:2px;">Contribute exercises you use that aren't in the public database</div></div>
           <div class="chev" style="margin-top:2px;">›</div>
         </div>
         ${isOwner ? `<div class="me-item" id="approveContributorsBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
-          <div><div>Approve Contributors</div><div class="small" style="color:var(--slate); margin-top:2px;">Approve who can add to the Zealift database</div></div>
+          <div><div>Approve Contributors</div><div class="small" style="color:var(--slate); margin-top:2px;">Approve who can add to the MonoLift database</div></div>
           <div class="chev" style="margin-top:2px;">›</div>
         </div>` : ''}
         <div class="me-item" id="planSubPageBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
@@ -9305,11 +9305,11 @@ async function renderMe(){
           <div class="chev" style="margin-top:2px;">›</div>
         </div>
         <div class="section-label">App</div>
-        <div class="me-item" id="shareAppBtn"><div>Share Zealift</div><div class="chev">›</div></div>
+        <div class="me-item" id="shareAppBtn"><div>Share MonoLift</div><div class="chev">›</div></div>
         <div class="me-item" id="refreshAppBtn"><div>Refresh App</div><div class="chev">›</div></div>
         <div class="me-item" id="updateAppBtn"><div>Check for Updates</div><div class="chev">›</div></div>
         <div class="me-item" id="signOutBtn"><div>Sign Out</div><div class="chev">›</div></div>
-        <div style="text-align:center; padding:18px 0; color:var(--slate); font-family:'JetBrains Mono',monospace; font-size:10.5px;">Zealift · ${APP_VERSION}</div>
+        <div style="text-align:center; padding:18px 0; color:var(--slate); font-family:'JetBrains Mono',monospace; font-size:10.5px;">MonoLift · ${APP_VERSION}</div>
       </div>
       ${renderTabbar()}
     </div>`;
@@ -9318,12 +9318,12 @@ async function renderMe(){
   document.getElementById('backupPlanBtn').onclick = openBackupPlanScreen;
   document.getElementById('locationSubPageBtn').onclick = () => openLocationSubPage();
   document.getElementById('environmentsBtn').onclick = () => openEnvironmentsScreen();
-  document.getElementById('publishZealiftBtn').onclick = () => openPublishToZealiftScreen();
+  document.getElementById('publishMonoLiftBtn').onclick = () => openPublishToMonoLiftScreen();
   if (isOwner) document.getElementById('approveContributorsBtn').onclick = () => openApproveContributorsScreen();
   document.getElementById('planSubPageBtn').onclick = () => openPlanSubPage();
   document.getElementById('shareAppBtn').onclick = async () => {
     const shareUrl = `${location.origin}${location.pathname}`.replace(/\/index\.html$/, '/');
-    const shareData = { title: 'Zealift', text: 'Check out Zealift - a gym tracking app I use.', url: shareUrl };
+    const shareData = { title: 'MonoLift', text: 'Check out MonoLift - a gym tracking app I use.', url: shareUrl };
     if (navigator.share){
       try { await navigator.share(shareData); } catch(e) { /* user cancelled the native share sheet - nothing to do */ }
       return;
