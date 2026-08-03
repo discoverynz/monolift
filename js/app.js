@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.150';
+const APP_VERSION = 'Beta 5.151';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -503,46 +503,39 @@ function movementPatternOf(name){
 }
 
 // Groups a day's ungrouped exercises into proposed alt-group clusters (2+
-// members sharing the same primary muscle and movement pattern). Returns
-// proposals only - nothing is created or assigned until the user confirms
-// each one individually in the review screen.
-// Auto-Alt 2.0: clusters by fine muscle region (Upper/Mid/Lower Chest, Front/
-// Side/Rear Delts, Lats vs Upper Back - not just the broad muscle) AND
-// movement pattern AND compound/isolation consistency. A true substitute
-// should train the same muscle region the same way for the same purpose -
-// pairing a flat bench press with an incline press just because both are
-// "chest" is looser than what real programming calls interchangeable.
-// Same clustering signal proposeAltGroups uses (fine muscle + movement
-// pattern + mechanic) - reused here to hint "this looks like an alt for X"
-// in the reorganize overflow and the add-exercise picker, without relying on
-// formal alt_group_id tags, since those may not exist yet.
+// members sharing the same fine muscle region). Returns proposals only -
+// nothing is created or assigned until the user confirms each one
+// individually in the review screen.
+// Muscle is the only matching signal - not movement pattern, not compound
+// vs isolation. Whether a squat and a leg extension are close enough to
+// swap for each other is a call the person makes for themselves; the
+// algorithm's job is just to surface "these all hit the same muscle,"
+// not to pre-filter out anything that isn't the exact same movement.
+// Reused in the reorganize overflow and the add-exercise picker to hint
+// "this looks like an alt for X" without relying on formal alt_group_id
+// tags, since those may not exist yet.
 function computeAltSignature(name, muscle, mechValue){
-  const pattern = movementPatternOf(name);
-  if (!pattern || !muscle) return null;
-  const fineMuscle = fineMuscleCategory(muscle, name);
-  return fineMuscle + '|' + pattern + '|' + (mechValue || 'unknown');
+  if (!muscle) return null;
+  return fineMuscleCategory(muscle, name);
 }
 
 async function proposeAltGroups(dayExercises){
   const db = await loadExerciseDB();
   const ungrouped = dayExercises.filter(ex => !ex.alt_group_id);
-  // Fine muscle category + movement pattern is the grouping signal. Calves
-  // is deliberately collapsed to one category at the fineMuscleCategory
-  // level itself (standing/seated/leg-press calf raises genuinely read as
+  // Fine muscle category is the only grouping signal. Calves is deliberately
+  // collapsed to one category at the fineMuscleCategory level itself
+  // (standing/seated/leg-press calf raises genuinely read as
   // interchangeable), but biceps long head vs short head vs brachialis, or
   // triceps long vs lateral head, are meaningfully different exercises that
   // should stay in their own groups rather than all getting lumped under one
   // generic muscle name.
   const buckets = {};
   ungrouped.forEach(ex => {
-    const pattern = movementPatternOf(ex.name);
-    if (!pattern) return;
     const match = matchExercise(ex.name, db);
     const muscle = match && match.primaryMuscles && match.primaryMuscles[0];
     if (!muscle) return;
     const fineMuscle = fineMuscleCategory(muscle, ex.name);
-    const key = fineMuscle + '|' + pattern;
-    (buckets[key] = buckets[key] || []).push(ex);
+    (buckets[fineMuscle] = buckets[fineMuscle] || []).push(ex);
   });
   return Object.entries(buckets)
     .filter(([, members]) => members.length >= 2)
