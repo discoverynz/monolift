@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.149';
+const APP_VERSION = 'Beta 5.150';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1192,7 +1192,17 @@ function getCurrentLocationId(){
   }
 }
 function getDefaultLocationId(){ return localStorage.getItem('zealift_default_location') || null; }
-function setDefaultLocationId(id){ if (id) localStorage.setItem('zealift_default_location', id); else localStorage.removeItem('zealift_default_location'); }
+function setDefaultLocationId(id){
+  if (id) localStorage.setItem('zealift_default_location', id); else localStorage.removeItem('zealift_default_location');
+  // Persist to the database too, in the background, so this survives a
+  // cleared localStorage (a known iOS PWA issue) rather than being lost.
+  (async () => {
+    const { data: userData } = await supabaseClient.auth.getUser();
+    if (!userData || !userData.user) return;
+    await supabaseClient.from('locations').update({ is_default: false }).eq('user_id', userData.user.id).eq('is_default', true);
+    if (id) await supabaseClient.from('locations').update({ is_default: true }).eq('id', id);
+  })().catch(() => {}); // is_default column may not exist yet if the migration hasn't run - fail silently, localStorage still works
+}
 function getHideCompletedPref(){ return localStorage.getItem('zealift_hide_completed') === '1'; }
 function setHideCompletedPref(v){ localStorage.setItem('zealift_hide_completed', v ? '1' : '0'); }
 function setCurrentLocationId(id){ if (id) localStorage.setItem('zealift_current_location', JSON.stringify({ id, date: todayStr() })); else localStorage.removeItem('zealift_current_location'); }
@@ -6393,17 +6403,30 @@ async function pickAltGroup(container, onPicked){
 async function loadLocations(){
   const { data: userData } = await supabaseClient.auth.getUser();
   const result = await withTimeout(
-    supabaseClient.from('locations').select('id, name, equipment_tags').eq('user_id', userData.user.id).order('name'),
+    supabaseClient.from('locations').select('id, name, equipment_tags, is_default').eq('user_id', userData.user.id).order('name'),
     15000
   );
-  if (!result.__timeout && !result.error) return result.data || [];
-  // equipment_tags column may not exist yet if the migration hasn't been run -
-  // retry without it rather than silently losing every location.
-  const fallback = await withTimeout(
-    supabaseClient.from('locations').select('id, name').eq('user_id', userData.user.id).order('name'),
-    15000
-  );
-  return fallback.__timeout || fallback.error ? [] : (fallback.data || []).map(l => ({ ...l, equipment_tags: [] }));
+  let locations;
+  if (!result.__timeout && !result.error){
+    locations = result.data || [];
+  } else {
+    // equipment_tags/is_default columns may not exist yet if the migration
+    // hasn't been run - retry without them rather than silently losing
+    // every location.
+    const fallback = await withTimeout(
+      supabaseClient.from('locations').select('id, name').eq('user_id', userData.user.id).order('name'),
+      15000
+    );
+    locations = fallback.__timeout || fallback.error ? [] : (fallback.data || []).map(l => ({ ...l, equipment_tags: [], is_default: false }));
+  }
+  // Self-heal: if localStorage's default location got cleared (a known iOS
+  // PWA issue) but the database still has one marked, restore it here -
+  // this runs every time Track loads, so it recovers on the very next load.
+  if (!getDefaultLocationId()){
+    const dbDefault = locations.find(l => l.is_default);
+    if (dbDefault) localStorage.setItem('zealift_default_location', dbDefault.id);
+  }
+  return locations;
 }
 async function createLocation(name){
   const { data: userData } = await supabaseClient.auth.getUser();
