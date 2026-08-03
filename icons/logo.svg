@@ -1,9 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="512" height="512">
-  <rect x="0" y="0" width="64" height="64" rx="14" fill="#1B1C1F"/>
-  <g transform="translate(32,32) scale(0.184) translate(-125,-85)" fill="#FF6B1A">
-    <polygon points="0,0 70,34 70,102 42,76.5 42,170 0,136"/>
-    <polygon points="250,0 180,34 180,102 208,76.5 208,170 250,136"/>
-    <polygon points="70,20 140,100 140,40"/>
-    <polygon points="110,100 180,20 110,40"/>
+  <rect width="64" height="64" rx="14" fill="#1B1C1F"/>
+  <polyline points="15,42 22,17 32,28 42,17 49,42" fill="none" stroke="#FF6B1A" stroke-width="5.2" stroke-linejoin="round" stroke-linecap="round"/>
+  <g fill="#8C8E94">
+    <rect x="7" y="37" width="4.5" height="9" rx="1.6"/>
+    <rect x="11.5" y="34" width="4" height="15" rx="1.6"/>
+    <rect x="52.5" y="34" width="4" height="15" rx="1.6"/>
+    <rect x="48.5" y="37" width="4.5" height="9" rx="1.6"/>
   </g>
 </svg>

@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.148';
+const APP_VERSION = 'Beta 5.149';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -3527,11 +3527,14 @@ async function fetchTrackHeaderStats(){
   let volumeKg = 0;
   todaysSets.forEach(s => {
     const weightNum = Number(s.weight);
-    const repsNum = Number(s.reps);
-    if (s.weight === null || s.weight === undefined || isNaN(weightNum) || !repsNum) return;
+    if (s.weight === null || s.weight === undefined || isNaN(weightNum)) return;
     if (s.weight_unit !== 'kg' && s.weight_unit !== 'lb') return;
     const kgWeight = s.weight_unit === 'lb' ? convertWeight(weightNum, 'lb', 'kg') : weightNum;
     const perSideMultiplier = s.weight_type === 'per' ? 2 : 1;
+    // reps is optional in the save form - fall back to 1 rather than
+    // excluding the set entirely, since a missing rep count shouldn't
+    // erase otherwise-real weight data from the total.
+    const repsNum = Number(s.reps) || 1;
     volumeKg += kgWeight * perSideMultiplier * repsNum * (Number(s.num_sets) || 1);
   });
   const streak = computeConsistencyStreak(sets);
