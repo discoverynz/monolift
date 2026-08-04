@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.154';
+const APP_VERSION = 'Beta 5.155';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1740,6 +1740,10 @@ function openPlanSubPage(){
         <div class="chev" style="margin-top:2px;">›</div>
       </div>
       ${localStorage.getItem('zealift_reorg_snapshot') ? `<div class="me-item" id="subRevertReorgBtn"><div style="color:#E8A33D;">Revert Last Reorganization</div><div class="chev">›</div></div>` : ''}
+      <div class="me-item" id="subSimulateDayChangeBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+        <div><div style="color:#7BA6C9;">Simulate Day Change</div><div class="small" style="color:var(--slate); margin-top:2px;">Pretend the day just rolled over - runs the same code the app runs at midnight, so you can see what your view will look like without changing any data</div></div>
+        <div class="chev" style="margin-top:2px;">›</div>
+      </div>
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#closePlanSubPage').onclick = () => overlay.remove();
@@ -1751,8 +1755,71 @@ function openPlanSubPage(){
   overlay.querySelector('#subWipeAltsBtn').onclick = openWipeAltGroupsScreen;
   overlay.querySelector('#subClearDayBtn').onclick = openClearDayScreen;
   overlay.querySelector('#subMergeDupesBtn').onclick = openMergeDuplicateExercisesScreen;
+  overlay.querySelector('#subSimulateDayChangeBtn').onclick = simulateDayChange;
   const subRevertBtn = overlay.querySelector('#subRevertReorgBtn');
   if (subRevertBtn) subRevertBtn.onclick = revertLastReorganization;
+}
+
+// Diagnostic: manually trigger the same code path that runs when the
+// calendar day rolls over, so the user can verify what will happen at real
+// midnight without waiting for it. No data is changed - this just simulates
+// the client-side rollover (advancing selectedDay if appropriate, expiring
+// today-scoped localStorage entries, and re-rendering Track). Shows a plain
+// diagnostic of what changed so the behavior is auditable.
+async function simulateDayChange(){
+  const beforeSelectedDay = state.selectedDay;
+  const beforeToday = __lastKnownWeekday;
+  const simulatedToday = (beforeToday + 1) % 7;
+  const currentLocationRaw = localStorage.getItem('zealift_current_location');
+
+  // Snapping rule: mirror the visibilitychange handler exactly - only follow
+  // the calendar forward if the user was viewing what was "today" at the
+  // moment of rollover. Otherwise their intentional day selection is kept.
+  const wasViewingToday = beforeSelectedDay === beforeToday;
+  const afterSelectedDay = wasViewingToday ? simulatedToday : beforeSelectedDay;
+
+  // Today-scoped localStorage that would naturally expire at midnight - the
+  // getCurrentLocationId reader already checks todayStr() and returns null
+  // when the stored date no longer matches, so on a real rollover the same
+  // outcome happens on next read. Simulate that here so the diagnostic
+  // report is honest about what would happen.
+  let currentLocationExpiredOnRollover = false;
+  if (currentLocationRaw){
+    try {
+      const parsed = JSON.parse(currentLocationRaw);
+      if (parsed.date === todayStr()) currentLocationExpiredOnRollover = true;
+    } catch(e){}
+  }
+
+  __lastKnownWeekday = simulatedToday;
+  state.selectedDay = afterSelectedDay;
+  // Force getCurrentLocationId to return null for this simulation, matching
+  // the natural rollover behavior. Stashed and restored after the render so
+  // this remains a pure simulation and not an actual data write.
+  const stashedCurrentLocation = currentLocationExpiredOnRollover ? currentLocationRaw : null;
+  if (currentLocationExpiredOnRollover) localStorage.removeItem('zealift_current_location');
+
+  await renderTrack();
+
+  // Restore anything we temporarily cleared so the app returns to its real
+  // state - simulation is purely a preview, not a durable change.
+  if (stashedCurrentLocation) localStorage.setItem('zealift_current_location', stashedCurrentLocation);
+  __lastKnownWeekday = beforeToday;
+
+  const summary = [
+    `Simulated calendar day rolled from ${DAY_NAMES[beforeToday]} to ${DAY_NAMES[simulatedToday]}.`,
+    ``,
+    `Track view: ${wasViewingToday ? `snapped from ${DAY_NAMES[beforeSelectedDay]} to ${DAY_NAMES[afterSelectedDay]} (you were on "today" so it followed)` : `stayed on ${DAY_NAMES[beforeSelectedDay]} (you were intentionally viewing a different day so it was kept)`}.`,
+    ``,
+    `Today's Done marks: cleared naturally (loggedToday recomputes against the new today's date).`,
+    `Volume/Sets/Streak Today: recomputed for the new day - previous day's totals no longer count.`,
+    currentLocationExpiredOnRollover ? `Current location: expired (was day-scoped to yesterday). Default location still applies if set.` : `Current location: no active override to expire.`,
+    ``,
+    `The plan itself (which exercises are on which day) was not touched - it never is on a rollover, only ever by an explicit action from you.`,
+    ``,
+    `This was a simulation only. Nothing in the database was changed. The real day is still ${DAY_NAMES[todayWeekday()]}.`
+  ].join('\n');
+  alert(summary);
 }
 
 async function openLinkSetsToMasterScreen(){
@@ -9458,6 +9525,30 @@ supabaseClient.auth.onAuthStateChange((_event, session) => {
   if (hadSession === hasSession) return;
   if (session) { state.currentTab = 'track'; renderTrack(); }
   else renderLogin();
+});
+
+// When the app comes back to the foreground on a new calendar day, state.selectedDay
+// still points at whatever weekday was current when the app was last opened - so
+// Track would show yesterday's plan until the user manually taps another day or
+// fully reloads. This snapping only happens if the user was actively viewing what
+// was "today" at the time - if they were intentionally browsing a different day
+// (e.g. planning ahead), we respect that choice and don't hijack their view.
+let __lastKnownWeekday = todayWeekday();
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  const newToday = todayWeekday();
+  if (newToday === __lastKnownWeekday) {
+    // Same calendar day - just refresh Track for freshness (headers, streaks) if we're on it
+    if (state.currentTab === 'track' && state.session) renderTrack();
+    return;
+  }
+  // Genuine day rollover - was the user on "today"'s tab when they left?
+  const wasViewingToday = state.selectedDay === __lastKnownWeekday;
+  __lastKnownWeekday = newToday;
+  if (wasViewingToday) {
+    state.selectedDay = newToday;
+  }
+  if (state.currentTab === 'track' && state.session) renderTrack();
 });
 
 supabaseClient.auth.getSession().then(({ data: { session } }) => {
