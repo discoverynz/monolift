@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.156';
+const APP_VERSION = 'Beta 5.157';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -151,6 +151,7 @@ function setUseExerciseMasterFlag(v){ localStorage.setItem('zealift_use_exercise
 // does not block reads. Skips silently if the master table doesn't exist
 // (e.g. for a genuinely brand-new install).
 let __masterFlagHealChecked = false;
+let __masterFlagHealPromise = null;
 async function healMasterFlagFromDb(){
   if (__masterFlagHealChecked) return;
   __masterFlagHealChecked = true;
@@ -170,6 +171,15 @@ async function healMasterFlagFromDb(){
       if (state.currentTab === 'track') renderTrack();
     }
   } catch(e){ /* stay silent - localStorage still works, this is only a safety heal */ }
+}
+// Any code that WRITES to the flagged tables should await this promise
+// first, to make sure the heal has completed and the flag is on its final
+// value. Prevents a race where the user saves a set between boot and heal
+// completion, which would route the write to the wrong table (invisible to
+// subsequent reads, since the app queries the flag's healed value).
+function awaitMasterFlagHealed(){
+  if (__masterFlagHealChecked && !__masterFlagHealPromise) return Promise.resolve();
+  return __masterFlagHealPromise || Promise.resolve();
 }
 function setSplitSubGroupPref(v){ localStorage.setItem('zealift_split_subgroup', v); }
 
@@ -1183,6 +1193,11 @@ async function removeExerciseFromDay(exerciseRow){
 }
 
 async function createExerciseForToday(payload){
+  // Wait for the master-flag heal to complete before deciding which schema
+  // to write to. Without this, a save during app boot could route to the
+  // old exercises table while the app has healed to reading from the master
+  // schema - the write would then be invisible to subsequent reads.
+  await awaitMasterFlagHealed();
   if (!getUseExerciseMasterFlag()) return insertExerciseSafely(payload);
 
   const existingMaster = await withTimeout(
@@ -1501,6 +1516,10 @@ async function showAltGroupHistory(groupId, groupName){
 
 async function quickSaveSet(exerciseId, exerciseName, best){
   if (!best) return false;
+  // Wait for the master-flag heal to complete - same race protection as
+  // saveEntry: a quick-save during app boot could otherwise land under the
+  // wrong exercise-id field and be invisible to subsequent reads.
+  await awaitMasterFlagHealed();
   const { data: userData } = await supabaseClient.auth.getUser();
   const useMaster = getUseExerciseMasterFlag();
   const idField = useMaster ? 'exercise_master_id' : 'exercise_id';
@@ -1729,7 +1748,13 @@ function openRebuildToolsSubPage(){
       <div class="chip ${!on?'active':''}" id="masterFlagOff">OFF (current app)</div>
       <div class="chip ${on?'active':''}" id="masterFlagOn" style="${on?'background:#E8A33D; color:var(--ink);':''}">ON (new structure)</div>
     </div>`;
-    toggleArea.querySelector('#masterFlagOff').onclick = () => { setUseExerciseMasterFlag(false); renderMasterFlagToggle(); if (state.currentTab === 'track') renderTrack(); };
+    toggleArea.querySelector('#masterFlagOff').onclick = () => {
+      showConfirmDialog(
+        'Turning this off makes Track read and write from the OLD exercises table. Any data you have in the new exercise_master tables will not be visible until you turn it back on. Only do this if you know what you are doing.',
+        () => { setUseExerciseMasterFlag(false); renderMasterFlagToggle(); if (state.currentTab === 'track') renderTrack(); },
+        { title: 'Switch off new structure?', danger: true, confirmLabel: 'Switch off' }
+      );
+    };
     toggleArea.querySelector('#masterFlagOn').onclick = () => { setUseExerciseMasterFlag(true); renderMasterFlagToggle(); if (state.currentTab === 'track') renderTrack(); };
   }
   renderMasterFlagToggle();
@@ -4743,6 +4768,21 @@ async function openPicker(initialTab, jumpToMuscle){
         const muscles = match ? muscleSubtitle(match.primaryMuscles, match.secondaryMuscles) : '';
         const mech = classifyMechanic(match);
         const mechTag = mech ? `<span style="font-size:9px; padding:2px 5px; border-radius:4px; margin-left:5px; background:${mech.value==='compound'?'rgba(255,107,26,0.15)':'rgba(122,150,220,0.15)'}; color:${mech.value==='compound'?'#FF6B1A':'#7BA6C9'}; opacity:${mech.guessed?0.75:1};">${mech.guessed?'~':''}${mech.value==='compound'?'Compound':'Isolation'}</span>` : '';
+        // Split tag - same visual and classification as Track, so a Push exercise
+        // reads the same here as it does on the Track cards. Uses muscle-based
+        // fallback for untagged exercises, matching Track's own logic exactly.
+        const primaryMuscle = match && match.primaryMuscles && match.primaryMuscles[0];
+        const ul = ex.upper_lower || classifyUpperLower(primaryMuscle);
+        let splitLabel = null;
+        if (splitMode === 'upperlower'){
+          splitLabel = ul === 'upper' ? 'upper' : ul === 'lower' ? 'lower' : null;
+        } else {
+          const pp = ex.push_pull || classifyPushPull(primaryMuscle, ex.name);
+          splitLabel = ul === 'lower' ? 'legs' : (pp === 'push' ? 'push' : pp === 'pull' ? 'pull' : null);
+        }
+        const SPLIT_TAG_STYLE = { push:['#FF6B1A','Push'], pull:['#7BA6C9','Pull'], legs:['#C9A227','Legs'], upper:['#FF6B1A','Upper'], lower:['#C9A227','Lower'] };
+        const splitInfo = splitLabel ? SPLIT_TAG_STYLE[splitLabel] : null;
+        const splitTag = splitInfo ? `<span style="font-size:9px; padding:2px 5px; border-radius:4px; margin-left:5px; background:${splitInfo[0]}26; color:${splitInfo[0]};">${splitInfo[1]}</span>` : '';
         const alreadyToday = todayNames.has(ex.name.toLowerCase())
           ? `<span style="font-size:9px; padding:2px 6px; border-radius:4px; margin-left:5px; background:rgba(143,191,122,0.15); color:var(--good);">✓ On ${DAY_NAMES[state.selectedDay]}</span>` : '';
         const sig = computeAltSignature(ex.name, match && match.primaryMuscles && match.primaryMuscles[0], mech ? mech.value : null);
@@ -4751,7 +4791,7 @@ async function openPicker(initialTab, jumpToMuscle){
         const altHint = todayHintName
           ? `<div class="small" style="color:var(--slate); opacity:0.7; font-style:italic; margin-top:1px;">alt for ${todayHintName} (on ${DAY_NAMES[state.selectedDay]})</div>`
           : listHintName ? `<div class="small" style="color:var(--slate); opacity:0.7; font-style:italic; margin-top:1px;">alt for ${listHintName}</div>` : '';
-        return `<div class="pick-row" data-id="${ex.masterId || ex.id}" data-name="${ex.name}" data-category="${ex.category||''}" style="${selection.active ? 'display:flex; align-items:center; gap:10px;' : ''}">${selection.active ? `<div class="check-circle" style="opacity:${selection.items.has(ex.masterId||ex.id)?1:0.3}; flex-shrink:0;">${ICON_CHECK}</div>` : ''}<div style="flex:1;"><div class="ex-name">${ex.name}${mechTag}${alreadyToday}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}${altHint}</div>${selection.active ? '' : '<div class="chev">›</div>'}</div>`;
+        return `<div class="pick-row" data-id="${ex.masterId || ex.id}" data-name="${ex.name}" data-category="${ex.category||''}" style="${selection.active ? 'display:flex; align-items:center; gap:10px;' : ''}">${selection.active ? `<div class="check-circle" style="opacity:${selection.items.has(ex.masterId||ex.id)?1:0.3}; flex-shrink:0;">${ICON_CHECK}</div>` : ''}<div style="flex:1;"><div class="ex-name">${ex.name}${splitTag}${mechTag}${alreadyToday}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}${altHint}</div>${selection.active ? '' : '<div class="chev">›</div>'}</div>`;
       }
 
       let html = '';
@@ -7102,6 +7142,11 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
 
 
   async function saveEntry(weight, unit, weightType, reps, numSets, notes){
+    // Wait for the master-flag heal to complete before choosing which ID
+    // field to write to. Without this, a set saved during app boot could
+    // land under exercise_id when the app is reading via exercise_master_id
+    // (or vice versa) - the set exists in the database but is invisible.
+    await awaitMasterFlagHealed();
     const { data: userData } = await supabaseClient.auth.getUser();
     const useMaster = getUseExerciseMasterFlag();
     const idField = useMaster ? 'exercise_master_id' : 'exercise_id';
@@ -9589,11 +9634,10 @@ supabaseClient.auth.getSession().then(({ data: { session } }) => {
   state.session = session;
   if (session) {
     renderTrack().then(maybeShowOnboarding);
-    // Background self-heal for the master flag in case localStorage was
-    // wiped (a known iOS PWA behavior). If any exercise_master rows exist
-    // for this user, this heals the flag to true so the app doesn't
-    // silently start reading the old exercises table's stale data.
-    healMasterFlagFromDb();
+    // Kick off the master flag heal and hold the promise so any write
+    // operation can await it, closing the race where a save between boot
+    // and heal completion would go to the wrong schema.
+    __masterFlagHealPromise = healMasterFlagFromDb().finally(() => { __masterFlagHealPromise = null; });
   } else renderLogin();
 });
 
