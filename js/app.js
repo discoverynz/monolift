@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.157';
+const APP_VERSION = 'Beta 5.158';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1712,9 +1712,9 @@ function openRebuildToolsSubPage(){
   overlay.innerHTML = `
     <div class="form-header"><button id="closeRebuildSubPage">✕</button><h1>Rebuild Tools</h1><div style="width:18px;"></div></div>
     <div class="overlay-scroll">
-      <div class="small" style="padding:0 18px 14px 18px; color:var(--slate); line-height:1.5;">In-progress migration to a proper exercise data structure - one real exercise instead of a separate copy per day. All of this is safe and reversible; nothing here can lose data.</div>
+      <div class="small" style="padding:0 18px 14px 18px; color:var(--slate); line-height:1.5;">Tools for the exercise_master migration. Stage 2 is a one-time seed migration - re-running it after Stage 4c is ON will WIPE current new-table data and rebuild from the old exercises table snapshot.</div>
       <div class="me-item" id="subMigrateMasterBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
-        <div><div>Migrate to Exercise Master</div><div class="small" style="color:var(--slate); margin-top:2px;">Stage 2 - writes to new tables, never touches your current data</div></div>
+        <div><div>Migrate to Exercise Master</div><div class="small" style="color:var(--slate); margin-top:2px;">Stage 2 - one-time seed from old exercises table. Refuses to wipe if new schema is in active use.</div></div>
         <div class="chev" style="margin-top:2px;">›</div>
       </div>
       <div class="me-item" id="subExportBackupBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
@@ -2158,15 +2158,41 @@ async function openMigrateToMasterScreen(){
   });
 
   body.innerHTML = `
-    <div class="small" style="padding:12px 18px; color:var(--slate); line-height:1.6;">This is a safe, read-only-first step. It only writes to the new exercise_master and exercise_days tables - your existing exercises table is never modified or deleted. The app keeps working exactly as it does now until a later stage switches it over. Inactive exercises get a master record too (so any real history logged against them still has somewhere to link), but no day-links, since they're not currently placed anywhere.</div>
+    <div class="small" style="padding:12px 18px; color:var(--slate); line-height:1.6;">Reads the OLD exercises table and writes to the NEW exercise_master and exercise_days tables. If new-table data already exists it gets WIPED first - this is a one-time seed migration, not an incremental sync.</div>
     <div class="proposal-card" style="margin:0 18px 14px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px;">
-      <div class="ex-name" style="font-size:14px; margin-bottom:6px;">${groups.length} distinct exercises found</div>
+      <div class="ex-name" style="font-size:14px; margin-bottom:6px;">${groups.length} distinct exercises found in OLD table</div>
       <div class="small" style="color:var(--slate);">from ${all.length} current day-by-day records, spanning ${groups.reduce((s,g)=>s+g.weekdays.length,0)} day-links total</div>
     </div>
-    <button class="save-btn" id="confirmMigrateBtn" style="margin:0 18px 20px 18px;">Write to New Tables</button>
+    <button class="save-btn" id="confirmMigrateBtn" style="margin:0 18px 20px 18px; background:${getUseExerciseMasterFlag() && masterCountResult.data && masterCountResult.data.length > 0 ? '#E8492A' : ''};">${getUseExerciseMasterFlag() && masterCountResult.data && masterCountResult.data.length > 0 ? 'DANGER: Wipe & Rebuild from OLD Table' : 'Write to New Tables'}</button>
   `;
 
   body.querySelector('#confirmMigrateBtn').onclick = async () => {
+    // CRITICAL: If the user has real master data AND is actively using the
+    // new schema (flag on), this migration would DELETE their real current
+    // data and replace it with whatever the OLD exercises table contains -
+    // which could be a months-old onboarding snapshot. That's the exact
+    // "app reset to defaults I never set" symptom. Refuse loudly.
+    const currentMasterCount = masterCountResult.data ? masterCountResult.data.length : 0;
+    const currentDayCount = daysCountResult.data ? daysCountResult.data.length : 0;
+    if (getUseExerciseMasterFlag() && currentMasterCount > 0){
+      showConfirmDialog(
+        `You have ${currentMasterCount} exercises and ${currentDayCount} day-links in the NEW schema right now, and the app is set to use it (Stage 4c = ON). Running this migration would DELETE ALL of that and rebuild from a snapshot of the OLD exercises table - which may be months out of date. Only do this if you are certain the OLD table is more current than what you have now (extremely unusual). Type MIGRATE to confirm.`,
+        async () => {
+          const typed = prompt('Type MIGRATE (all caps) to confirm you want to WIPE the new schema and rebuild from the old exercises table:');
+          if (typed !== 'MIGRATE'){
+            alert('Cancelled. Nothing was touched.');
+            return;
+          }
+          await performActualMigration();
+        },
+        { title: 'This will WIPE your current data', danger: true, confirmLabel: 'I understand' }
+      );
+      return;
+    }
+    await performActualMigration();
+  };
+
+  async function performActualMigration(){
     const btn = body.querySelector('#confirmMigrateBtn');
     btn.textContent = 'Migrating…';
     // Idempotent: clear any prior run first so re-running after adding more
