@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.152';
+const APP_VERSION = 'Beta 5.153';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -484,11 +484,13 @@ function selectBalancedSlots(slots, targetSize, crossDayUsage){
 
 function exerciseMatchesCategory(ex, muscle, category){
   const m = (muscle || '').toLowerCase();
-  if (category === 'push') return ex.push_pull === 'push' && ex.upper_lower !== 'lower';
-  if (category === 'pull') return ex.push_pull === 'pull' && ex.upper_lower !== 'lower';
-  if (category === 'legs') return ex.upper_lower === 'lower';
-  if (category === 'upper') return ex.upper_lower === 'upper';
-  if (category === 'lower') return ex.upper_lower === 'lower';
+  const ul = ex.upper_lower || classifyUpperLower(m);
+  const pp = ex.push_pull || classifyPushPull(m, ex.name);
+  if (category === 'push') return pp === 'push' && ul !== 'lower';
+  if (category === 'pull') return pp === 'pull' && ul !== 'lower';
+  if (category === 'legs') return ul === 'lower';
+  if (category === 'upper') return ul === 'upper';
+  if (category === 'lower') return ul === 'lower';
   if (category === 'chestback') return ['chest','lats','traps','middle back','lower back'].includes(m);
   if (category === 'shouldersarms') return ['shoulders','biceps','triceps','forearms'].includes(m);
   if (category === 'fullbody') return !!m;
@@ -5823,6 +5825,17 @@ async function openChangeSingleDay(){
             await removeExerciseFromDay({ id, masterId: n.masterId });
           }
         }
+        // Sync the day's header label to the new focus too - otherwise Track
+        // keeps showing the old label even though the exercises underneath
+        // have genuinely changed, the same inconsistency the full
+        // reorganizer already guards against. Manual/Custom is skipped since
+        // there's no single category name to derive a label from.
+        if (newCategory !== 'custom'){
+          await supabaseClient.from('day_types').upsert(
+            { user_id: userData.user.id, weekday: targetDay, label: SPLIT_CATEGORY_LABELS[newCategory] || cap(newCategory) },
+            { onConflict: 'user_id,weekday' }
+          );
+        }
         overlay.remove();
         state.selectedDay = targetDay;
         state.currentTab = 'track';
@@ -9248,8 +9261,10 @@ async function performDaySwap(dayA, dayB){
 
     for (const row of rowsA){
       if (masterIdsOnB.has(row.exercise_master_id)){
-        // Already exists on the target day - this link is now redundant, not moved.
-        await supabaseClient.from('exercise_days').delete().eq('id', row.id);
+        // Already exists on both days - swapping A and B is a no-op for this
+        // exercise (it stays on both either way), so leave both links exactly
+        // as they are. Deleting either one would remove it from the week
+        // entirely, which is what was happening here before.
         continue;
       }
       const { data, error } = await supabaseClient.from('exercise_days').update({ weekday: dayB }).eq('id', row.id).select();
@@ -9257,7 +9272,6 @@ async function performDaySwap(dayA, dayB){
     }
     for (const row of rowsB){
       if (masterIdsOnA.has(row.exercise_master_id)){
-        await supabaseClient.from('exercise_days').delete().eq('id', row.id);
         continue;
       }
       const { data, error } = await supabaseClient.from('exercise_days').update({ weekday: dayA }).eq('id', row.id).select();
@@ -9283,6 +9297,16 @@ async function performDaySwap(dayA, dayB){
     }
   }
 
+  // Check for failures BEFORE touching the day labels - if any exercise
+  // failed to actually move, the labels must not swap either, or the day
+  // ends up showing a label that no longer matches what's actually on it
+  // (exactly the "Lower day full of Shoulder Press" report). Better to leave
+  // both the labels and the exercises in their original, at-least-consistent
+  // state and surface the failure clearly than to half-apply a swap.
+  if (failures.length){
+    throw new Error(`Exercises did not all move, so nothing was swapped:\n${failures.join('\n')}`);
+  }
+
   const [dtA, dtB] = await Promise.all([
     supabaseClient.from('day_types').select('label').eq('user_id', uid).eq('weekday', dayA).maybeSingle(),
     supabaseClient.from('day_types').select('label').eq('user_id', uid).eq('weekday', dayB).maybeSingle()
@@ -9291,10 +9315,6 @@ async function performDaySwap(dayA, dayB){
   const labelB = dtB.data ? dtB.data.label : DAY_TYPES[dayB];
   await supabaseClient.from('day_types').upsert({ user_id: uid, weekday: dayA, label: labelB }, { onConflict: 'user_id,weekday' });
   await supabaseClient.from('day_types').upsert({ user_id: uid, weekday: dayB, label: labelA }, { onConflict: 'user_id,weekday' });
-
-  if (failures.length){
-    throw new Error(`The day labels swapped, but some exercises did not:\n${failures.join('\n')}`);
-  }
 }
 
 async function renderMe(){
