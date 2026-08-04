@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.159';
+const APP_VERSION = 'Beta 5.160';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1205,13 +1205,19 @@ async function createExerciseForToday(payload){
   await awaitMasterFlagHealed();
   if (!getUseExerciseMasterFlag()) return insertExerciseSafely(payload);
 
+  // Use select + limit(1) instead of maybeSingle() - maybeSingle throws an
+  // error if 2+ rows match, and previously that error path fell through to
+  // INSERT a new exercise_master row here, multiplying any pre-existing
+  // duplicates every time the user re-added the exercise anywhere. select
+  // + limit(1) just takes the first match if there's any, so the function
+  // becomes a duplicate-breaker rather than a duplicate-multiplier.
   const existingMaster = await withTimeout(
-    supabaseClient.from('exercise_master').select('id').eq('user_id', payload.user_id).ilike('name', payload.name).maybeSingle(),
+    supabaseClient.from('exercise_master').select('id').eq('user_id', payload.user_id).ilike('name', payload.name).limit(1),
     15000
   );
   let masterId;
-  if (!existingMaster.__timeout && !existingMaster.error && existingMaster.data){
-    masterId = existingMaster.data.id;
+  if (!existingMaster.__timeout && !existingMaster.error && existingMaster.data && existingMaster.data.length){
+    masterId = existingMaster.data[0].id;
   } else {
     const { data: inserted, error } = await supabaseClient.from('exercise_master').insert({
       user_id: payload.user_id, name: payload.name, category: payload.category,
@@ -3701,6 +3707,10 @@ async function openSuggestionPreview(name, category, navList){
   attachGuideImageLightbox(overlay.querySelector('#sugPreviewArea'), match.images);
 
   overlay.querySelector('#addSuggestionBtn').onclick = async () => { await withButtonLoading(overlay.querySelector('#addSuggestionBtn'), 'Adding…', async () => {
+    // Capture the target day at the moment of tap, not lazily inside the
+    // async chain - state.selectedDay could shift between the existence
+    // check and the write (day chip re-tap, day-rollover snap).
+    const targetDay = state.selectedDay;
     const { data: userData } = await supabaseClient.auth.getUser();
     // This was the actual source of same-day duplicates: tapping "+ Add" more
     // than once on the same suggestion (e.g. navigating back to it, or
@@ -3708,14 +3718,14 @@ async function openSuggestionPreview(name, category, navList){
     // with no check for one already existing today. Now checks first, same
     // as the other add-exercise flow already does correctly.
     const compatEx = await fetchAllExercisesCompat(userData.user.id);
-    const existingMatch = compatEx.find(ex => ex.weekday === state.selectedDay && ex.name.toLowerCase() === name.toLowerCase());
+    const existingMatch = compatEx.find(ex => ex.weekday === targetDay && ex.name.toLowerCase() === name.toLowerCase());
     if (existingMatch){
       overlay.remove();
       state.currentTab = 'track';
       openLogForm(existingMatch.masterId || existingMatch.id, name);
       return;
     }
-    const { error } = await createExerciseForToday({ user_id: userData.user.id, name, category, weekday: state.selectedDay, alt_group_id: null });
+    const { error } = await createExerciseForToday({ user_id: userData.user.id, name, category, weekday: targetDay, alt_group_id: null });
     if (error){ alert(error.message); return; }
     overlay.remove();
     state.currentTab = 'track';
@@ -4371,15 +4381,21 @@ async function deleteExerciseEntirelyNow(exerciseName){
   const { data: userData } = await supabaseClient.auth.getUser();
   const uid = userData.user.id;
   if (getUseExerciseMasterFlag()){
+    // Use select (multiple rows OK) instead of maybeSingle - if there are
+    // any duplicate exercise_master rows sharing this name, the previous
+    // maybeSingle would error out and this function would silently do
+    // nothing, leaving the user's "delete entirely" action a no-op.
     const masterResult = await withTimeout(
-      supabaseClient.from('exercise_master').select('id').eq('user_id', uid).ilike('name', exerciseName).maybeSingle(),
+      supabaseClient.from('exercise_master').select('id').eq('user_id', uid).ilike('name', exerciseName),
       15000
     );
-    if (!masterResult.__timeout && !masterResult.error && masterResult.data){
-      const id = masterResult.data.id;
-      await supabaseClient.from('sets').delete().eq('exercise_master_id', id);
-      await supabaseClient.from('exercise_days').delete().eq('exercise_master_id', id);
-      await supabaseClient.from('exercise_master').delete().eq('id', id);
+    if (!masterResult.__timeout && !masterResult.error && masterResult.data && masterResult.data.length){
+      const ids = masterResult.data.map(r => r.id);
+      for (const id of ids){
+        await supabaseClient.from('sets').delete().eq('exercise_master_id', id);
+        await supabaseClient.from('exercise_days').delete().eq('exercise_master_id', id);
+        await supabaseClient.from('exercise_master').delete().eq('id', id);
+      }
     }
   } else {
     const exResult = await withTimeout(
@@ -4454,7 +4470,11 @@ function confirmRemoveExercise(exerciseId, exerciseName){
       return;
     }
     if (useMaster){
-      const { data, error } = await supabaseClient.from('exercise_days').delete().eq('exercise_master_id', exerciseId).eq('weekday', state.selectedDay).select();
+      // Capture the weekday at the moment of removal - not lazily inside
+      // the undo callback, since state.selectedDay may have changed by
+      // then (user switched days, or the day-rollover snap fired).
+      const removalWeekday = state.selectedDay;
+      const { data, error } = await supabaseClient.from('exercise_days').delete().eq('exercise_master_id', exerciseId).eq('weekday', removalWeekday).select();
       if (error || !data || !data.length){
         alert(`Could not remove "${exerciseName}": ${error ? error.message : 'no matching row found for today - it may already be gone, or something is out of sync. Try refreshing the app.'}`);
         renderTrack();
@@ -4462,7 +4482,7 @@ function confirmRemoveExercise(exerciseId, exerciseName){
       }
       showUndoToast(exerciseName, async () => {
         const { data: userData } = await supabaseClient.auth.getUser();
-        await supabaseClient.from('exercise_days').insert({ user_id: userData.user.id, exercise_master_id: exerciseId, weekday: state.selectedDay });
+        await supabaseClient.from('exercise_days').insert({ user_id: userData.user.id, exercise_master_id: exerciseId, weekday: removalWeekday });
         renderTrack();
       });
       renderTrack();
@@ -4927,13 +4947,16 @@ async function openPicker(initialTab, jumpToMuscle){
             renderList(body.querySelector('#pickerSearch').value);
             return;
           }
+          // Capture at tap time - state.selectedDay could shift under the
+          // async flow if another handler fires.
+          const targetDay = state.selectedDay;
           const picked = all.find(ex => (ex.masterId || ex.id) === el.dataset.id);
           overlay.remove();
-          if (!picked || picked.weekday === state.selectedDay){
+          if (!picked || picked.weekday === targetDay){
             openLogForm(el.dataset.id, el.dataset.name);
             return;
           }
-          const existingToday = all.find(ex => ex.weekday === state.selectedDay && ex.name.toLowerCase() === picked.name.toLowerCase());
+          const existingToday = all.find(ex => ex.weekday === targetDay && ex.name.toLowerCase() === picked.name.toLowerCase());
           if (existingToday){
             openLogForm(existingToday.masterId || existingToday.id, existingToday.name);
             return;
@@ -4941,7 +4964,7 @@ async function openPicker(initialTab, jumpToMuscle){
           const { data: userData } = await supabaseClient.auth.getUser();
           const { data: inserted, error } = await createExerciseForToday({
             user_id: userData.user.id, name: picked.name, category: picked.category,
-            weekday: state.selectedDay, alt_group_id: null
+            weekday: targetDay, alt_group_id: null
           });
           if (error){ alert(error.message); return; }
           openLogForm(inserted[0].id, picked.name, true);
@@ -4953,14 +4976,16 @@ async function openPicker(initialTab, jumpToMuscle){
         async () => {
           const btn = overlay.querySelector('#selectionAdd');
           const items = [...selection.items.values()];
+          // Capture at tap time; state.selectedDay could shift during the async work.
+          const targetDay = state.selectedDay;
           await withButtonLoading(btn, 'Adding…', async () => {
             const { data: userData } = await supabaseClient.auth.getUser();
             const errors = [];
             for (const item of items){
-              const alreadyToday = all.find(ex => ex.weekday === state.selectedDay && ex.name.toLowerCase() === item.name.toLowerCase());
+              const alreadyToday = all.find(ex => ex.weekday === targetDay && ex.name.toLowerCase() === item.name.toLowerCase());
               if (alreadyToday) continue; // already there, nothing to do
               const { error } = await createExerciseForToday({
-                user_id: userData.user.id, name: item.name, category: item.category || 'Other', weekday: state.selectedDay, alt_group_id: null
+                user_id: userData.user.id, name: item.name, category: item.category || 'Other', weekday: targetDay, alt_group_id: null
               });
               if (error) errors.push(`${item.name}: ${error.message}`);
             }
@@ -4989,12 +5014,17 @@ async function openPicker(initialTab, jumpToMuscle){
               if (!newName || newName === item.name){ selection.active = false; selection.items.clear(); renderList(body.querySelector('#pickerSearch').value); return; }
               const { data: userData } = await supabaseClient.auth.getUser();
               if (getUseExerciseMasterFlag()){
+                // Handle any duplicate rows sharing this name - previously
+                // maybeSingle would error on 2+ matches and rename would
+                // silently do nothing.
                 const masterResult = await withTimeout(
-                  supabaseClient.from('exercise_master').select('id').eq('user_id', userData.user.id).ilike('name', item.name).maybeSingle(),
+                  supabaseClient.from('exercise_master').select('id').eq('user_id', userData.user.id).ilike('name', item.name),
                   15000
                 );
-                if (!masterResult.__timeout && !masterResult.error && masterResult.data){
-                  await supabaseClient.from('exercise_master').update({ name: newName }).eq('id', masterResult.data.id);
+                if (!masterResult.__timeout && !masterResult.error && masterResult.data && masterResult.data.length){
+                  for (const row of masterResult.data){
+                    await supabaseClient.from('exercise_master').update({ name: newName }).eq('id', row.id);
+                  }
                 }
               } else {
                 await supabaseClient.from('exercises').update({ name: newName }).eq('user_id', userData.user.id).ilike('name', item.name);
@@ -6663,6 +6693,30 @@ async function loadLocations(){
   if (!getDefaultLocationId()){
     const dbDefault = locations.find(l => l.is_default);
     if (dbDefault) localStorage.setItem('zealift_default_location', dbDefault.id);
+  }
+  // Second self-heal: if localStorage's default OR current location ID points
+  // to a location that no longer exists (deleted via UI, SQL, or another
+  // device), CLEAR that stale reference. Otherwise every exercise on Track
+  // that has any location_ids gets filtered out since the current-location
+  // ID doesn't match any of the exercise's remaining ones - Track looks
+  // empty even though the data is fine. Only clear when the actual list
+  // was successfully loaded, so a transient query failure doesn't wipe
+  // valid references.
+  if (locations.length || (result.data !== null && result.data !== undefined)){
+    const knownIds = new Set(locations.map(l => l.id));
+    const currentDefault = getDefaultLocationId();
+    if (currentDefault && !knownIds.has(currentDefault)){
+      localStorage.removeItem('zealift_default_location');
+    }
+    const currentRaw = localStorage.getItem('zealift_current_location');
+    if (currentRaw){
+      try {
+        const parsed = JSON.parse(currentRaw);
+        if (parsed.id && !knownIds.has(parsed.id)){
+          localStorage.removeItem('zealift_current_location');
+        }
+      } catch(e){ /* legacy value - safe to leave, getCurrentLocationId returns null */ }
+    }
   }
   return locations;
 }
