@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.155';
+const APP_VERSION = 'Beta 5.156';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -137,6 +137,40 @@ function getSplitSubGroupPref(){ return localStorage.getItem('zealift_split_subg
 // Turning this off again requires no code push - it's just a local setting.
 function getUseExerciseMasterFlag(){ return localStorage.getItem('zealift_use_exercise_master') === 'true'; }
 function setUseExerciseMasterFlag(v){ localStorage.setItem('zealift_use_exercise_master', v ? 'true' : 'false'); }
+// Self-heals the master flag from the database - if localStorage was wiped
+// (a known iOS PWA behavior), the flag would silently read as 'false' and
+// the app would start querying the OLD exercises table instead of the
+// exercise_master/exercise_days tables the user has actually been using.
+// That table can hold stale onboarding-era data, which is exactly the
+// "everything reset to defaults I never set" behavior - the defaults ARE
+// something the user chose, but at initial onboarding, months ago, and
+// they'd been using the newer schema since.
+// Only ever flips the flag ON, never off - flipping off could hide real data
+// and there's no scenario where a user with master data legitimately wants
+// the flag off. Runs as a background heal after each auth-checked page load;
+// does not block reads. Skips silently if the master table doesn't exist
+// (e.g. for a genuinely brand-new install).
+let __masterFlagHealChecked = false;
+async function healMasterFlagFromDb(){
+  if (__masterFlagHealChecked) return;
+  __masterFlagHealChecked = true;
+  if (getUseExerciseMasterFlag()) return; // already on, nothing to heal
+  try {
+    const { data: userData } = await supabaseClient.auth.getUser();
+    if (!userData || !userData.user) return;
+    const result = await withTimeout(
+      supabaseClient.from('exercise_master').select('id', { count: 'exact', head: true }).eq('user_id', userData.user.id).limit(1),
+      15000
+    );
+    if (result.__timeout || result.error) return;
+    // Any row at all means the user was using the master schema; heal the
+    // flag so the app doesn't silently revert to the old table's data.
+    if ((result.count || 0) > 0){
+      setUseExerciseMasterFlag(true);
+      if (state.currentTab === 'track') renderTrack();
+    }
+  } catch(e){ /* stay silent - localStorage still works, this is only a safety heal */ }
+}
 function setSplitSubGroupPref(v){ localStorage.setItem('zealift_split_subgroup', v); }
 
 // Groups a list of {name, category, ...} exercises either by their stored equipment
@@ -9553,7 +9587,14 @@ document.addEventListener('visibilitychange', () => {
 
 supabaseClient.auth.getSession().then(({ data: { session } }) => {
   state.session = session;
-  if (session) { renderTrack().then(maybeShowOnboarding); } else renderLogin();
+  if (session) {
+    renderTrack().then(maybeShowOnboarding);
+    // Background self-heal for the master flag in case localStorage was
+    // wiped (a known iOS PWA behavior). If any exercise_master rows exist
+    // for this user, this heals the flag to true so the app doesn't
+    // silently start reading the old exercises table's stale data.
+    healMasterFlagFromDb();
+  } else renderLogin();
 });
 
 if ('serviceWorker' in navigator) {
