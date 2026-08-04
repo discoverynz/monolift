@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.158';
+const APP_VERSION = 'Beta 5.159';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1096,6 +1096,11 @@ async function insertExerciseSafely(payload){
 // form under the new structure caused a foreign key violation the moment
 // someone tried to save a set, since that id doesn't exist in exercise_master.
 async function fetchAllExercisesCompat(uid){
+  // Wait for the master-flag heal to complete before deciding which schema
+  // to read from. Without this, callers like the reorganizer or merge
+  // duplicates would base their write decisions on possibly-stale
+  // old-table data if invoked during the boot window.
+  await awaitMasterFlagHealed();
   if (!getUseExerciseMasterFlag()){
     const result = await withTimeout(
       supabaseClient.from('exercises').select('id, name, category, weekday, alt_group_id, push_pull, upper_lower, location_ids').eq('user_id', uid).eq('active', true),
@@ -3488,7 +3493,25 @@ function showOnboarding(mode){
     if (hadSetup){
       const { data: userData } = await supabaseClient.auth.getUser();
       if (userData && userData.user){
+        // In 'setup' mode the user explicitly tapped Redo Setup Week and
+        // wants their labels rewritten - overwrite is expected. In 'full'
+        // mode though, this wizard is auto-triggered and could re-fire on a
+        // returning user (e.g. session refresh with stale user_metadata),
+        // so we must NOT overwrite existing labels there - reading and
+        // skipping any weekday that already has one.
+        const preserveExisting = (mode === 'full');
+        const existingByWeekday = {};
+        if (preserveExisting){
+          const existingResult = await withTimeout(
+            supabaseClient.from('day_types').select('weekday, label').eq('user_id', userData.user.id),
+            15000
+          );
+          if (!existingResult.__timeout && !existingResult.error){
+            (existingResult.data || []).forEach(r => { existingByWeekday[r.weekday] = r.label; });
+          }
+        }
         for (let i = 0; i < 7; i++){
+          if (preserveExisting && existingByWeekday[i]) continue;
           await supabaseClient.from('day_types').upsert(
             { user_id: userData.user.id, weekday: i, label: wiz.week[i] },
             { onConflict: 'user_id,weekday' }
@@ -3528,9 +3551,27 @@ function showOnboarding(mode){
 
 async function maybeShowOnboarding(){
   const { data: userData } = await supabaseClient.auth.getUser();
-  if (userData && userData.user && !userData.user.user_metadata.onboarded){
-    showOnboarding('full');
+  if (!userData || !userData.user) return;
+  if (userData.user.user_metadata.onboarded) return; // already onboarded, done
+  // If the metadata says not-onboarded but the user has real data, they're
+  // clearly a returning user whose metadata is stale (e.g. session refresh
+  // race, or the flag was never persisted correctly on their original run).
+  // Never re-fire the onboarding wizard on top of real data - just silently
+  // heal the flag so this check passes cleanly on future opens.
+  const [dayTypesResult, mastersResult, oldExResult] = await Promise.all([
+    withTimeout(supabaseClient.from('day_types').select('weekday', { count: 'exact', head: true }).eq('user_id', userData.user.id).limit(1), 10000),
+    withTimeout(supabaseClient.from('exercise_master').select('id', { count: 'exact', head: true }).eq('user_id', userData.user.id).limit(1), 10000),
+    withTimeout(supabaseClient.from('exercises').select('id', { count: 'exact', head: true }).eq('user_id', userData.user.id).limit(1), 10000)
+  ]);
+  const hasDayTypes = !dayTypesResult.__timeout && !dayTypesResult.error && (dayTypesResult.count || 0) > 0;
+  const hasMaster = !mastersResult.__timeout && !mastersResult.error && (mastersResult.count || 0) > 0;
+  const hasOldEx = !oldExResult.__timeout && !oldExResult.error && (oldExResult.count || 0) > 0;
+  if (hasDayTypes || hasMaster || hasOldEx){
+    // Real data exists - user is not new, mark them as onboarded and skip.
+    try { await supabaseClient.auth.updateUser({ data: { onboarded: true } }); } catch(e){}
+    return;
   }
+  showOnboarding('full');
 }
 
 // Maps a (possibly custom, renamed) day-type label to target muscle names via
