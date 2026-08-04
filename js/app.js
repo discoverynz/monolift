@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.153';
+const APP_VERSION = 'Beta 5.154';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1583,12 +1583,23 @@ function exerciseRow(ex){
 
 async function loadDayType(weekday){
   const { data: userData } = await supabaseClient.auth.getUser();
-  if (!userData || !userData.user) return DAY_TYPES[weekday];
+  // Not signed in - genuinely nothing to load, return null so the caller
+  // shows a neutral fallback (DAY_NAMES[weekday] = "MON", "TUE" etc.) rather
+  // than a hardcoded default plan that was never actually set by anyone.
+  if (!userData || !userData.user) return null;
   const result = await withTimeout(
     supabaseClient.from('day_types').select('label').eq('user_id', userData.user.id).eq('weekday', weekday).maybeSingle(),
     15000
   );
-  if (result.__timeout || result.error || !result.data) return DAY_TYPES[weekday];
+  // Transient timeout or error - the real label might exist in the database
+  // but we couldn't fetch it right now. Do NOT fall back to a hardcoded
+  // default label ("Chest & Triceps" etc.) since that misleadingly looks
+  // like the day was silently reset to defaults. Return a sentinel that the
+  // caller can render as a placeholder instead.
+  if (result.__timeout) return { __unavailable: true, reason: 'timeout' };
+  if (result.error) return { __unavailable: true, reason: 'error', error: result.error };
+  // Genuinely no row - user has never set a label for this weekday.
+  if (!result.data) return null;
   return result.data.label;
 }
 
@@ -3550,6 +3561,15 @@ async function fetchTrackHeaderStats(){
 async function renderTrack(){
   app.innerHTML = `<div class="app-shell"><div class="login-wrap"><div class="login-sub">Loading your exercises…</div></div></div>`;
   const [, dayTypeLabel, headerStats] = await Promise.all([loadExercises(), loadDayType(state.selectedDay), fetchTrackHeaderStats()]);
+  // dayTypeLabel can be: a string (real label from DB), null (no row - user
+  // never set one), or an { __unavailable } marker (transient fetch failure).
+  // Only the first is a real label; the other two must not silently fall
+  // back to a hardcoded default plan, which was the "resetting to defaults
+  // I never set" behavior. Downstream code operates on effectiveDayTypeLabel.
+  const dayTypeUnavailable = dayTypeLabel && typeof dayTypeLabel === 'object' && dayTypeLabel.__unavailable;
+  const effectiveDayTypeLabel = (typeof dayTypeLabel === 'string' && dayTypeLabel)
+    ? dayTypeLabel
+    : (dayTypeUnavailable ? '—' : DAY_NAMES[state.selectedDay]);
 
   // slot-based progress: exercises sharing an alt_group_id count once
   const seenGroups = new Set();
@@ -3606,7 +3626,7 @@ async function renderTrack(){
       const compatEx = await fetchAllExercisesCompat(userData.user.id);
       const fullLibrary = compatEx.length ? compatEx.map(ex => ({ name: ex.name })) : state.exercises;
       const todayNames = new Set(state.exercises.map(ex => ex.name.toLowerCase()));
-      suggestions = await getSuggestedExercises(dayTypeLabel, fullLibrary, todayNames);
+      suggestions = await getSuggestedExercises(effectiveDayTypeLabel, fullLibrary, todayNames);
       state.suggestionsCache[cacheKey] = suggestions;
     }
   }
@@ -3632,9 +3652,9 @@ async function renderTrack(){
     state.trackFlatOrder.push(...items.map(ex => ({ id: ex.id, name: ex.name })));
   });
   if (state.exercises.length === 0){
-    const starters = getStarterExercises(dayTypeLabel);
+    const starters = getStarterExercises(effectiveDayTypeLabel);
     listHtml = `<div class="empty-state">No exercises set for ${DAY_LABELS[state.selectedDay]} yet.</div>
-      <div class="category">Quick Add — Common for ${dayTypeLabel}</div>
+      <div class="category">Quick Add — Common for ${effectiveDayTypeLabel}</div>
       ${starters.map(s => `<div class="pick-row starter-add" data-name="${s.name}" data-cat="${s.category}"><div class="ex-name">${s.name}</div><div class="chev" style="color:var(--flame); font-size:20px;">+</div></div>`).join('')}
       <div style="padding:14px 18px;"><button class="btn-primary" id="emptyAddBtn">+ Add a Different Exercise</button></div>`;
   }
@@ -3654,7 +3674,7 @@ async function renderTrack(){
       </div>`;
     };
     suggestionsHtml = `<div class="category" style="display:flex; align-items:center; justify-content:space-between;">
-        <div>Try Something New for ${dayTypeLabel}</div>
+        <div>Try Something New for ${effectiveDayTypeLabel}</div>
         <div style="display:flex; gap:2px;">
           <button id="refreshSuggestions" style="background:none; width:38px; height:38px; display:flex; align-items:center; justify-content:center; border-radius:8px;"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="var(--flame)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>
           <button id="seeAllSuggestions" style="background:none; width:38px; height:38px; display:flex; align-items:center; justify-content:center; border-radius:8px;"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="var(--flame)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
@@ -3676,7 +3696,7 @@ async function renderTrack(){
         <div class="day-strip">${dayChips}</div>
         <div class="header">
           <div class="eyebrow">${DAY_LABELS[state.selectedDay].toUpperCase()}</div>
-          <h1 id="dayTypeHeader" style="cursor:pointer;">${dayTypeLabel}</h1>
+          <h1 id="dayTypeHeader" style="cursor:pointer;${dayTypeUnavailable ? ' color:#E8A33D;' : ''}">${effectiveDayTypeLabel}</h1>
           <div class="quote">"${q.t}" — ${q.a}</div>
         </div>
         <div style="display:flex; margin:14px 18px 0 18px; border-radius:14px; overflow:hidden;
@@ -3717,7 +3737,7 @@ async function renderTrack(){
     </div>`;
 
   attachShellHandlers();
-  document.getElementById('dayTypeHeader').onclick = () => openEditDayTypeForm(state.selectedDay, dayTypeLabel);
+  document.getElementById('dayTypeHeader').onclick = () => openEditDayTypeForm(state.selectedDay, typeof dayTypeLabel === 'string' ? dayTypeLabel : '');
   const locSwitcher = document.getElementById('locSwitcher');
   if (locSwitcher) locSwitcher.onclick = () => openLocationPicker(allLocations, currentLocationId);
   const timerBtn = document.getElementById('toolbarTimerBtn');
@@ -9157,7 +9177,7 @@ async function renderBalance(mode, view){
 // ---------- ME ----------
 async function getDayStats(weekday){
   const { data: userData } = await supabaseClient.auth.getUser();
-  if (!userData || !userData.user) return { weekday, label: DAY_TYPES[weekday], exerciseCount: 0, setCount: 0 };
+  if (!userData || !userData.user) return { weekday, label: DAY_NAMES[weekday], exerciseCount: 0, setCount: 0 };
   const useMaster = getUseExerciseMasterFlag();
   const allExercises = await fetchAllExercisesCompat(userData.user.id);
   const exercises = allExercises.filter(ex => ex.weekday === weekday);
@@ -9171,7 +9191,10 @@ async function getDayStats(weekday){
     );
     setCount = setResult.__timeout || setResult.error ? 0 : (setResult.count || 0);
   }
-  const label = await loadDayType(weekday);
+  const rawLabel = await loadDayType(weekday);
+  const label = (typeof rawLabel === 'string' && rawLabel)
+    ? rawLabel
+    : (rawLabel && rawLabel.__unavailable ? '—' : DAY_NAMES[weekday]);
   return { weekday, label, exerciseCount: exercises.length, setCount };
 }
 
@@ -9311,10 +9334,28 @@ async function performDaySwap(dayA, dayB){
     supabaseClient.from('day_types').select('label').eq('user_id', uid).eq('weekday', dayA).maybeSingle(),
     supabaseClient.from('day_types').select('label').eq('user_id', uid).eq('weekday', dayB).maybeSingle()
   ]);
-  const labelA = dtA.data ? dtA.data.label : DAY_TYPES[dayA];
-  const labelB = dtB.data ? dtB.data.label : DAY_TYPES[dayB];
-  await supabaseClient.from('day_types').upsert({ user_id: uid, weekday: dayA, label: labelB }, { onConflict: 'user_id,weekday' });
-  await supabaseClient.from('day_types').upsert({ user_id: uid, weekday: dayB, label: labelA }, { onConflict: 'user_id,weekday' });
+  // Only use REAL labels the user actually set. Previously this silently
+  // fell back to DAY_TYPES[dayA] (a hardcoded default like "Chest & Triceps"
+  // that the user might have never chosen) and wrote it INTO the database
+  // as if it were a real label - so a swap involving a day with no
+  // day_types row could permanently bake a fake default into the plan.
+  const labelA = dtA.data ? dtA.data.label : null;
+  const labelB = dtB.data ? dtB.data.label : null;
+  // Only write each side when there's a real label to write. Missing rows
+  // stay missing after the swap (nothing to swap in), which is faithful to
+  // "the user never set this" and won't pollute the database.
+  if (labelB !== null){
+    await supabaseClient.from('day_types').upsert({ user_id: uid, weekday: dayA, label: labelB }, { onConflict: 'user_id,weekday' });
+  } else if (dtA.data){
+    // Day A had a label, Day B did not - after the swap, Day A should end
+    // up empty, matching what Day B was.
+    await supabaseClient.from('day_types').delete().eq('user_id', uid).eq('weekday', dayA);
+  }
+  if (labelA !== null){
+    await supabaseClient.from('day_types').upsert({ user_id: uid, weekday: dayB, label: labelA }, { onConflict: 'user_id,weekday' });
+  } else if (dtB.data){
+    await supabaseClient.from('day_types').delete().eq('user_id', uid).eq('weekday', dayB);
+  }
 }
 
 async function renderMe(){
