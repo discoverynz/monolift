@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.151';
+const APP_VERSION = 'Beta 5.152';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -377,10 +377,11 @@ function classifyUpperLower(muscle){
 function deriveSplitCategory(ex, splitType, muscle){
   const m = (muscle || '').toLowerCase();
   if (splitType === 'ppl'){
-    if (ex.upper_lower === 'lower') return 'legs';
-    return ex.push_pull || null;
+    const ul = ex.upper_lower || classifyUpperLower(m);
+    if (ul === 'lower') return 'legs';
+    return ex.push_pull || classifyPushPull(m, ex.name) || null;
   }
-  if (splitType === 'upperlower') return ex.upper_lower || null;
+  if (splitType === 'upperlower') return ex.upper_lower || classifyUpperLower(m) || null;
   if (splitType === 'muscle') return (m && RAW_MUSCLE_TO_REGION[m]) || null;
   if (splitType === 'arnold'){
     // Classic Arnold split: Chest+Back paired as opposing big-muscle supersets,
@@ -6197,7 +6198,7 @@ async function openPlanReorganizer(){
       // full-body day gets real duplicate records instead of silently
       // stealing the same exercise away from the day before it.
       let fullBodyDaysSeen = 0;
-      const touchedNames = new Set(); // every exercise explicitly moved or created this run
+      const touchedDayNames = new Set(); // "weekday|name" for every exercise explicitly moved or created this run, ON that specific day - NOT just the name alone, since the same exercise can legitimately be moved to one day while a stale link on a completely different day still needs cleaning up
       const silentFailures = []; // writes that completed with no error but affected zero rows
 
       for (const dp of dayPlans){
@@ -6205,7 +6206,7 @@ async function openPlanReorganizer(){
           for (const name of customSelections[dp.dayIdx]){
             const match = namedList.find(n => n.name === name);
             if (!match) continue;
-            touchedNames.add(name);
+            touchedDayNames.add(dp.dayIdx + '|' + name);
             const clearAlt = match.altGroupId && altGroupsToClear.has(match.altGroupId);
             const moveResults = await moveExerciseToDay(match, dp.dayIdx, clearAlt);
             moveResults.filter(r => !r.ok).forEach(r => silentFailures.push({ name, action: 'move to ' + dp.day, error: r.error }));
@@ -6221,7 +6222,7 @@ async function openPlanReorganizer(){
           if (excluded.has(String(dp.dayIdx) + '|' + resolvedName)) continue;
           const it = namedList.find(n => n.name === resolvedName);
           if (!it) continue;
-          touchedNames.add(resolvedName);
+          touchedDayNames.add(dp.dayIdx + '|' + resolvedName);
           const clearAlt = it.altGroupId && altGroupsToClear.has(it.altGroupId);
           if (isFullBodyRepeat){
             const sample = allExercises.find(e => e.name === it.name);
@@ -6239,19 +6240,22 @@ async function openPlanReorganizer(){
       }
 
       // Cleanup pass: an exercise sitting on a day that's being reorganized,
-      // but that never matched any category anywhere in the new split (so it
-      // was never touched above), would otherwise be silently stranded on
-      // its old weekday - exactly how a repurposed day (Wednesday going from
-      // Chest to Legs, say) ends up still showing old chest exercises
-      // alongside the new leg ones. Old structure soft-deactivates; new
-      // structure removes just that day's link, since the exercise itself
-      // may still be legitimately placed elsewhere.
+      // but that wasn't actually placed there by the new plan (so this exact
+      // day+name pair was never touched above), would otherwise be silently
+      // stranded on its old weekday - exactly how a repurposed day
+      // (Wednesday going from Chest to Legs, say) ends up still showing old
+      // chest exercises alongside the new leg ones. Checking the pair (not
+      // just the name) matters because the same exercise moving to a new day
+      // must not protect its separate, genuinely stale link on the old day.
+      // Old structure soft-deactivates; new structure removes just that
+      // day's link, since the exercise itself may still be legitimately
+      // placed elsewhere.
       const reorganizedDayIdxs = new Set(dayPlans.filter(dp => !dp.isCustom && dayAssignments[dp.dayIdx]).map(dp => dp.dayIdx));
       const cleanedUp = [];
       const cleanupErrors = [];
       for (const ex of allExercises){
         if (!reorganizedDayIdxs.has(ex.weekday)) continue;
-        if (touchedNames.has(ex.name)) continue;
+        if (touchedDayNames.has(ex.weekday + '|' + ex.name)) continue;
         try {
           const result = await removeExerciseFromDay(ex);
           if (result.ok) cleanedUp.push({ name: ex.name, fromDay: DAY_NAMES[ex.weekday] });
@@ -6286,7 +6290,7 @@ async function openPlanReorganizer(){
         report.innerHTML = `
           <div style="background:var(--panel); border-radius:16px; padding:20px; width:100%; max-width:340px; max-height:80vh; overflow-y:auto;">
             <div class="ex-name" style="font-size:14px; margin-bottom:4px;">What Actually Happened</div>
-            <div class="small" style="color:var(--slate); margin-bottom:4px;">${touchedNames.size} exercise names moved or placed</div>
+            <div class="small" style="color:var(--slate); margin-bottom:4px;">${touchedDayNames.size} exercise placements moved or created</div>
             <div class="small" style="color:${cleanedUp.length ? 'var(--good)' : 'var(--slate)'}; margin-bottom:${cleanupErrors.length ? '4px' : '12px'};">${cleanedUp.length} stale exercises removed from repurposed days${cleanedUp.length ? ':' : ''}</div>
             ${cleanedUp.length ? `<div style="max-height:150px; overflow-y:auto; margin-bottom:12px;">${cleanedUp.map(c => `<div class="small" style="color:var(--slate); padding:2px 0;">• ${c.name} (was on ${c.fromDay})</div>`).join('')}</div>` : ''}
             ${cleanupErrors.length ? `<div class="small" style="color:#E8492A; margin-bottom:4px;">${cleanupErrors.length} failed to clean up:</div><div style="max-height:120px; overflow-y:auto; margin-bottom:12px;">${cleanupErrors.map(c => `<div class="small" style="color:#E8A33D; padding:2px 0;">• ${c.name}: ${c.error}</div>`).join('')}</div>` : ''}
