@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.160';
+const APP_VERSION = 'Beta 5.161';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -653,7 +653,7 @@ function formatLoggedDate(dateStr){
 }
 
 const app = document.getElementById('app');
-let state = { selectedDay: todayWeekday(), exercises: [], session: null, currentTab: 'track', trackScrollY: 0 };
+let state = { selectedDay: todayWeekday(), exercises: [], session: null, currentTab: 'track', trackScrollY: 0, renderGeneration: 0 };
 
 const ICON_TRACK = `<svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="4" width="4" height="16" rx="1.2"/><rect x="17" y="4" width="4" height="16" rx="1.2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>`;
 const ICON_SCALE = `<svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="4" width="18" height="17" rx="3"/><circle cx="12" cy="12.5" r="5"/><line x1="12" y1="12.5" x2="15" y2="10"/></svg>`;
@@ -777,8 +777,12 @@ function renderCodeEntry(email){
 }
 
 // ---------- TRACK ----------
-async function loadExercises(){
-  if (getUseExerciseMasterFlag()) return loadExercisesFromMaster();
+async function loadExercises(generation){
+  if (getUseExerciseMasterFlag()) return loadExercisesFromMaster(generation);
+  // Stale-write guard - if the calling renderTrack has been superseded by
+  // a later one, this call must not overwrite state.exercises with its
+  // now-outdated day-specific data.
+  const isStale = () => generation !== undefined && state.renderGeneration !== generation;
   let result = await withTimeout(
     supabaseClient.from('exercises')
       .select('id, name, category, alt_group_id, alt_groups(name, color), location_ids, muscle_override')
@@ -806,6 +810,7 @@ async function loadExercises(){
       15000
     );
   }
+  if (isStale()) return;
   if (result.__timeout){ state.exercises = []; return; }
   const { data: exercises, error } = result;
   if (error){ console.error(error); state.exercises = []; return; }
@@ -902,6 +907,7 @@ async function loadExercises(){
     }
   });
 
+  if (isStale()) return;
   state.exercises = withLogs;
 }
 
@@ -938,7 +944,8 @@ function detectWeightStagnation(setsForExercise){
   return mostRecentWeight <= oldestWeight + 0.01;
 }
 
-async function loadExercisesFromMaster(){
+async function loadExercisesFromMaster(generation){
+  const isStale = () => generation !== undefined && state.renderGeneration !== generation;
   const { data: userData } = await supabaseClient.auth.getUser();
   const uid = userData.user.id;
 
@@ -949,6 +956,7 @@ async function loadExercisesFromMaster(){
       .eq('weekday', state.selectedDay),
     15000
   );
+  if (isStale()) return;
   if (result.__timeout || result.error){ console.error('exercise_days query failed', result.error); state.exercises = []; return; }
 
   const exercises = (result.data || [])
@@ -1013,6 +1021,7 @@ async function loadExercisesFromMaster(){
     }
   });
 
+  if (isStale()) return;
   state.exercises = withLogs;
 }
 
@@ -2401,27 +2410,63 @@ async function openDuplicateCleanupScreen(){
   document.body.appendChild(overlay);
   overlay.querySelector('#closeDupeClean').onclick = () => overlay.remove();
 
+  await awaitMasterFlagHealed();
+  const useMaster = getUseExerciseMasterFlag();
   const { data: userData } = await supabaseClient.auth.getUser();
-  const exResult = await withTimeout(
-    supabaseClient.from('exercises').select('id, name, weekday, alt_group_id, category, created_at').eq('user_id', userData.user.id).eq('active', true),
-    15000
-  );
-  const all = exResult.__timeout || exResult.error ? [] : (exResult.data || []);
-  const byKey = {};
-  all.forEach(ex => {
-    const key = ex.weekday + '|' + ex.name.toLowerCase();
-    (byKey[key] = byKey[key] || []).push(ex);
-  });
-  // A duplicate group is the same exercise name on the same day, more than
-  // once - prioritizes whichever record already has an alt group set as the
-  // keeper, since that's real, valuable data worth not losing.
-  const groups = Object.values(byKey).filter(g => g.length > 1).map(members => {
-    const sorted = [...members].sort((a, b) => {
-      if (!!a.alt_group_id !== !!b.alt_group_id) return a.alt_group_id ? -1 : 1;
-      return (a.created_at || '').localeCompare(b.created_at || '');
+  let groups = [];
+  let mode = 'legacy';
+  if (useMaster){
+    mode = 'master';
+    // Two kinds of duplicate to detect in the master schema:
+    // (a) exercise_master rows sharing the same name (from historical
+    //     bugs like the pre-fix multiplier).
+    // (b) exercise_days rows with the same (exercise_master_id, weekday)
+    //     - shouldn't happen with the unique constraint, but check anyway.
+    const [masterResult, daysResult] = await Promise.all([
+      withTimeout(supabaseClient.from('exercise_master').select('id, name, alt_group_id, category, created_at').eq('user_id', userData.user.id), 15000),
+      withTimeout(supabaseClient.from('exercise_days').select('id, exercise_master_id, weekday').eq('user_id', userData.user.id), 15000)
+    ]);
+    const masters = masterResult.__timeout || masterResult.error ? [] : (masterResult.data || []);
+    const days = daysResult.__timeout || daysResult.error ? [] : (daysResult.data || []);
+    // Group masters by lowercased name
+    const byName = {};
+    masters.forEach(m => {
+      const key = (m.name || '').toLowerCase().trim();
+      if (!key) return;
+      (byName[key] = byName[key] || []).push(m);
     });
-    return { keeper: sorted[0], duplicates: sorted.slice(1), name: sorted[0].name, weekday: sorted[0].weekday };
-  });
+    const dayCountByMaster = {};
+    days.forEach(d => { dayCountByMaster[d.exercise_master_id] = (dayCountByMaster[d.exercise_master_id] || 0) + 1; });
+    Object.values(byName).filter(g => g.length > 1).forEach(members => {
+      // Prefer keeper: has alt_group_id > has any day-links > oldest
+      const sorted = [...members].sort((a, b) => {
+        if (!!a.alt_group_id !== !!b.alt_group_id) return a.alt_group_id ? -1 : 1;
+        const aDays = dayCountByMaster[a.id] || 0;
+        const bDays = dayCountByMaster[b.id] || 0;
+        if (aDays !== bDays) return bDays - aDays;
+        return (a.created_at || '').localeCompare(b.created_at || '');
+      });
+      groups.push({ keeper: sorted[0], duplicates: sorted.slice(1), name: sorted[0].name, weekday: null });
+    });
+  } else {
+    const exResult = await withTimeout(
+      supabaseClient.from('exercises').select('id, name, weekday, alt_group_id, category, created_at').eq('user_id', userData.user.id).eq('active', true),
+      15000
+    );
+    const all = exResult.__timeout || exResult.error ? [] : (exResult.data || []);
+    const byKey = {};
+    all.forEach(ex => {
+      const key = ex.weekday + '|' + ex.name.toLowerCase();
+      (byKey[key] = byKey[key] || []).push(ex);
+    });
+    Object.values(byKey).filter(g => g.length > 1).forEach(members => {
+      const sorted = [...members].sort((a, b) => {
+        if (!!a.alt_group_id !== !!b.alt_group_id) return a.alt_group_id ? -1 : 1;
+        return (a.created_at || '').localeCompare(b.created_at || '');
+      });
+      groups.push({ keeper: sorted[0], duplicates: sorted.slice(1), name: sorted[0].name, weekday: sorted[0].weekday });
+    });
+  }
 
   const body = overlay.querySelector('#dupeCleanBody');
   if (!groups.length){
@@ -2429,12 +2474,12 @@ async function openDuplicateCleanupScreen(){
     return;
   }
   body.innerHTML = `
-    <div class="small" style="padding:12px 18px; color:var(--slate); line-height:1.6;">${groups.length} exercise${groups.length===1?'':'s'} appear more than once on the same day. For each, the version with an alt group (or the oldest, if none have one) is kept - the rest are deactivated, but any logged history on them is moved to the one being kept first, so nothing is lost.</div>
+    <div class="small" style="padding:12px 18px; color:var(--slate); line-height:1.6;">${groups.length} exercise${groups.length===1?'':'s'} ${mode === 'master' ? 'have duplicate copies' : 'appear more than once on the same day'}. For each, the version with an alt group (or the oldest, if none have one) is kept - the rest are ${mode === 'master' ? 'merged and removed' : 'deactivated'}, but any logged history and day-links on them are moved to the kept version first, so nothing is lost.</div>
     ${groups.map((g, i) => `
       <div class="proposal-card" style="margin:0 18px 10px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px;">
-        <div class="ex-name" style="font-size:13px; margin-bottom:4px;">${g.name} <span class="small" style="color:var(--slate);">· ${DAY_NAMES[g.weekday]}</span></div>
+        <div class="ex-name" style="font-size:13px; margin-bottom:4px;">${g.name}${g.weekday !== null && g.weekday !== undefined ? ` <span class="small" style="color:var(--slate);">· ${DAY_NAMES[g.weekday]}</span>` : ''}</div>
         <div class="small" style="color:var(--good);">✓ Keeping ${g.keeper.alt_group_id ? '(has alt group)' : '(oldest)'}</div>
-        <div class="small" style="color:#E8492A;">${g.duplicates.length} duplicate${g.duplicates.length===1?'':'s'} will be deactivated</div>
+        <div class="small" style="color:#E8492A;">${g.duplicates.length} duplicate${g.duplicates.length===1?'':'s'} will be ${mode === 'master' ? 'merged in' : 'deactivated'}</div>
       </div>
     `).join('')}
     <button class="save-btn" id="confirmDupeCleanBtn" style="margin:0 18px 20px 18px;">Clean Up ${groups.length} Group${groups.length===1?'':'s'}</button>
@@ -2446,17 +2491,52 @@ async function openDuplicateCleanupScreen(){
     let movedSets = 0, deactivated = 0;
     for (const g of groups){
       for (const dupe of g.duplicates){
-        const setsResult = await withTimeout(
-          supabaseClient.from('sets').select('id').eq('exercise_id', dupe.id),
-          15000
-        );
-        const dupeSets = setsResult.__timeout || setsResult.error ? [] : (setsResult.data || []);
-        for (const s of dupeSets){
-          await supabaseClient.from('sets').update({ exercise_id: g.keeper.id }).eq('id', s.id);
-          movedSets++;
+        if (mode === 'master'){
+          // Move sets from duplicate exercise_master to keeper.
+          const setsResult = await withTimeout(
+            supabaseClient.from('sets').select('id').eq('exercise_master_id', dupe.id),
+            15000
+          );
+          const dupeSets = setsResult.__timeout || setsResult.error ? [] : (setsResult.data || []);
+          for (const s of dupeSets){
+            await supabaseClient.from('sets').update({ exercise_master_id: g.keeper.id }).eq('id', s.id);
+            movedSets++;
+          }
+          // Move any exercise_days links from duplicate to keeper (dedup on
+          // conflict - if keeper already has that weekday, drop the duplicate link).
+          const daysResult = await withTimeout(
+            supabaseClient.from('exercise_days').select('id, weekday').eq('exercise_master_id', dupe.id),
+            15000
+          );
+          const dupeDays = daysResult.__timeout || daysResult.error ? [] : (daysResult.data || []);
+          const keeperDaysResult = await withTimeout(
+            supabaseClient.from('exercise_days').select('weekday').eq('exercise_master_id', g.keeper.id),
+            15000
+          );
+          const keeperWeekdays = new Set((keeperDaysResult.__timeout || keeperDaysResult.error ? [] : (keeperDaysResult.data || [])).map(d => d.weekday));
+          for (const d of dupeDays){
+            if (keeperWeekdays.has(d.weekday)){
+              await supabaseClient.from('exercise_days').delete().eq('id', d.id);
+            } else {
+              await supabaseClient.from('exercise_days').update({ exercise_master_id: g.keeper.id }).eq('id', d.id);
+              keeperWeekdays.add(d.weekday);
+            }
+          }
+          await supabaseClient.from('exercise_master').delete().eq('id', dupe.id);
+          deactivated++;
+        } else {
+          const setsResult = await withTimeout(
+            supabaseClient.from('sets').select('id').eq('exercise_id', dupe.id),
+            15000
+          );
+          const dupeSets = setsResult.__timeout || setsResult.error ? [] : (setsResult.data || []);
+          for (const s of dupeSets){
+            await supabaseClient.from('sets').update({ exercise_id: g.keeper.id }).eq('id', s.id);
+            movedSets++;
+          }
+          await supabaseClient.from('exercises').update({ active: false }).eq('id', dupe.id);
+          deactivated++;
         }
-        await supabaseClient.from('exercises').update({ active: false }).eq('id', dupe.id);
-        deactivated++;
       }
     }
     overlay.remove();
@@ -3762,8 +3842,16 @@ async function fetchTrackHeaderStats(){
 }
 
 async function renderTrack(){
+  // Concurrency guard: if another renderTrack fires while this one is
+  // awaiting, both would race to write state.exercises - the stale one
+  // could win and show wrong-day data. Each call gets a generation number;
+  // if state.renderGeneration changes during any await, this call is stale
+  // and returns without touching UI or state.
+  const myGeneration = ++state.renderGeneration;
+  const isStale = () => state.renderGeneration !== myGeneration;
   app.innerHTML = `<div class="app-shell"><div class="login-wrap"><div class="login-sub">Loading your exercises…</div></div></div>`;
-  const [, dayTypeLabel, headerStats] = await Promise.all([loadExercises(), loadDayType(state.selectedDay), fetchTrackHeaderStats()]);
+  const [, dayTypeLabel, headerStats] = await Promise.all([loadExercises(myGeneration), loadDayType(state.selectedDay), fetchTrackHeaderStats()]);
+  if (isStale()) return;
   // dayTypeLabel can be: a string (real label from DB), null (no row - user
   // never set one), or an { __unavailable } marker (transient fetch failure).
   // Only the first is a real label; the other two must not silently fall
