@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.162';
+const APP_VERSION = 'Beta 5.163';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1547,9 +1547,13 @@ async function quickSaveSet(exerciseId, exerciseName, best){
 
   let priorBest = null;
   if (weight !== null && (unit === 'kg' || unit === 'lb')){
+    // Sibling-aware PR check - see saveEntry for rationale.
+    const siblingTable = useMaster ? 'exercise_master' : 'exercises';
+    const siblingsResult = await supabaseClient.from(siblingTable).select('id').eq('user_id', userData.user.id).ilike('name', exerciseName);
+    const siblingIds = (siblingsResult.data && siblingsResult.data.length) ? siblingsResult.data.map(r => r.id) : [exerciseId];
     const prevSets = await supabaseClient.from('sets')
       .select('weight, weight_unit')
-      .eq(idField, exerciseId)
+      .in(idField, siblingIds)
       .in('weight_unit', ['kg','lb']);
     if (prevSets.data && prevSets.data.length){
       priorBest = Math.max(...prevSets.data.map(s => convertWeight(s.weight, s.weight_unit, unit)));
@@ -7372,10 +7376,21 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
     const useMaster = getUseExerciseMasterFlag();
     const idField = useMaster ? 'exercise_master_id' : 'exercise_id';
     // Capture prior best BEFORE inserting, for PR detection (weight-based only).
+    // Look at every same-name sibling exercise record's sets - otherwise a
+    // duplicate row (which we know can exist) would hide real historic best
+    // weights, causing PR celebrations to fire on non-actual PRs.
     let priorBest = null;
     if (weight !== null && (unit === 'kg' || unit === 'lb')){
+      const siblingTable = useMaster ? 'exercise_master' : 'exercises';
+      const siblingsResult = await withTimeout(
+        supabaseClient.from(siblingTable).select('id').eq('user_id', userData.user.id).ilike('name', exerciseName),
+        10000
+      );
+      const siblingIds = (siblingsResult.__timeout || siblingsResult.error || !siblingsResult.data || !siblingsResult.data.length)
+        ? [exerciseId]
+        : siblingsResult.data.map(r => r.id);
       const prevSets = await withTimeout(
-        supabaseClient.from('sets').select('weight, weight_unit').eq(idField, exerciseId).in('weight_unit', ['kg','lb']),
+        supabaseClient.from('sets').select('weight, weight_unit').in(idField, siblingIds).in('weight_unit', ['kg','lb']),
         10000
       );
       if (!prevSets.__timeout && !prevSets.error && prevSets.data && prevSets.data.length){
@@ -7419,22 +7434,23 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
     const useMaster = getUseExerciseMasterFlag();
     const idField = useMaster ? 'exercise_master_id' : 'exercise_id';
     let idsToQuery = [exerciseId];
-    if (!useMaster){
-      // The same exercise name can exist as multiple separate records (one per day
-      // it's been added to), each with its own isolated set history. Look up every
-      // record sharing this name for this user, and merge all of their sets together
-      // - otherwise history only ever reflects whichever single day's record you
-      // happened to open, silently missing everything logged against the others.
-      // Not needed at all under the master structure - there's only one record.
-      const sameNameResult = await withTimeout(
-        supabaseClient.from('exercises').select('id').eq('user_id', userData.user.id).ilike('name', exerciseName),
-        15000
-      );
-      const allIds = (sameNameResult.__timeout || sameNameResult.error)
-        ? [exerciseId]
-        : (sameNameResult.data || []).map(r => r.id);
-      idsToQuery = allIds.length ? allIds : [exerciseId];
-    }
+    // Look up every record for this user sharing this exercise's name and
+    // merge all their sets. In the LEGACY schema this is required because
+    // each day has its own separate record. In the MASTER schema this is
+    // technically supposed to be a no-op (one row per name), but we've
+    // proven duplicates can happen (from historical race conditions and
+    // the pre-fix multiplier bug) - any sets logged against a duplicate
+    // row would otherwise be invisible in the history view. Defensive
+    // sibling lookup here catches them regardless of schema.
+    const siblingTable = useMaster ? 'exercise_master' : 'exercises';
+    const sameNameResult = await withTimeout(
+      supabaseClient.from(siblingTable).select('id').eq('user_id', userData.user.id).ilike('name', exerciseName),
+      15000
+    );
+    const allIds = (sameNameResult.__timeout || sameNameResult.error)
+      ? [exerciseId]
+      : (sameNameResult.data || []).map(r => r.id);
+    idsToQuery = allIds.length ? allIds : [exerciseId];
 
     let result = await withTimeout(
       supabaseClient.from('sets').select('id, weight, weight_unit, weight_type, reps, num_sets, notes, logged_at, location_id')
