@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.161';
+const APP_VERSION = 'Beta 5.162';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -2262,9 +2262,15 @@ async function openRefreshMuscleCategoriesScreen(){
   document.body.appendChild(overlay);
   overlay.querySelector('#closeRefreshMuscle').onclick = () => overlay.remove();
 
+  await awaitMasterFlagHealed();
+  const useMaster = getUseExerciseMasterFlag();
+  const table = useMaster ? 'exercise_master' : 'exercises';
   const { data: userData } = await supabaseClient.auth.getUser();
+  const activeFilter = useMaster ? {} : { active: true };
+  const query = supabaseClient.from(table).select('id, name, muscle_override').eq('user_id', userData.user.id);
+  if (!useMaster) query.eq('active', true);
   const [exResult, db] = await Promise.all([
-    withTimeout(supabaseClient.from('exercises').select('id, name, muscle_override').eq('user_id', userData.user.id).eq('active', true), 15000),
+    withTimeout(query, 15000),
     loadExerciseDB()
   ]);
   const all = exResult.__timeout || exResult.error ? [] : (exResult.data || []);
@@ -2321,7 +2327,7 @@ async function openRefreshMuscleCategoriesScreen(){
     btn.textContent = 'Refreshing…';
     for (const i of included){
       const c = candidates[i];
-      await supabaseClient.from('exercises').update({ muscle_override: null }).ilike('name', c.ex.name).eq('user_id', userData.user.id);
+      await supabaseClient.from(table).update({ muscle_override: null }).ilike('name', c.ex.name).eq('user_id', userData.user.id);
     }
     overlay.remove();
     alert(`Refreshed ${included.size} exercise${included.size===1?'':'s'}.`);
@@ -2338,6 +2344,12 @@ async function openFixAltGroupsScreen(){
   document.body.appendChild(overlay);
   overlay.querySelector('#closeFixAlts').onclick = () => overlay.remove();
 
+  await awaitMasterFlagHealed();
+  if (getUseExerciseMasterFlag()){
+    const body = overlay.querySelector('#fixAltsBody');
+    body.innerHTML = `<div class="empty-state" style="padding:30px 18px; text-align:center; line-height:1.5;">This tool is for the old exercises-table schema.<br><br>On the new schema an exercise can legitimately live on multiple days at once, so "same-day only" isn't meaningful. Use the alt group edit screen (long-press any exercise) to manage groups directly.</div>`;
+    return;
+  }
   const { data: userData } = await supabaseClient.auth.getUser();
   const [groupsResult, exResult] = await Promise.all([
     withTimeout(supabaseClient.from('alt_groups').select('id, name').eq('user_id', userData.user.id), 15000),
