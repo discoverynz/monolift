@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.164';
+const APP_VERSION = 'Beta 5.165';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -3964,11 +3964,21 @@ function openRenameExerciseForm(exerciseId, exerciseName){
       const { data: userData } = await supabaseClient.auth.getUser();
       let error;
       if (getUseExerciseMasterFlag()){
-        // Only one shared record exists per exercise under the new structure,
-        // so there's no "everywhere vs just this day" distinction to make -
-        // renaming it always affects every day it's placed on, since it's
-        // genuinely the same underlying record either way.
-        ({ error } = await supabaseClient.from('exercise_master').update({ name: newName }).eq('id', exerciseId));
+        // Under the new structure only one record is SUPPOSED to exist per
+        // exercise name, but duplicates can happen from historical bugs.
+        // Rename every matching row so no ghost copies with the old name
+        // linger and confuse sibling-based operations (PR detection, history
+        // merging, all use ilike name matching).
+        const sameNameResult = await withTimeout(
+          supabaseClient.from('exercise_master').select('id').eq('user_id', userData.user.id).ilike('name', exerciseName),
+          15000
+        );
+        const ids = (sameNameResult.__timeout || sameNameResult.error) ? [exerciseId] : (sameNameResult.data || []).map(r => r.id);
+        const idList = ids.length ? ids : [exerciseId];
+        for (const id of idList){
+          const { error: e } = await supabaseClient.from('exercise_master').update({ name: newName }).eq('id', id);
+          if (e){ error = e; break; }
+        }
       } else if (scope === 'everywhere'){
         // Rename all rows sharing the old name (an exercise can exist on multiple days), so history stays consistent.
         ({ error } = await supabaseClient.from('exercises')
@@ -4001,8 +4011,24 @@ function openEditAltGroupForm(exerciseId, exerciseName){
   overlay.querySelector('#closeAlt').onclick = () => overlay.remove();
   const area = overlay.querySelector('#altEditArea');
   pickAltGroup(area, async (picked) => {
-    const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
-    await supabaseClient.from(table).update({ alt_group_id: picked ? picked.id : null }).eq('id', exerciseId);
+    const useMaster = getUseExerciseMasterFlag();
+    const table = useMaster ? 'exercise_master' : 'exercises';
+    if (useMaster){
+      // Update every same-name sibling exercise_master row too, in case duplicates
+      // exist. Otherwise the alt group would only apply to the tapped copy and
+      // silently miss its ghosts, making group behavior inconsistent.
+      const { data: userData } = await supabaseClient.auth.getUser();
+      const sameNameResult = await withTimeout(
+        supabaseClient.from('exercise_master').select('id').eq('user_id', userData.user.id).ilike('name', exerciseName),
+        15000
+      );
+      const ids = (sameNameResult.__timeout || sameNameResult.error) ? [exerciseId] : (sameNameResult.data || []).map(r => r.id);
+      for (const id of (ids.length ? ids : [exerciseId])){
+        await supabaseClient.from('exercise_master').update({ alt_group_id: picked ? picked.id : null }).eq('id', id);
+      }
+    } else {
+      await supabaseClient.from(table).update({ alt_group_id: picked ? picked.id : null }).eq('id', exerciseId);
+    }
     overlay.remove();
     if (state.currentTab === 'track') renderTrack();
   });
@@ -4099,7 +4125,16 @@ function openEditCategoryForm(exerciseId, exerciseName){
     if (!selectedCategory) return;
     await withButtonLoading(overlay.querySelector('#saveCatBtn'), 'Saving…', async () => {
       if (getUseExerciseMasterFlag()){
-        await supabaseClient.from('exercise_master').update({ category: selectedCategory }).eq('id', exerciseId);
+        // Update every same-name sibling row so duplicates stay in sync.
+        const { data: userData } = await supabaseClient.auth.getUser();
+        const sameNameResult = await withTimeout(
+          supabaseClient.from('exercise_master').select('id').eq('user_id', userData.user.id).ilike('name', exerciseName),
+          15000
+        );
+        const ids = (sameNameResult.__timeout || sameNameResult.error) ? [exerciseId] : (sameNameResult.data || []).map(r => r.id);
+        for (const id of (ids.length ? ids : [exerciseId])){
+          await supabaseClient.from('exercise_master').update({ category: selectedCategory }).eq('id', id);
+        }
         overlay.remove();
         if (state.currentTab === 'track') renderTrack();
         return;
@@ -8551,7 +8586,13 @@ async function fetchDedupedPlanExercises(){
   const seenSlots = new Set();
   const deduped = [];
   placed.forEach(ex => {
-    const slotKey = ex.alt_group_id ? `${ex.alt_group_id}|${ex.weekday}` : (ex.masterId || ex.id);
+    // Always dedupe PER DAY: alt-group siblings on the same day count as one slot,
+    // but the same exercise on multiple days must count on each of them - otherwise
+    // exercises-per-day and every downstream analytic silently under-counts the
+    // days after the exercise's first appearance.
+    const slotKey = ex.alt_group_id
+      ? `alt|${ex.alt_group_id}|${ex.weekday}`
+      : `ex|${ex.masterId || ex.id}|${ex.weekday}`;
     if (seenSlots.has(slotKey)) return;
     seenSlots.add(slotKey);
     deduped.push(ex);
