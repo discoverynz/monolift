@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.163';
+const APP_VERSION = 'Beta 5.164';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1061,7 +1061,13 @@ function showConfirmDialog(message, onConfirm, opts){
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#genericConfirmCancel').onclick = () => overlay.remove();
-  overlay.querySelector('#genericConfirmOk').onclick = () => { overlay.remove(); onConfirm(); };
+  let firing = false;
+  overlay.querySelector('#genericConfirmOk').onclick = () => {
+    if (firing) return; // prevent double-tap firing onConfirm twice for destructive actions
+    firing = true;
+    overlay.remove();
+    onConfirm();
+  };
 }
 
 async function withButtonLoading(btn, loadingText, asyncFn){
@@ -2257,309 +2263,8 @@ async function openMigrateToMasterScreen(){
   };
 }
 
-async function openRefreshMuscleCategoriesScreen(){
-  const overlay = document.createElement('div');
-  overlay.className = 'overlay-screen';
-  overlay.innerHTML = `
-    <div class="form-header"><button id="closeRefreshMuscle">✕</button><h1>Refresh Muscle Categories</h1><div style="width:18px;"></div></div>
-    <div class="overlay-scroll" id="refreshMuscleBody"><div class="small" style="padding:20px 18px; color:var(--slate);">Scanning…</div></div>`;
-  document.body.appendChild(overlay);
-  overlay.querySelector('#closeRefreshMuscle').onclick = () => overlay.remove();
 
-  await awaitMasterFlagHealed();
-  const useMaster = getUseExerciseMasterFlag();
-  const table = useMaster ? 'exercise_master' : 'exercises';
-  const { data: userData } = await supabaseClient.auth.getUser();
-  const activeFilter = useMaster ? {} : { active: true };
-  const query = supabaseClient.from(table).select('id, name, muscle_override').eq('user_id', userData.user.id);
-  if (!useMaster) query.eq('active', true);
-  const [exResult, db] = await Promise.all([
-    withTimeout(query, 15000),
-    loadExerciseDB()
-  ]);
-  const all = exResult.__timeout || exResult.error ? [] : (exResult.data || []);
-  // These are exactly the broad-only categories that existed before this
-  // session added subdivision for Triceps, Biceps, Calves, Forearms, and
-  // Traps. An override that matches one of these exactly almost certainly
-  // predates the more specific options ever existing, rather than being a
-  // deliberate choice to avoid them - so it's worth offering to refresh.
-  const broadOnlyLabels = new Set(['Chest','Shoulders','Lats','Upper Back','Middle back','Lower back','Traps','Biceps','Triceps','Forearms','Quadriceps','Hamstrings','Glutes','Calves','Adductors','Abductors','Abdominals','Neck']);
-  const byName = {};
-  all.forEach(ex => { if (!byName[ex.name.toLowerCase()]) byName[ex.name.toLowerCase()] = ex; });
-  const candidates = [];
-  Object.values(byName).forEach(ex => {
-    if (!ex.muscle_override || !broadOnlyLabels.has(ex.muscle_override)) return;
-    const match = matchExercise(ex.name, db);
-    const muscle = match && match.primaryMuscles && match.primaryMuscles[0];
-    if (!muscle) return;
-    // Only a candidate if the override is exactly the exercise's own natural
-    // broad category with no customization at all - a deliberately different
-    // override (like a curl manually set to Shoulders) is real personalization
-    // and must never be touched, regardless of what auto-detection would say.
-    if (cap(muscle) !== ex.muscle_override) return;
-    const wouldBe = fineMuscleCategory(muscle, ex.name);
-    if (wouldBe && wouldBe !== ex.muscle_override) candidates.push({ ex, from: ex.muscle_override, to: wouldBe });
-  });
 
-  const body = overlay.querySelector('#refreshMuscleBody');
-  if (!candidates.length){
-    body.innerHTML = `<div class="empty-state" style="padding:30px 18px;">Nothing to refresh - either everything's already auto-detected, or your overrides are genuinely custom choices, not just old broad categories.</div>`;
-    return;
-  }
-  body.innerHTML = `
-    <div class="small" style="padding:12px 18px; color:var(--slate); line-height:1.6;">${candidates.length} exercise${candidates.length===1?' has':'s have'} a manually-set muscle category that predates more specific options existing. Clearing these lets the newer, more specific auto-detection take over - anything left unchecked stays exactly as it is.</div>
-    ${candidates.map((c, i) => `
-      <div class="pick-row" data-i="${i}" style="align-items:flex-start; padding-top:10px; padding-bottom:10px;">
-        <div><div class="ex-name" style="font-size:13px;">${c.ex.name}</div><div class="small" style="color:var(--slate); margin-top:2px;">${c.from} → ${c.to}</div></div>
-        <div class="check-circle refresh-check active">${ICON_CHECK}</div>
-      </div>
-    `).join('')}
-    <button class="save-btn" id="confirmRefreshMuscleBtn" style="margin:20px 18px 20px 18px;">Refresh Selected</button>
-  `;
-  const included = new Set(candidates.map((c,i) => i));
-  body.querySelectorAll('.pick-row[data-i]').forEach(row => {
-    row.onclick = () => {
-      const i = parseInt(row.dataset.i, 10);
-      const check = row.querySelector('.refresh-check');
-      if (included.has(i)){ included.delete(i); check.classList.remove('active'); check.style.opacity = '0.25'; }
-      else { included.add(i); check.classList.add('active'); check.style.opacity = '1'; }
-    };
-  });
-
-  body.querySelector('#confirmRefreshMuscleBtn').onclick = async () => {
-    const btn = body.querySelector('#confirmRefreshMuscleBtn');
-    btn.textContent = 'Refreshing…';
-    for (const i of included){
-      const c = candidates[i];
-      await supabaseClient.from(table).update({ muscle_override: null }).ilike('name', c.ex.name).eq('user_id', userData.user.id);
-    }
-    overlay.remove();
-    alert(`Refreshed ${included.size} exercise${included.size===1?'':'s'}.`);
-    if (state.currentTab === 'track') renderTrack();
-  };
-}
-
-async function openFixAltGroupsScreen(){
-  const overlay = document.createElement('div');
-  overlay.className = 'overlay-screen';
-  overlay.innerHTML = `
-    <div class="form-header"><button id="closeFixAlts">✕</button><h1>Fix Alt Groups</h1><div style="width:18px;"></div></div>
-    <div class="overlay-scroll" id="fixAltsBody"><div class="small" style="padding:20px 18px; color:var(--slate);">Scanning…</div></div>`;
-  document.body.appendChild(overlay);
-  overlay.querySelector('#closeFixAlts').onclick = () => overlay.remove();
-
-  await awaitMasterFlagHealed();
-  if (getUseExerciseMasterFlag()){
-    const body = overlay.querySelector('#fixAltsBody');
-    body.innerHTML = `<div class="empty-state" style="padding:30px 18px; text-align:center; line-height:1.5;">This tool is for the old exercises-table schema.<br><br>On the new schema an exercise can legitimately live on multiple days at once, so "same-day only" isn't meaningful. Use the alt group edit screen (long-press any exercise) to manage groups directly.</div>`;
-    return;
-  }
-  const { data: userData } = await supabaseClient.auth.getUser();
-  const [groupsResult, exResult] = await Promise.all([
-    withTimeout(supabaseClient.from('alt_groups').select('id, name').eq('user_id', userData.user.id), 15000),
-    withTimeout(supabaseClient.from('exercises').select('id, name, weekday, alt_group_id').eq('user_id', userData.user.id).eq('active', true), 15000)
-  ]);
-  const allGroups = groupsResult.__timeout || groupsResult.error ? [] : (groupsResult.data || []);
-  const allExercises = exResult.__timeout || exResult.error ? [] : (exResult.data || []);
-  const membersByGroup = {};
-  allExercises.forEach(ex => { if (ex.alt_group_id) (membersByGroup[ex.alt_group_id] = membersByGroup[ex.alt_group_id] || []).push(ex); });
-
-  // A well-formed alt group is a real swap option: same day, no day baked
-  // into the name (since the group can legitimately live on any day - naming
-  // it after one specific day is what made "Back (Weds)" show up confusingly
-  // on Monday).
-  const dayNameRegex = /\b(mon(day)?|tue(s|sday)?|wed(s|nesday)?|thu(r|rs|rsday)?|fri(day)?|sat(urday)?|sun(day)?)\b/i;
-  const fixes = [];
-  allGroups.forEach(g => {
-    const members = membersByGroup[g.id] || [];
-    if (members.length < 2 && !dayNameRegex.test(g.name)) return;
-    const dayCounts = {};
-    members.forEach(m => { dayCounts[m.weekday] = (dayCounts[m.weekday] || 0) + 1; });
-    const days = Object.keys(dayCounts).map(Number);
-    const majorityDay = days.length ? days.reduce((best, d) => dayCounts[d] > dayCounts[best] ? d : best, days[0]) : null;
-    const outliers = days.length > 1 ? members.filter(m => m.weekday !== majorityDay) : [];
-    const cleanedName = g.name.replace(/\s*[\(\[]?\s*\b(mon(day)?|tue(s|sday)?|wed(s|nesday)?|thu(r|rs|rsday)?|fri(day)?|sat(urday)?|sun(day)?)\b\s*[\)\]]?\s*/gi, ' ').replace(/\s+/g,' ').trim() || 'Alt';
-    const nameNeedsFix = cleanedName !== g.name;
-    if (outliers.length || nameNeedsFix){
-      fixes.push({ group: g, outliers, majorityDay, cleanedName: nameNeedsFix ? cleanedName : null });
-    }
-  });
-
-  const body = overlay.querySelector('#fixAltsBody');
-  if (!fixes.length){
-    body.innerHTML = `<div class="empty-state" style="padding:30px 18px;">No alt group issues found - everything's clean.</div>`;
-    return;
-  }
-  body.innerHTML = `
-    <div class="small" style="padding:12px 18px; color:var(--slate); line-height:1.6;">${fixes.length} alt group${fixes.length===1?' has':'s have'} an issue. A swap only makes sense between exercises on the same day, and a group's name shouldn't reference one specific day when it can live on any day.</div>
-    ${fixes.map((f, i) => `
-      <div class="proposal-card" style="margin:0 18px 10px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px;">
-        <div class="ex-name" style="font-size:13px; margin-bottom:6px;">${f.group.name}</div>
-        ${f.cleanedName ? `<div class="small" style="color:var(--flame);">Rename to "${f.cleanedName}"</div>` : ''}
-        ${f.outliers.length ? `<div class="small" style="color:#E8492A;">${f.outliers.length} exercise${f.outliers.length===1?'':'s'} on a different day will be removed from this group: ${f.outliers.map(o=>o.name + ' (' + DAY_NAMES[o.weekday] + ')').join(', ')}</div>` : ''}
-      </div>
-    `).join('')}
-    <button class="save-btn" id="confirmFixAltsBtn" style="margin:0 18px 20px 18px;">Fix ${fixes.length} Group${fixes.length===1?'':'s'}</button>
-  `;
-
-  body.querySelector('#confirmFixAltsBtn').onclick = async () => {
-    const btn = body.querySelector('#confirmFixAltsBtn');
-    btn.textContent = 'Fixing…';
-    for (const f of fixes){
-      if (f.cleanedName) await supabaseClient.from('alt_groups').update({ name: f.cleanedName }).eq('id', f.group.id);
-      for (const outlier of f.outliers){
-        await supabaseClient.from('exercises').update({ alt_group_id: null }).eq('id', outlier.id);
-      }
-    }
-    overlay.remove();
-    alert(`Fixed ${fixes.length} alt group${fixes.length===1?'':'s'}.`);
-    if (state.currentTab === 'track') renderTrack();
-  };
-}
-
-async function openDuplicateCleanupScreen(){
-  const overlay = document.createElement('div');
-  overlay.className = 'overlay-screen';
-  overlay.innerHTML = `
-    <div class="form-header"><button id="closeDupeClean">✕</button><h1>Clean Up Duplicates</h1><div style="width:18px;"></div></div>
-    <div class="overlay-scroll" id="dupeCleanBody"><div class="small" style="padding:20px 18px; color:var(--slate);">Scanning…</div></div>`;
-  document.body.appendChild(overlay);
-  overlay.querySelector('#closeDupeClean').onclick = () => overlay.remove();
-
-  await awaitMasterFlagHealed();
-  const useMaster = getUseExerciseMasterFlag();
-  const { data: userData } = await supabaseClient.auth.getUser();
-  let groups = [];
-  let mode = 'legacy';
-  if (useMaster){
-    mode = 'master';
-    // Two kinds of duplicate to detect in the master schema:
-    // (a) exercise_master rows sharing the same name (from historical
-    //     bugs like the pre-fix multiplier).
-    // (b) exercise_days rows with the same (exercise_master_id, weekday)
-    //     - shouldn't happen with the unique constraint, but check anyway.
-    const [masterResult, daysResult] = await Promise.all([
-      withTimeout(supabaseClient.from('exercise_master').select('id, name, alt_group_id, category, created_at').eq('user_id', userData.user.id), 15000),
-      withTimeout(supabaseClient.from('exercise_days').select('id, exercise_master_id, weekday').eq('user_id', userData.user.id), 15000)
-    ]);
-    const masters = masterResult.__timeout || masterResult.error ? [] : (masterResult.data || []);
-    const days = daysResult.__timeout || daysResult.error ? [] : (daysResult.data || []);
-    // Group masters by lowercased name
-    const byName = {};
-    masters.forEach(m => {
-      const key = (m.name || '').toLowerCase().trim();
-      if (!key) return;
-      (byName[key] = byName[key] || []).push(m);
-    });
-    const dayCountByMaster = {};
-    days.forEach(d => { dayCountByMaster[d.exercise_master_id] = (dayCountByMaster[d.exercise_master_id] || 0) + 1; });
-    Object.values(byName).filter(g => g.length > 1).forEach(members => {
-      // Prefer keeper: has alt_group_id > has any day-links > oldest
-      const sorted = [...members].sort((a, b) => {
-        if (!!a.alt_group_id !== !!b.alt_group_id) return a.alt_group_id ? -1 : 1;
-        const aDays = dayCountByMaster[a.id] || 0;
-        const bDays = dayCountByMaster[b.id] || 0;
-        if (aDays !== bDays) return bDays - aDays;
-        return (a.created_at || '').localeCompare(b.created_at || '');
-      });
-      groups.push({ keeper: sorted[0], duplicates: sorted.slice(1), name: sorted[0].name, weekday: null });
-    });
-  } else {
-    const exResult = await withTimeout(
-      supabaseClient.from('exercises').select('id, name, weekday, alt_group_id, category, created_at').eq('user_id', userData.user.id).eq('active', true),
-      15000
-    );
-    const all = exResult.__timeout || exResult.error ? [] : (exResult.data || []);
-    const byKey = {};
-    all.forEach(ex => {
-      const key = ex.weekday + '|' + ex.name.toLowerCase();
-      (byKey[key] = byKey[key] || []).push(ex);
-    });
-    Object.values(byKey).filter(g => g.length > 1).forEach(members => {
-      const sorted = [...members].sort((a, b) => {
-        if (!!a.alt_group_id !== !!b.alt_group_id) return a.alt_group_id ? -1 : 1;
-        return (a.created_at || '').localeCompare(b.created_at || '');
-      });
-      groups.push({ keeper: sorted[0], duplicates: sorted.slice(1), name: sorted[0].name, weekday: sorted[0].weekday });
-    });
-  }
-
-  const body = overlay.querySelector('#dupeCleanBody');
-  if (!groups.length){
-    body.innerHTML = `<div class="empty-state" style="padding:30px 18px;">No duplicates found - everything's clean.</div>`;
-    return;
-  }
-  body.innerHTML = `
-    <div class="small" style="padding:12px 18px; color:var(--slate); line-height:1.6;">${groups.length} exercise${groups.length===1?'':'s'} ${mode === 'master' ? 'have duplicate copies' : 'appear more than once on the same day'}. For each, the version with an alt group (or the oldest, if none have one) is kept - the rest are ${mode === 'master' ? 'merged and removed' : 'deactivated'}, but any logged history and day-links on them are moved to the kept version first, so nothing is lost.</div>
-    ${groups.map((g, i) => `
-      <div class="proposal-card" style="margin:0 18px 10px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px;">
-        <div class="ex-name" style="font-size:13px; margin-bottom:4px;">${g.name}${g.weekday !== null && g.weekday !== undefined ? ` <span class="small" style="color:var(--slate);">· ${DAY_NAMES[g.weekday]}</span>` : ''}</div>
-        <div class="small" style="color:var(--good);">✓ Keeping ${g.keeper.alt_group_id ? '(has alt group)' : '(oldest)'}</div>
-        <div class="small" style="color:#E8492A;">${g.duplicates.length} duplicate${g.duplicates.length===1?'':'s'} will be ${mode === 'master' ? 'merged in' : 'deactivated'}</div>
-      </div>
-    `).join('')}
-    <button class="save-btn" id="confirmDupeCleanBtn" style="margin:0 18px 20px 18px;">Clean Up ${groups.length} Group${groups.length===1?'':'s'}</button>
-  `;
-
-  body.querySelector('#confirmDupeCleanBtn').onclick = async () => {
-    const btn = body.querySelector('#confirmDupeCleanBtn');
-    btn.textContent = 'Cleaning…';
-    let movedSets = 0, deactivated = 0;
-    for (const g of groups){
-      for (const dupe of g.duplicates){
-        if (mode === 'master'){
-          // Move sets from duplicate exercise_master to keeper.
-          const setsResult = await withTimeout(
-            supabaseClient.from('sets').select('id').eq('exercise_master_id', dupe.id),
-            15000
-          );
-          const dupeSets = setsResult.__timeout || setsResult.error ? [] : (setsResult.data || []);
-          for (const s of dupeSets){
-            await supabaseClient.from('sets').update({ exercise_master_id: g.keeper.id }).eq('id', s.id);
-            movedSets++;
-          }
-          // Move any exercise_days links from duplicate to keeper (dedup on
-          // conflict - if keeper already has that weekday, drop the duplicate link).
-          const daysResult = await withTimeout(
-            supabaseClient.from('exercise_days').select('id, weekday').eq('exercise_master_id', dupe.id),
-            15000
-          );
-          const dupeDays = daysResult.__timeout || daysResult.error ? [] : (daysResult.data || []);
-          const keeperDaysResult = await withTimeout(
-            supabaseClient.from('exercise_days').select('weekday').eq('exercise_master_id', g.keeper.id),
-            15000
-          );
-          const keeperWeekdays = new Set((keeperDaysResult.__timeout || keeperDaysResult.error ? [] : (keeperDaysResult.data || [])).map(d => d.weekday));
-          for (const d of dupeDays){
-            if (keeperWeekdays.has(d.weekday)){
-              await supabaseClient.from('exercise_days').delete().eq('id', d.id);
-            } else {
-              await supabaseClient.from('exercise_days').update({ exercise_master_id: g.keeper.id }).eq('id', d.id);
-              keeperWeekdays.add(d.weekday);
-            }
-          }
-          await supabaseClient.from('exercise_master').delete().eq('id', dupe.id);
-          deactivated++;
-        } else {
-          const setsResult = await withTimeout(
-            supabaseClient.from('sets').select('id').eq('exercise_id', dupe.id),
-            15000
-          );
-          const dupeSets = setsResult.__timeout || setsResult.error ? [] : (setsResult.data || []);
-          for (const s of dupeSets){
-            await supabaseClient.from('sets').update({ exercise_id: g.keeper.id }).eq('id', s.id);
-            movedSets++;
-          }
-          await supabaseClient.from('exercises').update({ active: false }).eq('id', dupe.id);
-          deactivated++;
-        }
-      }
-    }
-    overlay.remove();
-    alert(`Cleaned up ${deactivated} duplicate${deactivated===1?'':'s'}${movedSets ? `, moved ${movedSets} logged set${movedSets===1?'':'s'} to the kept record` : ''}.`);
-    if (state.currentTab === 'track') renderTrack();
-  };
-}
 
 function openReorganizeChoice(){
   const overlay = document.createElement('div');
@@ -2668,12 +2373,71 @@ async function openMergeDuplicateExercisesScreen(){
   document.body.appendChild(overlay);
   overlay.querySelector('#closeMergeDupes').onclick = () => overlay.remove();
 
+  await awaitMasterFlagHealed();
   const { data: userData } = await supabaseClient.auth.getUser();
   const uid = userData.user.id;
   const body = overlay.querySelector('#mergeDupesBody');
+  const useMaster = getUseExerciseMasterFlag();
 
-  if (!getUseExerciseMasterFlag()){
-    body.innerHTML = `<div class="empty-state" style="padding:24px 0;">This only applies to the new exercise structure, which isn't currently active.</div>`;
+  if (!useMaster){
+    // Legacy schema: duplicates are same-name records on the same weekday
+    const exResult = await withTimeout(
+      supabaseClient.from('exercises').select('id, name, weekday, alt_group_id, created_at').eq('user_id', uid).eq('active', true),
+      15000
+    );
+    if (exResult.__timeout || exResult.error){
+      body.innerHTML = `<div class="empty-state" style="padding:24px 0;">Could not read your exercises. Try again.</div>`;
+      return;
+    }
+    const all = exResult.data || [];
+    const byKey = {};
+    all.forEach(ex => {
+      const key = ex.weekday + '|' + ex.name.toLowerCase();
+      (byKey[key] = byKey[key] || []).push(ex);
+    });
+    const dupeGroups = Object.values(byKey).filter(g => g.length > 1);
+    if (!dupeGroups.length){
+      body.innerHTML = `<div class="empty-state" style="padding:24px 0;">No duplicates found - your exercise library is clean.</div>`;
+      return;
+    }
+    body.innerHTML = `
+      <div style="margin-bottom:14px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px;">
+        <div class="ex-name" style="font-size:13px; margin-bottom:8px;">${dupeGroups.length} case${dupeGroups.length===1?'':'s'} of duplicate records on the same day</div>
+        ${dupeGroups.map(g => `<div class="small" style="color:var(--slate); padding:2px 0;">• ${g[0].name} on ${DAY_NAMES[g[0].weekday]} (${g.length} copies)</div>`).join('')}
+      </div>
+      <button class="save-btn" id="confirmMergeDupesBtn" style="margin:0 0 20px 0;">Merge Duplicates</button>
+    `;
+    body.querySelector('#confirmMergeDupesBtn').onclick = () => {
+      showConfirmDialog(`Merges ${dupeGroups.length} case${dupeGroups.length===1?'':'s'} of duplicates. Set history from every copy is moved onto whichever one survives.`, async () => {
+        await withButtonLoading(body.querySelector('#confirmMergeDupesBtn'), 'Merging…', async () => {
+          let mergedCount = 0;
+          const errors = [];
+          for (const group of dupeGroups){
+            // Survivor: whichever has an alt_group_id > oldest
+            const sorted = [...group].sort((a, b) => {
+              if (!!a.alt_group_id !== !!b.alt_group_id) return a.alt_group_id ? -1 : 1;
+              return (a.created_at || '').localeCompare(b.created_at || '');
+            });
+            const survivor = sorted[0];
+            const duplicates = sorted.slice(1);
+            for (const dup of duplicates){
+              try {
+                await supabaseClient.from('sets').update({ exercise_id: survivor.id }).eq('exercise_id', dup.id);
+                await supabaseClient.from('exercises').update({ active: false }).eq('id', dup.id);
+                mergedCount++;
+              } catch(e){
+                errors.push(`${dup.name}: ${e.message}`);
+              }
+            }
+          }
+          overlay.remove();
+          if (state.currentTab === 'track') renderTrack();
+          alert(errors.length
+            ? `Merged ${mergedCount} duplicate record${mergedCount===1?'':'s'}. ${errors.length} failed:\n${errors.join('\n')}`
+            : `Merged ${mergedCount} duplicate record${mergedCount===1?'':'s'} across ${dupeGroups.length} case${dupeGroups.length===1?'':'s'}.`);
+        });
+      }, { title: 'Merge Duplicate Exercises?', confirmLabel: 'Merge' });
+    };
     return;
   }
 
@@ -4615,7 +4379,10 @@ function confirmDeleteLog(setId, onDeleted){
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#cancelDel').onclick = () => overlay.remove();
+  let deleting = false;
   overlay.querySelector('#confirmDel').onclick = async () => {
+    if (deleting) return;
+    deleting = true;
     overlay.remove();
     await supabaseClient.from('sets').delete().eq('id', setId);
     onDeleted();
