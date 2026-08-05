@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.165';
+const APP_VERSION = 'Beta 5.166';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -3595,15 +3595,16 @@ async function openSuggestionPreview(name, category, navList){
 
 async function fetchTrackHeaderStats(){
   const { data: userData } = await supabaseClient.auth.getUser();
+  if (!userData || !userData.user) return { volumeKg: 0, setsToday: 0, streak: 0 };
   const since = new Date(Date.now() - 60*86400000).toISOString().slice(0,10);
   const result = await withTimeout(
-    supabaseClient.from('sets').select('weight, weight_unit, weight_type, reps, num_sets, logged_at').gte('logged_at', since),
+    supabaseClient.from('sets').select('weight, weight_unit, weight_type, reps, num_sets, logged_at').eq('user_id', userData.user.id).gte('logged_at', since),
     15000
   );
   const sets = result.__timeout || result.error ? [] : (result.data || []);
   const today = todayStr();
   const todaysSets = sets.filter(s => s.logged_at === today);
-  const setsToday = todaysSets.reduce((sum, s) => sum + (s.num_sets || 1), 0);
+  const setsToday = todaysSets.reduce((sum, s) => sum + (Number(s.num_sets) || 1), 0);
   let volumeKg = 0;
   todaysSets.forEach(s => {
     const weightNum = Number(s.weight);
@@ -7276,7 +7277,16 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
       list.innerHTML = '<div class="empty-state" style="padding:20px;">No history yet — this will be your first entry.</div>';
       return;
     }
-    lastEntry = sets[0];
+    // "Same as last time" should reflect the last set AT THIS LOCATION, not
+    // some other gym's weights - especially important on machines where the
+    // same-named exercise can have very different scales (a pin-loaded stack
+    // at one gym vs plate-loaded at another). Falls back to any-location if
+    // this exercise hasn't been logged at the current location yet.
+    const currentLocation = getCurrentLocationId() || getDefaultLocationId();
+    const setAtCurrentLoc = currentLocation && locationColumnAvailable
+      ? sets.find(s => s.location_id === currentLocation)
+      : null;
+    lastEntry = setAtCurrentLoc || sets[0];
     // Default the unit toggle to match the last logged unit
     if (lastEntry.weight_unit && ['kg','lb','sec','pin'].includes(lastEntry.weight_unit)){
       unit = lastEntry.weight_unit;
