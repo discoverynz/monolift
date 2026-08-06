@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.166';
+const APP_VERSION = 'Beta 5.167';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1838,7 +1838,13 @@ function openPlanSubPage(){
   overlay.querySelector('#closePlanSubPage').onclick = () => overlay.remove();
   overlay.querySelector('#subReorganizeBtn').onclick = openReorganizeChoice;
   overlay.querySelector('#subSwapDaysBtn').onclick = openSwapDaysForm;
-  overlay.querySelector('#subRedoWeekBtn').onclick = () => showOnboarding('setup');
+  overlay.querySelector('#subRedoWeekBtn').onclick = () => {
+    showConfirmDialog(
+      'Redo Week Setup will replace your day labels (Mon: Chest & Triceps etc.) with whatever preset you pick in the wizard. Your actual exercises and their day placements stay put. If you just wanted to change one day\'s label, tap the label at the top of Track instead.',
+      () => showOnboarding('setup'),
+      { title: 'Redo Week Setup?', confirmLabel: 'Continue' }
+    );
+  };
   overlay.querySelector('#subScanSplitTagsBtn').onclick = openSplitTagReview;
   overlay.querySelector('#subRebuildToolsBtn').onclick = openRebuildToolsSubPage;
   overlay.querySelector('#subWipeAltsBtn').onclick = openWipeAltGroupsScreen;
@@ -3429,9 +3435,20 @@ async function maybeShowOnboarding(){
     withTimeout(supabaseClient.from('exercise_master').select('id', { count: 'exact', head: true }).eq('user_id', userData.user.id).limit(1), 10000),
     withTimeout(supabaseClient.from('exercises').select('id', { count: 'exact', head: true }).eq('user_id', userData.user.id).limit(1), 10000)
   ]);
-  const hasDayTypes = !dayTypesResult.__timeout && !dayTypesResult.error && (dayTypesResult.count || 0) > 0;
-  const hasMaster = !mastersResult.__timeout && !mastersResult.error && (mastersResult.count || 0) > 0;
-  const hasOldEx = !oldExResult.__timeout && !oldExResult.error && (oldExResult.count || 0) > 0;
+  // Fail-safe: if ANY of the checks couldn't complete (timeout or error), do
+  // NOT show onboarding. A network hiccup here shouldn't be able to fire the
+  // wizard on a returning user - the cost of a false-positive (showing
+  // onboarding to someone who doesn't need it) is potentially wiping their
+  // plan, while the cost of a false-negative (skipping onboarding for a new
+  // user) is just that they see Track empty and have to add exercises
+  // manually, which is recoverable.
+  const anyCheckFailed = dayTypesResult.__timeout || dayTypesResult.error
+    || mastersResult.__timeout || mastersResult.error
+    || oldExResult.__timeout || oldExResult.error;
+  if (anyCheckFailed) return;
+  const hasDayTypes = (dayTypesResult.count || 0) > 0;
+  const hasMaster = (mastersResult.count || 0) > 0;
+  const hasOldEx = (oldExResult.count || 0) > 0;
   if (hasDayTypes || hasMaster || hasOldEx){
     // Real data exists - user is not new, mark them as onboarded and skip.
     try { await supabaseClient.auth.updateUser({ data: { onboarded: true } }); } catch(e){}
@@ -6447,8 +6464,13 @@ async function openPlanReorganizer(){
       // Track keeps showing the old label (e.g. "Chest & Triceps") even
       // though the actual exercises underneath have genuinely changed.
       // Custom days are skipped since those are hand-picked, not derived.
+      // Days the user didn't assign a category to are skipped completely -
+      // otherwise their existing label would get silently overwritten with
+      // the "Not Assigned" placeholder, wiping any custom label the user
+      // had set (via day type edit, previous onboarding, previous reorg).
       for (const dp of dayPlans){
         if (dp.isCustom) continue;
+        if (!dayAssignments[dp.dayIdx]) continue; // day wasn't reorganized, leave its label alone
         await supabaseClient.from('day_types').upsert(
           { user_id: userData.user.id, weekday: dp.dayIdx, label: dp.catLabel },
           { onConflict: 'user_id,weekday' }
