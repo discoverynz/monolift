@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.167';
+const APP_VERSION = 'Beta 5.168';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1262,6 +1262,24 @@ function getCurrentLocationId(){
     return null; // legacy plain-string value from before this format existed
   }
 }
+// Distinguishes "user explicitly picked Anywhere for today" (should NOT fall
+// back to default) from "user hasn't picked anything today" (default applies).
+// Both make getCurrentLocationId return null but they mean different things
+// - so callers that need to know use this.
+function hasExplicitCurrentLocation(){
+  const raw = localStorage.getItem('zealift_current_location');
+  if (!raw) return false;
+  try {
+    const { date } = JSON.parse(raw);
+    return date === todayStr();
+  } catch(e){ return false; }
+}
+// Single source of truth for "which location should filter/tagging use right
+// now" - respects an explicit Anywhere pick, falls back to default otherwise.
+function effectiveLocationId(){
+  if (hasExplicitCurrentLocation()) return getCurrentLocationId();
+  return getCurrentLocationId() || getDefaultLocationId();
+}
 function getDefaultLocationId(){ return localStorage.getItem('zealift_default_location') || null; }
 function setDefaultLocationId(id){
   if (id) localStorage.setItem('zealift_default_location', id); else localStorage.removeItem('zealift_default_location');
@@ -1276,7 +1294,12 @@ function setDefaultLocationId(id){
 }
 function getHideCompletedPref(){ return localStorage.getItem('zealift_hide_completed') === '1'; }
 function setHideCompletedPref(v){ localStorage.setItem('zealift_hide_completed', v ? '1' : '0'); }
-function setCurrentLocationId(id){ if (id) localStorage.setItem('zealift_current_location', JSON.stringify({ id, date: todayStr() })); else localStorage.removeItem('zealift_current_location'); }
+function setCurrentLocationId(id){
+  // Both a real location ID and null (explicit Anywhere) are stored as the
+  // same shape - so the reader can tell "user picked Anywhere today" apart
+  // from "user hasn't picked anything today" (which falls back to default).
+  localStorage.setItem('zealift_current_location', JSON.stringify({ id: id || null, date: todayStr() }));
+}
 
 // An exercise with no locations set is available everywhere (untagged = universal,
 // so introducing locations doesn't break exercises nobody's gotten around to
@@ -1572,7 +1595,7 @@ async function quickSaveSet(exerciseId, exerciseName, best){
     num_sets: null, reps: best.reps,
     notes: null,
     logged_at: todayStr(),
-    location_id: getCurrentLocationId() || getDefaultLocationId()
+    location_id: effectiveLocationId()
   };
   insertPayload[idField] = exerciseId;
   const { data, error } = await supabaseClient.from('sets').insert(insertPayload).select();
@@ -3691,7 +3714,7 @@ async function renderTrack(){
       ex.splitLabel = ul === 'lower' ? 'legs' : (pp === 'push' ? 'push' : pp === 'pull' ? 'pull' : null);
     }
   });
-  const currentLocationId = getCurrentLocationId() || getDefaultLocationId();
+  const currentLocationId = effectiveLocationId();
   state.exercises.forEach(ex => { ex.locationAvailable = isAvailableAtLocation(ex, currentLocationId); });
   const currentLocationName = allLocations.find(l => l.id === currentLocationId)?.name || null;
   const hideCompleted = getHideCompletedPref();
@@ -3746,9 +3769,24 @@ async function renderTrack(){
       <div class="category">Quick Add — Common for ${effectiveDayTypeLabel}</div>
       ${starters.map(s => `<div class="pick-row starter-add" data-name="${s.name}" data-cat="${s.category}"><div class="ex-name">${s.name}</div><div class="chev" style="color:var(--flame); font-size:20px;">+</div></div>`).join('')}
       <div style="padding:14px 18px;"><button class="btn-primary" id="emptyAddBtn">+ Add a Different Exercise</button></div>`;
+  } else if (visibleExercises.length === 0 && currentLocationId){
+    // The user HAS exercises on this day, but every one of them is tagged
+    // for a different location so they all got filtered out. Without this
+    // guard the day would look empty AND the "Try Something New" suggestion
+    // block below would render - which looks exactly like the plan got
+    // wiped and replaced with defaults, when actually it's a location
+    // filter hiding real user data. Show what's really happening and
+    // offer a one-tap escape.
+    const hiddenCount = state.exercises.length;
+    listHtml = `<div class="empty-state" style="padding:24px 18px; text-align:center;">
+      <div style="font-size:14px; color:var(--chalk); margin-bottom:6px;">All ${hiddenCount} of your ${DAY_LABELS[state.selectedDay]} exercises are tagged for another location.</div>
+      <div style="font-size:12px; color:var(--slate); margin-bottom:14px;">They're not gone - just filtered out because you're currently at <span style="color:var(--flame);">${currentLocationName || 'a specific location'}</span>.</div>
+      <button class="btn-primary" id="clearLocationBtn" style="max-width:220px; margin:0 auto;">Show exercises from anywhere</button>
+    </div>`;
   }
   let suggestionsHtml = '';
-  if (suggestions.length > 0){
+  const suppressSuggestionsForLocation = visibleExercises.length === 0 && state.exercises.length > 0 && currentLocationId;
+  if (suggestions.length > 0 && !suppressSuggestionsForLocation){
     const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
     const libraryItems = suggestions.filter(s => s.source === 'library');
     const databaseItems = suggestions.filter(s => s.source !== 'library');
@@ -3906,6 +3944,8 @@ async function renderTrack(){
   });
   const emptyBtn = document.getElementById('emptyAddBtn');
   if (emptyBtn) emptyBtn.onclick = openNewExerciseForm;
+  const clearLocBtn = document.getElementById('clearLocationBtn');
+  if (clearLocBtn) clearLocBtn.onclick = () => openLocationPicker(allLocations, currentLocationId);
   document.querySelectorAll('.starter-add').forEach(el => {
     el.onclick = () => quickAddStarter(el.dataset.name, el.dataset.cat, state.selectedDay);
   });
@@ -4684,7 +4724,7 @@ async function openPicker(initialTab, jumpToMuscle){
   // hidden from Track's display because it's tagged for a different location
   // shouldn't claim "on [Day]" here either, or the badge contradicts what's
   // actually visible on the day itself.
-  const currentLocationId = getCurrentLocationId() || getDefaultLocationId();
+  const currentLocationId = effectiveLocationId();
   // If the active location has equipment set up, expand its selected
   // categories into the actual exercise-database equipment values they cover -
   // an empty set here means "no filter", not "nothing available".
@@ -7121,7 +7161,7 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
   // Defaults to whatever location is currently active on Track, falling back
   // to the designated default location if Track is in Anywhere mode. Only
   // starts genuinely unassigned if neither is set.
-  let selectedLocationId = getCurrentLocationId() || getDefaultLocationId();
+  let selectedLocationId = effectiveLocationId();
 
   // Prev/next navigation only makes sense if this exercise is part of today's
   // currently-displayed Track order (won't apply if opened from the picker/
@@ -7304,7 +7344,7 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
     // same-named exercise can have very different scales (a pin-loaded stack
     // at one gym vs plate-loaded at another). Falls back to any-location if
     // this exercise hasn't been logged at the current location yet.
-    const currentLocation = getCurrentLocationId() || getDefaultLocationId();
+    const currentLocation = effectiveLocationId();
     const setAtCurrentLoc = currentLocation && locationColumnAvailable
       ? sets.find(s => s.location_id === currentLocation)
       : null;
