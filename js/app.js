@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.170';
+const APP_VERSION = 'Beta 5.171';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -3666,20 +3666,23 @@ async function openSuggestionPreview(name, category, navList){
 
 async function fetchTrackHeaderStats(){
   const { data: userData } = await supabaseClient.auth.getUser();
-  if (!userData || !userData.user) return { volumeKg: 0, setsToday: 0, streak: 0, targetDateIsToday: true, targetWeekday: todayWeekday() };
+  if (!userData || !userData.user) return { volumeKg: 0, setsToday: 0, streak: 0, targetDateIsToday: true, targetWeekday: todayWeekday(), targetIsFuture: false };
   // The header used to always report values for today's REAL date, but Track
   // lets the user tap through the week chips - so if they're viewing Monday's
   // plan on a Tuesday, the "Today" label + numbers were showing Tuesday's data
-  // over Monday's plan, which is exactly the kind of "why don't my numbers
-  // match what I did on this day" confusion the user hit. Now compute stats
-  // for the most recent past occurrence of the day chip the user is actually
-  // looking at (or today, if that IS today).
+  // over Monday's plan, which is exactly the "why don't my numbers match what
+  // I did on this day" confusion. Now compute stats for the CURRENT WEEK's
+  // occurrence of the selected chip. If that occurrence is in the future
+  // (chip is a day later this week), show 0 - since nothing has actually
+  // been done on that date yet. Showing last week's data there would be
+  // misleading ("what's available" instead of "what was done that day").
   const targetWeekday = state.selectedDay;
   const nowWd = todayWeekday();
-  const daysBack = (7 + nowWd - targetWeekday) % 7;
-  const targetDateIsToday = daysBack === 0;
+  const daysDiff = targetWeekday - nowWd; // positive = future this week, 0 = today, negative = earlier this week
+  const targetDateIsToday = daysDiff === 0;
+  const targetIsFuture = daysDiff > 0;
   const targetDate = new Date();
-  targetDate.setDate(targetDate.getDate() - daysBack);
+  targetDate.setDate(targetDate.getDate() + daysDiff);
   const yyyy = targetDate.getFullYear();
   const mm = String(targetDate.getMonth() + 1).padStart(2, '0');
   const dd = String(targetDate.getDate()).padStart(2, '0');
@@ -3690,7 +3693,10 @@ async function fetchTrackHeaderStats(){
     15000
   );
   const sets = result.__timeout || result.error ? [] : (result.data || []);
-  const targetSets = sets.filter(s => s.logged_at === targetDateStr);
+  // If the chip's target date is in the future (nothing logged yet), show 0
+  // rather than falling back to last week's data - that'd be "what's
+  // available from prior weeks" rather than "what was actually done".
+  const targetSets = targetIsFuture ? [] : sets.filter(s => s.logged_at === targetDateStr);
   const setsToday = targetSets.reduce((sum, s) => sum + (Number(s.num_sets) || 1), 0);
   let volumeKg = 0;
   targetSets.forEach(s => {
@@ -3706,7 +3712,7 @@ async function fetchTrackHeaderStats(){
     volumeKg += kgWeight * perSideMultiplier * repsNum * (Number(s.num_sets) || 1);
   });
   const streak = computeConsistencyStreak(sets);
-  return { volumeKg: Math.round(volumeKg), setsToday, streak: streak.current, targetDateIsToday, targetWeekday };
+  return { volumeKg: Math.round(volumeKg), setsToday, streak: streak.current, targetDateIsToday, targetWeekday, targetIsFuture };
 }
 
 async function renderTrack(){
