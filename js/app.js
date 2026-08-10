@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.168';
+const APP_VERSION = 'Beta 5.169';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -811,9 +811,15 @@ async function loadExercises(generation){
     );
   }
   if (isStale()) return;
-  if (result.__timeout){ state.exercises = []; return; }
+  // A failed load must NEVER fall back to an empty state - that looks
+  // identical to "your plan just got wiped" and prompts the empty-state
+  // suggestions block to render, which looks like defaults being applied.
+  // Use a null marker to signal load failure so renderTrack shows an
+  // explicit error message instead.
+  if (result.__timeout){ state.exercises = null; state.exercisesError = 'timeout'; return; }
   const { data: exercises, error } = result;
-  if (error){ console.error(error); state.exercises = []; return; }
+  if (error){ console.error(error); state.exercises = null; state.exercisesError = error.message || 'unknown error'; return; }
+  state.exercisesError = null;
 
   const exerciseIds = (exercises || []).map(ex => ex.id);
   let lastSetByExercise = {};
@@ -957,7 +963,15 @@ async function loadExercisesFromMaster(generation){
     15000
   );
   if (isStale()) return;
-  if (result.__timeout || result.error){ console.error('exercise_days query failed', result.error); state.exercises = []; return; }
+  // Failed load must NOT fall back to empty state - that looks identical
+  // to "plan got wiped" and triggers the misleading suggestions block.
+  if (result.__timeout || result.error){
+    console.error('exercise_days query failed', result.error);
+    state.exercises = null;
+    state.exercisesError = result.__timeout ? 'timeout' : (result.error?.message || 'unknown error');
+    return;
+  }
+  state.exercisesError = null;
 
   const exercises = (result.data || [])
     .map(row => row.exercise_master)
@@ -3683,10 +3697,18 @@ async function renderTrack(){
     ? dayTypeLabel
     : (dayTypeUnavailable ? '—' : DAY_NAMES[state.selectedDay]);
 
+  // Coerce a load-failed null into an empty array for the intermediate
+  // computations (progress, muscles, sorting) so nothing crashes. The load
+  // failure signal is preserved in state.exercisesError and the render
+  // branches at the bottom check that first, showing the error state
+  // instead of the misleading empty state.
+  const loadFailed = state.exercises === null;
+  const workingExercises = loadFailed ? [] : state.exercises;
+
   // slot-based progress: exercises sharing an alt_group_id count once
   const seenGroups = new Set();
   let totalSlots = 0, doneSlots = 0;
-  state.exercises.forEach(ex => {
+  workingExercises.forEach(ex => {
     const key = ex.alt_group_id || ex.id;
     if (seenGroups.has(key)) return;
     seenGroups.add(key);
@@ -3700,10 +3722,10 @@ async function renderTrack(){
     loadExerciseDB(),
     loadLocations()
   ]);
-  state.exercises.forEach(ex => { ex.mechanicInfo = classifyMechanic(matchExercise(ex.name, exdb)); });
+  workingExercises.forEach(ex => { ex.mechanicInfo = classifyMechanic(matchExercise(ex.name, exdb)); });
   const splitModePref = getSplitModePref();
   const isUpperLowerMode = splitModePref === 'upperlower';
-  state.exercises.forEach(ex => {
+  workingExercises.forEach(ex => {
     const match = matchExercise(ex.name, exdb);
     const muscle = match && match.primaryMuscles && match.primaryMuscles[0];
     const ul = ex.upper_lower || classifyUpperLower(muscle);
@@ -3715,20 +3737,20 @@ async function renderTrack(){
     }
   });
   const currentLocationId = effectiveLocationId();
-  state.exercises.forEach(ex => { ex.locationAvailable = isAvailableAtLocation(ex, currentLocationId); });
+  workingExercises.forEach(ex => { ex.locationAvailable = isAvailableAtLocation(ex, currentLocationId); });
   const currentLocationName = allLocations.find(l => l.id === currentLocationId)?.name || null;
   const hideCompleted = getHideCompletedPref();
   // Strict location filter: only what's actually available here, full stop -
   // not exercises that aren't here even if an alt-group swap exists elsewhere.
   // A separate list from state.exercises so progress stats above still
   // reflect the whole day's plan, not just what's visible right now.
-  const visibleExercises = state.exercises.filter(ex =>
+  const visibleExercises = workingExercises.filter(ex =>
     ex.locationAvailable && (!hideCompleted || !(ex.loggedToday || ex.completeVia))
   );
   const { grouped, orderedKeys } = await groupExercisesByChoice(visibleExercises, groupBy);
 
   let suggestions = [];
-  if (state.exercises.length > 0){
+  if (workingExercises.length > 0){
     if (!state.suggestionsCache) state.suggestionsCache = {};
     const cacheKey = state.selectedDay;
     if (state.suggestionsCache[cacheKey]){
@@ -3736,8 +3758,8 @@ async function renderTrack(){
     } else {
       const { data: userData } = await supabaseClient.auth.getUser();
       const compatEx = await fetchAllExercisesCompat(userData.user.id);
-      const fullLibrary = compatEx.length ? compatEx.map(ex => ({ name: ex.name })) : state.exercises;
-      const todayNames = new Set(state.exercises.map(ex => ex.name.toLowerCase()));
+      const fullLibrary = compatEx.length ? compatEx.map(ex => ({ name: ex.name })) : workingExercises;
+      const todayNames = new Set(workingExercises.map(ex => ex.name.toLowerCase()));
       suggestions = await getSuggestedExercises(effectiveDayTypeLabel, fullLibrary, todayNames);
       state.suggestionsCache[cacheKey] = suggestions;
     }
@@ -3763,7 +3785,16 @@ async function renderTrack(){
     listHtml += `<div class="category" id="${slug}">${cat}${editIcon}</div>` + items.map(exerciseRow).join('');
     state.trackFlatOrder.push(...items.map(ex => ({ id: ex.id, name: ex.name })));
   });
-  if (state.exercises.length === 0){
+  if (state.exercises === null){
+    // Load failed - explicit error state, NOT empty state. Empty state
+    // looks like "your plan got wiped" and shows default suggestions,
+    // which is exactly the confusing symptom the user has reported.
+    listHtml = `<div class="empty-state" style="padding:24px 18px; text-align:center;">
+      <div style="font-size:14px; color:#E8492A; margin-bottom:6px;">Could not load your exercises</div>
+      <div style="font-size:12px; color:var(--slate); margin-bottom:14px;">${state.exercisesError === 'timeout' ? 'The request timed out.' : 'Something went wrong reading your data.'} Your plan is not lost - just try again.</div>
+      <button class="btn-primary" id="retryLoadBtn" style="max-width:220px; margin:0 auto;">Retry</button>
+    </div>`;
+  } else if (state.exercises.length === 0){
     const starters = getStarterExercises(effectiveDayTypeLabel);
     listHtml = `<div class="empty-state">No exercises set for ${DAY_LABELS[state.selectedDay]} yet.</div>
       <div class="category">Quick Add — Common for ${effectiveDayTypeLabel}</div>
@@ -3785,8 +3816,9 @@ async function renderTrack(){
     </div>`;
   }
   let suggestionsHtml = '';
-  const suppressSuggestionsForLocation = visibleExercises.length === 0 && state.exercises.length > 0 && currentLocationId;
-  if (suggestions.length > 0 && !suppressSuggestionsForLocation){
+  const suppressSuggestionsForLocation = visibleExercises.length === 0 && workingExercises.length > 0 && currentLocationId;
+  const suppressForLoadFailure = loadFailed;
+  if (suggestions.length > 0 && !suppressSuggestionsForLocation && !suppressForLoadFailure){
     const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
     const libraryItems = suggestions.filter(s => s.source === 'library');
     const databaseItems = suggestions.filter(s => s.source !== 'library');
@@ -3846,17 +3878,17 @@ async function renderTrack(){
           <button id="toolbarTimerBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:var(--panel); border:1px solid var(--line); color:var(--slate);">
             <span style="font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px;">TIMER</span>
           </button>
-          ${state.exercises.some(ex => !ex.alt_group_id) ? `<button id="toolbarAutoGroupBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:var(--panel); border:1px solid var(--line); color:var(--slate);">
+          ${workingExercises.some(ex => !ex.alt_group_id) ? `<button id="toolbarAutoGroupBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:var(--panel); border:1px solid var(--line); color:var(--slate);">
             <span style="font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px;">ALTS</span>
           </button>` : ''}
-          ${state.exercises.some(ex => ex.loggedToday || ex.completeVia) ? `<button id="toolbarHideCompletedBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:${hideCompleted?'rgba(255,107,26,0.12)':'var(--panel)'}; border:1px solid ${hideCompleted?'var(--flame)':'var(--line)'}; color:${hideCompleted?'var(--flame)':'var(--slate)'};">
+          ${workingExercises.some(ex => ex.loggedToday || ex.completeVia) ? `<button id="toolbarHideCompletedBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:${hideCompleted?'rgba(255,107,26,0.12)':'var(--panel)'}; border:1px solid ${hideCompleted?'var(--flame)':'var(--line)'}; color:${hideCompleted?'var(--flame)':'var(--slate)'};">
             <span style="font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px;">HIDE</span>
           </button>` : ''}
         </div>
         <div style="margin:12px 18px 14px 18px; height:5px; background:rgba(255,255,255,0.04); border-radius:3px; overflow:hidden;">
           <div style="height:100%; width:${pct}%; border-radius:3px; background:linear-gradient(90deg, #FF7A2E, #FFAA5C); box-shadow:0 0 10px rgba(255,107,26,0.5);"></div>
         </div>
-        ${state.exercises.length > 0 ? groupByToggleHtml(groupBy) : ''}
+        ${workingExercises.length > 0 ? groupByToggleHtml(groupBy) : ''}
         ${listHtml}
         ${suggestionsHtml}
       </div>
@@ -3896,7 +3928,7 @@ async function renderTrack(){
     chip.onclick = () => { setGroupByPref(chip.dataset.groupby); renderTrack(); };
   });
   const scrollEl = document.querySelector('.scroll-area');
-  if (state.exercises.length > 0 && orderedKeys.some(k => (grouped[k]||[]).length)){
+  if (workingExercises.length > 0 && orderedKeys.some(k => (grouped[k]||[]).length)){
     attachSideIndex(orderedKeys.filter(k => (grouped[k]||[]).length), 'trackcat-', { top: 230, bottom: 100 });
   } else {
     removeSideIndex();
@@ -3944,6 +3976,8 @@ async function renderTrack(){
   });
   const emptyBtn = document.getElementById('emptyAddBtn');
   if (emptyBtn) emptyBtn.onclick = openNewExerciseForm;
+  const retryBtn = document.getElementById('retryLoadBtn');
+  if (retryBtn) retryBtn.onclick = () => { state.exercises = []; renderTrack(); };
   const clearLocBtn = document.getElementById('clearLocationBtn');
   if (clearLocBtn) clearLocBtn.onclick = () => openLocationPicker(allLocations, currentLocationId);
   document.querySelectorAll('.starter-add').forEach(el => {
@@ -5238,7 +5272,8 @@ async function openAutoAltReview(){
   document.body.appendChild(overlay);
   overlay.querySelector('#closeAutoAlt').onclick = () => overlay.remove();
 
-  const proposals = await proposeAltGroups(state.exercises);
+  const exercisesForAlt = state.exercises || [];
+  const proposals = await proposeAltGroups(exercisesForAlt);
   const body = overlay.querySelector('#autoAltBody');
   proposals.forEach((p, i) => { p.included = true; p.id = 'proposal-' + i; });
 
@@ -5252,7 +5287,7 @@ async function openAutoAltReview(){
   const db2 = await loadExerciseDB();
   const existingGroupSignature = {}; // alt_group_id -> signature, from whichever member is already there
   const existingGroupName = {};
-  state.exercises.filter(ex => ex.alt_group_id).forEach(ex => {
+  exercisesForAlt.filter(ex => ex.alt_group_id).forEach(ex => {
     if (existingGroupSignature[ex.alt_group_id]) return;
     const match = matchExercise(ex.name, db2);
     const muscle = match && match.primaryMuscles && match.primaryMuscles[0];
@@ -5263,7 +5298,7 @@ async function openAutoAltReview(){
   const clusteredIdsFromProposals = new Set();
   proposals.forEach(p => p.members.forEach(m => clusteredIdsFromProposals.add(m.id)));
   const joinProposals = [];
-  state.exercises.filter(ex => !ex.alt_group_id && !clusteredIdsFromProposals.has(ex.id)).forEach(ex => {
+  exercisesForAlt.filter(ex => !ex.alt_group_id && !clusteredIdsFromProposals.has(ex.id)).forEach(ex => {
     const match = matchExercise(ex.name, db2);
     const muscle = match && match.primaryMuscles && match.primaryMuscles[0];
     const mech = classifyMechanic(match);
@@ -5278,8 +5313,8 @@ async function openAutoAltReview(){
   // database exercises that share the same muscle+pattern+mechanic - a
   // standalone exercise otherwise never gets an alt suggestion at all.
   const clusteredIds = new Set(clusteredIdsFromProposals);
-  const standalone = state.exercises.filter(ex => !ex.alt_group_id && !clusteredIds.has(ex.id) && !joinedIds.has(ex.id));
-  const todayNamesLower = new Set(state.exercises.map(ex => ex.name.toLowerCase()));
+  const standalone = exercisesForAlt.filter(ex => !ex.alt_group_id && !clusteredIds.has(ex.id) && !joinedIds.has(ex.id));
+  const todayNamesLower = new Set(exercisesForAlt.map(ex => ex.name.toLowerCase()));
   const db = await loadExerciseDB();
   const suggestions = [];
   standalone.forEach(ex => {
