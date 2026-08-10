@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.169';
+const APP_VERSION = 'Beta 5.170';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -783,9 +783,17 @@ async function loadExercises(generation){
   // a later one, this call must not overwrite state.exercises with its
   // now-outdated day-specific data.
   const isStale = () => generation !== undefined && state.renderGeneration !== generation;
+  const { data: userData } = await supabaseClient.auth.getUser();
+  if (!userData || !userData.user){
+    if (isStale()) return;
+    state.exercises = null;
+    state.exercisesError = 'session expired';
+    return;
+  }
   let result = await withTimeout(
     supabaseClient.from('exercises')
       .select('id, name, category, alt_group_id, alt_groups(name, color), location_ids, muscle_override')
+      .eq('user_id', userData.user.id)
       .eq('weekday', state.selectedDay)
       .eq('active', true)
       .order('category', { ascending: true })
@@ -803,6 +811,7 @@ async function loadExercises(generation){
     result = await withTimeout(
       supabaseClient.from('exercises')
         .select('id, name, category, alt_group_id, alt_groups(name, color), location_ids')
+        .eq('user_id', userData.user.id)
         .eq('weekday', state.selectedDay)
         .eq('active', true)
         .order('category', { ascending: true })
@@ -953,6 +962,14 @@ function detectWeightStagnation(setsForExercise){
 async function loadExercisesFromMaster(generation){
   const isStale = () => generation !== undefined && state.renderGeneration !== generation;
   const { data: userData } = await supabaseClient.auth.getUser();
+  if (!userData || !userData.user){
+    // Session gone mid-render - fail into the explicit error state rather
+    // than crashing, so the user sees "Could not load" not a blank screen.
+    if (isStale()) return;
+    state.exercises = null;
+    state.exercisesError = 'session expired';
+    return;
+  }
   const uid = userData.user.id;
 
   const result = await withTimeout(
@@ -3649,18 +3666,34 @@ async function openSuggestionPreview(name, category, navList){
 
 async function fetchTrackHeaderStats(){
   const { data: userData } = await supabaseClient.auth.getUser();
-  if (!userData || !userData.user) return { volumeKg: 0, setsToday: 0, streak: 0 };
+  if (!userData || !userData.user) return { volumeKg: 0, setsToday: 0, streak: 0, targetDateIsToday: true, targetWeekday: todayWeekday() };
+  // The header used to always report values for today's REAL date, but Track
+  // lets the user tap through the week chips - so if they're viewing Monday's
+  // plan on a Tuesday, the "Today" label + numbers were showing Tuesday's data
+  // over Monday's plan, which is exactly the kind of "why don't my numbers
+  // match what I did on this day" confusion the user hit. Now compute stats
+  // for the most recent past occurrence of the day chip the user is actually
+  // looking at (or today, if that IS today).
+  const targetWeekday = state.selectedDay;
+  const nowWd = todayWeekday();
+  const daysBack = (7 + nowWd - targetWeekday) % 7;
+  const targetDateIsToday = daysBack === 0;
+  const targetDate = new Date();
+  targetDate.setDate(targetDate.getDate() - daysBack);
+  const yyyy = targetDate.getFullYear();
+  const mm = String(targetDate.getMonth() + 1).padStart(2, '0');
+  const dd = String(targetDate.getDate()).padStart(2, '0');
+  const targetDateStr = `${yyyy}-${mm}-${dd}`;
   const since = new Date(Date.now() - 60*86400000).toISOString().slice(0,10);
   const result = await withTimeout(
     supabaseClient.from('sets').select('weight, weight_unit, weight_type, reps, num_sets, logged_at').eq('user_id', userData.user.id).gte('logged_at', since),
     15000
   );
   const sets = result.__timeout || result.error ? [] : (result.data || []);
-  const today = todayStr();
-  const todaysSets = sets.filter(s => s.logged_at === today);
-  const setsToday = todaysSets.reduce((sum, s) => sum + (Number(s.num_sets) || 1), 0);
+  const targetSets = sets.filter(s => s.logged_at === targetDateStr);
+  const setsToday = targetSets.reduce((sum, s) => sum + (Number(s.num_sets) || 1), 0);
   let volumeKg = 0;
-  todaysSets.forEach(s => {
+  targetSets.forEach(s => {
     const weightNum = Number(s.weight);
     if (s.weight === null || s.weight === undefined || isNaN(weightNum)) return;
     if (s.weight_unit !== 'kg' && s.weight_unit !== 'lb') return;
@@ -3673,7 +3706,7 @@ async function fetchTrackHeaderStats(){
     volumeKg += kgWeight * perSideMultiplier * repsNum * (Number(s.num_sets) || 1);
   });
   const streak = computeConsistencyStreak(sets);
-  return { volumeKg: Math.round(volumeKg), setsToday, streak: streak.current };
+  return { volumeKg: Math.round(volumeKg), setsToday, streak: streak.current, targetDateIsToday, targetWeekday };
 }
 
 async function renderTrack(){
@@ -3863,7 +3896,7 @@ async function renderTrack(){
           box-shadow:0 8px 20px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.03);">
           <div style="flex:1; text-align:center; padding:14px 6px; border-right:1px solid rgba(255,255,255,0.06);">
             <div style="font-family:'JetBrains Mono',monospace; font-size:17px; font-weight:600; color:var(--chalk);">${headerStats.volumeKg.toLocaleString()}kg</div>
-            <div style="font-size:8.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px; margin-top:2px;">Volume Today</div>
+            <div style="font-size:8.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px; margin-top:2px;">Volume ${headerStats.targetDateIsToday ? 'Today' : DAY_LABELS[headerStats.targetWeekday]}</div>
           </div>
           <div style="flex:1; text-align:center; padding:14px 6px; border-right:1px solid rgba(255,255,255,0.06);">
             <div style="font-family:'JetBrains Mono',monospace; font-size:17px; font-weight:600; color:var(--flame);">${headerStats.streak}</div>
@@ -3871,7 +3904,7 @@ async function renderTrack(){
           </div>
           <div style="flex:1; text-align:center; padding:14px 6px;">
             <div style="font-family:'JetBrains Mono',monospace; font-size:17px; font-weight:600; color:var(--chalk);">${headerStats.setsToday}</div>
-            <div style="font-size:8.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px; margin-top:2px;">Sets Today</div>
+            <div style="font-size:8.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px; margin-top:2px;">Sets ${headerStats.targetDateIsToday ? 'Today' : DAY_LABELS[headerStats.targetWeekday]}</div>
           </div>
         </div>
         <div style="padding:8px 18px 0 18px; display:flex; gap:8px; flex-wrap:wrap;">
