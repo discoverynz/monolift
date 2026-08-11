@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.171';
+const APP_VERSION = 'Beta 5.172';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -640,6 +640,27 @@ function todayStr(){
   return `${yyyy}-${mm}-${dd}`;
 }
 
+// Single source of truth for "what calendar date does the currently-viewed
+// day chip represent?" Both the header stats (Volume/Sets Today) and every
+// exercise card's loggedToday flag use this so they never contradict each
+// other. If the chip's this-week occurrence is in the future, targetIsFuture
+// is true and callers should treat as no-data-yet (not fall back to last
+// week's occurrence, which would misleadingly suggest activity).
+function targetDateInfo(){
+  const targetWeekday = state.selectedDay;
+  const nowWd = todayWeekday();
+  const daysDiff = targetWeekday - nowWd; // positive = future this week, 0 = today, negative = past this week
+  const targetIsFuture = daysDiff > 0;
+  const targetDateIsToday = daysDiff === 0;
+  const targetDate = new Date();
+  targetDate.setDate(targetDate.getDate() + daysDiff);
+  const yyyy = targetDate.getFullYear();
+  const mm = String(targetDate.getMonth() + 1).padStart(2, '0');
+  const dd = String(targetDate.getDate()).padStart(2, '0');
+  const targetDateStr = `${yyyy}-${mm}-${dd}`;
+  return { targetWeekday, targetDateStr, targetDateIsToday, targetIsFuture };
+}
+
 const SHORT_DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 const SHORT_MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 // Parses a plain YYYY-MM-DD string as a local calendar date rather than through
@@ -833,6 +854,7 @@ async function loadExercises(generation){
   const exerciseIds = (exercises || []).map(ex => ex.id);
   let lastSetByExercise = {};
   let maxSetByExercise = {};
+  let loggedOnTargetByExId = new Set();
   if (exerciseIds.length){
     const { data: userData } = await supabaseClient.auth.getUser();
     // The same exercise name can exist as separate records on other days, each
@@ -884,6 +906,14 @@ async function loadExercises(generation){
     allUserExercises.forEach(ex => { idToLowerName[ex.id] = (ex.name || '').toLowerCase(); });
     // Results are ordered newest-first, so the first time we see an exercise_id is its most recent set.
     allSets.forEach(s => { if (!lastSetByExercise[s.exercise_id]) lastSetByExercise[s.exercise_id] = s; });
+    // Set of exercise IDs that have a set logged on the target date (the
+    // specific calendar date the current chip represents). This makes the
+    // loggedToday flag on each card consistent with the header stats -
+    // both use the same date reference.
+    const targetInfo = targetDateInfo();
+    if (!targetInfo.targetIsFuture){
+      allSets.forEach(s => { if (s.logged_at === targetInfo.targetDateStr) loggedOnTargetByExId.add(s.exercise_id); });
+    }
     // Track the all-time best set per exercise NAME (spanning every sibling record
     // across every day), on ANY day - not just today's session. Only weight-based
     // units (kg/lb) are comparable across entries via conversion; other unit types
@@ -904,7 +934,7 @@ async function loadExercises(generation){
   }
   const withLogs = (exercises || []).map(ex => {
     const lastSet = lastSetByExercise[ex.id] || null;
-    const loggedToday = lastSet && lastSet.logged_at === todayStr();
+    const loggedToday = loggedOnTargetByExId.has(ex.id);
     const maxSet = maxSetByExercise[(ex.name || '').toLowerCase()] || null;
     // Only worth showing as a distinct "PR" line if it's a genuinely different
     // set than the last one shown (otherwise it's just repeating the same info).
@@ -999,6 +1029,7 @@ async function loadExercisesFromMaster(generation){
   let lastSetByExercise = {};
   let maxSetByExercise = {};
   let setsByExerciseId = {};
+  let loggedOnTargetByExId = new Set();
   if (masterIds.length){
     let setsResult = await withTimeout(
       supabaseClient.from('sets').select('exercise_master_id, weight, weight_unit, weight_type, reps, num_sets, logged_at, location_id')
@@ -1033,11 +1064,19 @@ async function loadExercisesFromMaster(generation){
         if (sVal > curVal) maxSetByExercise[key] = s;
       }
     });
+    // Set of exercise IDs that have a set logged on the target date (the
+    // specific calendar date the current chip represents). Matches the
+    // header stats' date reference so loggedToday flags on cards stay
+    // consistent with the header numbers.
+    const targetInfo = targetDateInfo();
+    if (!targetInfo.targetIsFuture){
+      allSets.forEach(s => { if (s.logged_at === targetInfo.targetDateStr) loggedOnTargetByExId.add(s.exercise_master_id); });
+    }
   }
 
   const withLogs = exercises.map(ex => {
     const lastSet = lastSetByExercise[ex.id] || null;
-    const loggedToday = lastSet && lastSet.logged_at === todayStr();
+    const loggedToday = loggedOnTargetByExId.has(ex.id);
     const maxSet = maxSetByExercise[ex.id] || null;
     const showPr = maxSet && lastSet && maxSet.logged_at !== lastSet.logged_at;
     const stagnant = detectWeightStagnation(setsByExerciseId[ex.id] || []);
@@ -3667,26 +3706,8 @@ async function openSuggestionPreview(name, category, navList){
 async function fetchTrackHeaderStats(){
   const { data: userData } = await supabaseClient.auth.getUser();
   if (!userData || !userData.user) return { volumeKg: 0, setsToday: 0, streak: 0, targetDateIsToday: true, targetWeekday: todayWeekday(), targetIsFuture: false };
-  // The header used to always report values for today's REAL date, but Track
-  // lets the user tap through the week chips - so if they're viewing Monday's
-  // plan on a Tuesday, the "Today" label + numbers were showing Tuesday's data
-  // over Monday's plan, which is exactly the "why don't my numbers match what
-  // I did on this day" confusion. Now compute stats for the CURRENT WEEK's
-  // occurrence of the selected chip. If that occurrence is in the future
-  // (chip is a day later this week), show 0 - since nothing has actually
-  // been done on that date yet. Showing last week's data there would be
-  // misleading ("what's available" instead of "what was done that day").
-  const targetWeekday = state.selectedDay;
-  const nowWd = todayWeekday();
-  const daysDiff = targetWeekday - nowWd; // positive = future this week, 0 = today, negative = earlier this week
-  const targetDateIsToday = daysDiff === 0;
-  const targetIsFuture = daysDiff > 0;
-  const targetDate = new Date();
-  targetDate.setDate(targetDate.getDate() + daysDiff);
-  const yyyy = targetDate.getFullYear();
-  const mm = String(targetDate.getMonth() + 1).padStart(2, '0');
-  const dd = String(targetDate.getDate()).padStart(2, '0');
-  const targetDateStr = `${yyyy}-${mm}-${dd}`;
+  // Shared date logic - see targetDateInfo() at the top.
+  const { targetWeekday, targetDateStr, targetDateIsToday, targetIsFuture } = targetDateInfo();
   const since = new Date(Date.now() - 60*86400000).toISOString().slice(0,10);
   const result = await withTimeout(
     supabaseClient.from('sets').select('weight, weight_unit, weight_type, reps, num_sets, logged_at').eq('user_id', userData.user.id).gte('logged_at', since),
