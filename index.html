@@ -9,7 +9,9 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="MonoLift">
 <link rel="manifest" href="manifest.json">
-<link rel="apple-touch-icon" sizes="180x180" href="icons/icon-180-v2.png">
+<!-- Two apple-touch-icons with prefers-color-scheme media queries. iOS 18 Safari picks the matching one at add-to-home-screen time. Light-mode home screen gets design 2 (dark M on orange), dark-mode home screen gets design 1 (orange M on dark) which iOS won't try to auto-tint since the background is already dark. -->
+<link rel="apple-touch-icon" sizes="180x180" href="icons/icon-180-light-v3.png">
+<link rel="apple-touch-icon" sizes="180x180" href="icons/icon-180-dark-v3.png" media="(prefers-color-scheme: dark)">
 <!-- SVG favicon is infinitely scalable on every modern browser - always crisp regardless of zoom or DPI -->
 <link rel="icon" type="image/svg+xml" href="icons/logo.svg" media="(prefers-color-scheme: light)">
 <link rel="icon" type="image/svg+xml" href="icons/logo-dark.svg" media="(prefers-color-scheme: dark)">
@@ -21,12 +23,12 @@
 <link rel="icon" type="image/png" sizes="128x128" href="icons/icon-128.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&family=Bebas+Neue&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/styles.css?v=229">
+<link rel="stylesheet" href="css/styles.css?v=230">
 </head>
 <body>
 <div id="app"></div>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="js/supabase-client.js?v=229"></script>
-<script src="js/app.js?v=229"></script>
+<script src="js/supabase-client.js?v=230"></script>
+<script src="js/app.js?v=230"></script>
 </body>
 </html>
