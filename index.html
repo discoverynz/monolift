@@ -9,9 +9,23 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="MonoLift">
 <link rel="manifest" href="manifest.json">
-<!-- Two apple-touch-icons with prefers-color-scheme media queries. iOS 18 Safari picks the matching one at add-to-home-screen time. Light-mode home screen gets design 2 (dark M on orange), dark-mode home screen gets design 1 (orange M on dark) which iOS won't try to auto-tint since the background is already dark. -->
-<link rel="apple-touch-icon" sizes="180x180" href="icons/icon-180-light-v3.png">
-<link rel="apple-touch-icon" sizes="180x180" href="icons/icon-180-dark-v3.png" media="(prefers-color-scheme: dark)">
+<!-- Default apple-touch-icon is the light-mode variant (design 2: dark M on orange bg). iOS reads this at add-to-home-screen time. Apple never documented supporting the media attribute on apple-touch-icon so we can't rely on two tags with prefers-color-scheme - instead we swap the href with JS below BEFORE iOS captures the icon. -->
+<link rel="apple-touch-icon" id="appleTouchIcon" sizes="180x180" href="icons/icon-180-light-v4.png">
+<script>
+  // iOS reads the current state of link[rel=apple-touch-icon] when the user
+  // taps Share -> Add to Home Screen. Swap to the dark-mode variant if the
+  // user is currently in dark mode so the home-screen icon matches. iOS 18
+  // auto-tints icons that don't already have a dark background - design 1
+  // (orange M on dark bg) is dark-native so it survives that tinting; design
+  // 2 (dark M on orange) gets destroyed since iOS darkens the orange bg and
+  // the M becomes invisible against it. Switching designs is our only way
+  // out on PWAs since iOS doesn't accept dark-icon metadata for web apps.
+  try {
+    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+      document.getElementById('appleTouchIcon').href = 'icons/icon-180-dark-v4.png';
+    }
+  } catch (e) { /* very old browser, keep light default */ }
+</script>
 <!-- SVG favicon is infinitely scalable on every modern browser - always crisp regardless of zoom or DPI -->
 <link rel="icon" type="image/svg+xml" href="icons/logo.svg" media="(prefers-color-scheme: light)">
 <link rel="icon" type="image/svg+xml" href="icons/logo-dark.svg" media="(prefers-color-scheme: dark)">
@@ -23,12 +37,12 @@
 <link rel="icon" type="image/png" sizes="128x128" href="icons/icon-128.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&family=Bebas+Neue&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/styles.css?v=230">
+<link rel="stylesheet" href="css/styles.css?v=231">
 </head>
 <body>
 <div id="app"></div>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="js/supabase-client.js?v=230"></script>
-<script src="js/app.js?v=230"></script>
+<script src="js/supabase-client.js?v=231"></script>
+<script src="js/app.js?v=231"></script>
 </body>
 </html>
