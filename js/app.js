@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.175';
+const APP_VERSION = 'Beta 5.176';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -3906,7 +3906,7 @@ async function renderTrack(){
   app.innerHTML = `
     <div class="app-shell">
       <div class="scroll-area">
-        <div class="brandbar"><img src="icons/icon-inapp-32.png" alt=""><div class="name">MONOLIFT</div>
+        <div class="brandbar"><picture><source srcset="icons/logo-dark.svg" media="(prefers-color-scheme: dark)"><img src="icons/logo.svg" alt=""></picture><div class="name">MONOLIFT</div>
           ${allLocations.length > 0 ? `<div id="locSwitcher" style="margin-left:auto; display:flex; align-items:center; gap:5px; background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:5px 10px 5px 8px; cursor:pointer;">
             <span style="font-size:10px;">📍</span>
             <span style="font-family:'Bebas Neue',sans-serif; font-size:10px; color:var(--flame); letter-spacing:0.5px;">${currentLocationName ? currentLocationName.toUpperCase() : 'ANYWHERE'}</span>
@@ -7957,7 +7957,7 @@ async function renderScale(){
   app.innerHTML = `
     <div class="app-shell">
       <div class="scroll-area">
-        <div class="brandbar"><img src="icons/icon-inapp-32.png" alt=""><div class="name">MONOLIFT</div><button class="brandbar-timer" onclick="openTimer()" aria-label="Timer" style="margin-left:auto; background:none; color:var(--slate); padding:6px; display:flex; align-items:center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg></button></div>
+        <div class="brandbar"><picture><source srcset="icons/logo-dark.svg" media="(prefers-color-scheme: dark)"><img src="icons/logo.svg" alt=""></picture><div class="name">MONOLIFT</div><button class="brandbar-timer" onclick="openTimer()" aria-label="Timer" style="margin-left:auto; background:none; color:var(--slate); padding:6px; display:flex; align-items:center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg></button></div>
         <div class="header"><div class="eyebrow">BODY</div><h1>Scale</h1></div>
         <div class="stat-card">
           ${latest ? `<div class="big">${latest.weight}${latest.unit}</div><div class="small">${latest.logged_at}</div>${deltaHtml}` : `<div class="small">No entries yet — tap + to log your weight.</div>`}
@@ -8111,7 +8111,7 @@ async function renderPhase(){
   app.innerHTML = `
     <div class="app-shell">
       <div class="scroll-area">
-        <div class="brandbar"><img src="icons/icon-inapp-32.png" alt=""><div class="name">MONOLIFT</div><button class="brandbar-timer" onclick="openTimer()" aria-label="Timer" style="margin-left:auto; background:none; color:var(--slate); padding:6px; display:flex; align-items:center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg></button></div>
+        <div class="brandbar"><picture><source srcset="icons/logo-dark.svg" media="(prefers-color-scheme: dark)"><img src="icons/logo.svg" alt=""></picture><div class="name">MONOLIFT</div><button class="brandbar-timer" onclick="openTimer()" aria-label="Timer" style="margin-left:auto; background:none; color:var(--slate); padding:6px; display:flex; align-items:center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg></button></div>
         <div class="header"><div class="eyebrow">BULK / CUT</div><h1>Phase</h1></div>
         <div class="section-label">Bulk</div>
         ${bulkHtml}
@@ -9474,7 +9474,7 @@ async function renderBalance(mode, view){
   app.innerHTML = `
     <div class="app-shell">
       <div class="scroll-area">
-        <div class="brandbar"><img src="icons/icon-inapp-32.png" alt=""><div class="name">MONOLIFT</div></div>
+        <div class="brandbar"><picture><source srcset="icons/logo-dark.svg" media="(prefers-color-scheme: dark)"><img src="icons/logo.svg" alt=""></picture><div class="name">MONOLIFT</div></div>
         <div class="header"><div class="eyebrow">${mode === 'logged' ? 'LAST 7 DAYS' : 'WHOLE WEEKLY PLAN'}</div><h1>Balance</h1></div>
         <div class="seg" style="margin:10px 18px; display:flex; border:1px solid var(--line);">
           <div class="bal-seg-chip ${mode==='logged'?'active':''}" data-mode="logged" style="flex:1; text-align:center; padding:7px 0; font-family:'Bebas Neue',sans-serif; font-size:11.5px; letter-spacing:0.5px; color:${mode==='logged'?'var(--ink)':'var(--slate)'}; background:${mode==='logged'?'var(--flame)':'transparent'};">LOGGED THIS WEEK</div>
@@ -9724,7 +9724,7 @@ async function renderMe(){
   app.innerHTML = `
     <div class="app-shell">
       <div class="scroll-area">
-        <div class="brandbar"><img src="icons/icon-inapp-32.png" alt=""><div class="name">MONOLIFT</div><button class="brandbar-timer" onclick="openTimer()" aria-label="Timer" style="margin-left:auto; background:none; color:var(--slate); padding:6px; display:flex; align-items:center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg></button></div>
+        <div class="brandbar"><picture><source srcset="icons/logo-dark.svg" media="(prefers-color-scheme: dark)"><img src="icons/logo.svg" alt=""></picture><div class="name">MONOLIFT</div><button class="brandbar-timer" onclick="openTimer()" aria-label="Timer" style="margin-left:auto; background:none; color:var(--slate); padding:6px; display:flex; align-items:center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg></button></div>
         <div class="header"><div class="eyebrow">ACCOUNT</div><h1>Me</h1></div>
         <div class="account-card">
           <div class="avatar">${initial}</div>
