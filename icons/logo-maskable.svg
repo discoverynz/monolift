@@ -2,14 +2,13 @@
   <defs>
     <mask id="cut">
       <rect width="1024" height="1024" fill="white"/>
-      <!-- Cut positioned proportionally within the safe zone -->
       <path d="M 240 608 L 848 416 L 872 480 L 264 672 Z" fill="black"/>
     </mask>
   </defs>
-  <!-- Full-bleed orange background - required for maskable -->
-  <rect width="1024" height="1024" fill="#FF6B1A"/>
+  <!-- Full-bleed dark background - survives iOS/Android dark-mode auto-tinting -->
+  <rect width="1024" height="1024" fill="#1B1C1F"/>
   <g mask="url(#cut)">
-    <!-- M scaled to fit within 80% safe zone (bounded by ~102-922) -->
-    <path d="M 256 768 L 256 256 L 384 256 L 512 470 L 640 256 L 768 256 L 768 768 L 640 768 L 640 448 L 544 616 L 480 616 L 384 448 L 384 768 Z" fill="#1B1C1F"/>
+    <!-- M scaled to fit within 80% safe zone -->
+    <path d="M 256 768 L 256 256 L 384 256 L 512 470 L 640 256 L 768 256 L 768 768 L 640 768 L 640 448 L 544 616 L 480 616 L 384 448 L 384 768 Z" fill="#FF6B1A"/>
   </g>
 </svg>
