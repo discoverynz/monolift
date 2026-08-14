@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.174';
+const APP_VERSION = 'Beta 5.175';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -717,7 +717,7 @@ function renderLogin(){
   app.innerHTML = `
     <div class="app-shell">
       <div class="login-wrap">
-        <div class="logo-circle"><picture><source srcset="icons/icon-inapp-192-dark.png" media="(prefers-color-scheme: dark)"><img src="icons/icon-inapp-192.png" width="48" height="48" alt=""></picture></div>
+        <div class="logo-circle"><picture><source srcset="icons/icon-inapp-192-dark.png" media="(prefers-color-scheme: dark)"><img src="icons/icon-inapp-192.png" srcset="icons/icon-inapp-192.png 2x, icons/icon-inapp-384.png 3x" width="48" height="48" alt="" style="width:48px; height:48px;"></picture></div>
         <div class="app-name">MonoLift</div>
         <div class="login-sub">Sign in to sync your data</div>
         <input class="input-field" id="emailInput" type="email" placeholder="you@email.com" autocomplete="email">
@@ -751,7 +751,7 @@ function renderCodeEntry(email){
   app.innerHTML = `
     <div class="app-shell">
       <div class="login-wrap">
-        <div class="logo-circle"><picture><source srcset="icons/icon-inapp-192-dark.png" media="(prefers-color-scheme: dark)"><img src="icons/icon-inapp-192.png" width="48" height="48" alt=""></picture></div>
+        <div class="logo-circle"><picture><source srcset="icons/icon-inapp-192-dark.png" media="(prefers-color-scheme: dark)"><img src="icons/icon-inapp-192.png" srcset="icons/icon-inapp-192.png 2x, icons/icon-inapp-384.png 3x" width="48" height="48" alt="" style="width:48px; height:48px;"></picture></div>
         <div class="app-name">MonoLift</div>
         <div class="login-sub">Check ${email} for a sign-in email</div>
         <div class="small" style="text-align:center; color:var(--slate); margin:-8px 0 4px 0; padding:0 20px; line-height:1.4;">If it has a code, enter it below. If it's a link instead, just tap it — that signs you in directly, no code needed.</div>

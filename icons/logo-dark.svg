@@ -1,13 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="512" height="512">
-  
-  <rect width="64" height="64" rx="14" fill="#1B1C1F"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" shape-rendering="geometricPrecision">
   <defs>
-    <mask id="cutmask_01_original">
-      <rect width="64" height="64" fill="white"/>
-      <path d="M 8 38 L 60 22 L 62 28 L 10 44 Z" fill="black"/>
+    <mask id="cut">
+      <rect width="1024" height="1024" fill="white"/>
+      <path d="M 128 608 L 960 352 L 992 448 L 160 704 Z" fill="black"/>
     </mask>
   </defs>
-  <g mask="url(#cutmask_01_original)">
-    <path d="M 10 52 L 10 12 L 20 12 L 32 32 L 44 12 L 54 12 L 54 52 L 44 52 L 44 28 L 34 44 L 30 44 L 20 28 L 20 52 Z" fill="#FF6B1A"/>
+  <rect width="1024" height="1024" rx="224" fill="#1B1C1F"/>
+  <g mask="url(#cut)">
+    <path d="M 160 832 L 160 192 L 320 192 L 512 512 L 704 192 L 864 192 L 864 832 L 704 832 L 704 448 L 544 704 L 480 704 L 320 448 L 320 832 Z" fill="#FF6B1A"/>
   </g>
 </svg>
