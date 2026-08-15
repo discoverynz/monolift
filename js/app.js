@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.181';
+const APP_VERSION = 'Beta 5.182';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -684,9 +684,15 @@ const ICON_ME = `<svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="c
 const ICON_CHECK = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8FBF7A" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
 
 function renderTabbar(){
+  // NAMING NOTE: display labels were renamed (exercise logging is now "Lift",
+  // body tracking is now "Track") but the internal tab id strings and
+  // function names (renderTrack/renderScale, currentTab values 'track'/
+  // 'scale') were intentionally left as-is to avoid a large, error-prone
+  // rename across the whole file. renderTrack() = exercise logging = "Lift"
+  // tab. renderScale() = weight/measurements/phase = "Track" tab.
   return `<div class="tabbar">
-    <button class="tab-item ${state.currentTab==='track'?'active':''}" data-tab="track">${ICON_TRACK}<span>Track</span></button>
-    <button class="tab-item ${state.currentTab==='scale'?'active':''}" data-tab="scale">${ICON_SCALE}<span>Scale</span></button>
+    <button class="tab-item ${state.currentTab==='track'?'active':''}" data-tab="track">${ICON_TRACK}<span>Lift</span></button>
+    <button class="tab-item ${state.currentTab==='scale'?'active':''}" data-tab="scale">${ICON_SCALE}<span>Track</span></button>
     <div class="fab-wrap"><button class="fab" id="fabBtn">${`<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#17181A" stroke-width="2.4" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`}</button></div>
     <button class="tab-item ${state.currentTab==='balance'?'active':''}" data-tab="balance">${ICON_BALANCE}<span>Balance</span></button>
     <button class="tab-item ${state.currentTab==='me'?'active':''}" data-tab="me">${ICON_ME}<span>Me</span></button>
@@ -3233,13 +3239,13 @@ function showOnboarding(mode){
     { kind:'teach', title:'Welcome to MonoLift',
       body:'Your gym plan, alt groups, and history — all in one place, synced to your account. A few quick things before you dive in.' },
     { kind:'teach', title:'Make It Yours', visual: ONBOARD_VISUALS.makeItYours,
-      body:`Tap the workout type at the top of Track (e.g. "Back & Biceps") to rename it. Want to rearrange your whole week? Me → Swap Days moves an entire day's plan — and history — to a new weekday.` },
+      body:`Tap the workout type at the top of Lift (e.g. "Back & Biceps") to rename it. Want to rearrange your whole week? Me → Swap Days moves an entire day's plan — and history — to a new weekday.` },
     { kind:'teach', title:'Logging a Set', visual: ONBOARD_VISUALS.logging,
-      body:`Tap any exercise on Track to log it. Colored badges show alt groups — pick one from the group, not all of them. A green check means that slot's done for the day, even if a teammate exercise covered it.` },
+      body:`Tap any exercise on Lift to log it. Colored badges show alt groups — pick one from the group, not all of them. A green check means that slot's done for the day, even if a teammate exercise covered it.` },
     { kind:'teach', title:'Adding Workouts', visual: ONBOARD_VISUALS.adding,
       body:'Tap the + button to log a set for today. Not on the list? Use "Add Existing Exercise" to pull from your full library, or "Create New Exercise" to start fresh.' },
     { kind:'teach', title:'Track Everything', visual: ONBOARD_VISUALS.tracking,
-      body:`Scale logs your body weight with a trend chart. Phase tracks your bulk/cut progress. Every set you've ever logged stays in that exercise's history, forever.` }
+      body:`Track logs your body weight and measurements with trend charts, plus your bulk/cut phase progress. Every set you've ever logged stays in that exercise's history, forever.` }
   ];
   const setupSteps = [
     { kind:'frequency' }, { kind:'preset' }, { kind:'confirm' }, { kind:'superset' }, { kind:'location' }, { kind:'finish' }
@@ -7961,48 +7967,21 @@ async function renderScale(){
   }
 
   const phase = await loadPhase();
-  const activePhase = phase ? determineActivePhase(phase) : null;
-  let bulkHtml, cutHtml;
-  if (phase && phase.bulk_start && phase.bulk_end){
-    const isActive = activePhase === 'bulk';
-    const w = weeksBetween(phase.bulk_start, phase.bulk_end);
-    bulkHtml = `<div class="phase-card ${isActive ? 'active' : 'upcoming'}">
-      <div class="top-row"><div class="name">Bulk</div><div class="status">${isActive ? 'ACTIVE' : 'SET'}</div></div>
-      <div class="dates">${phase.bulk_start} → ${phase.bulk_end}</div>
-      ${isActive && w ? `<div class="progress-track"><div class="progress-fill" style="width:${w.pct}%;"></div></div><div class="progress-labels"><span>Week ${w.elapsedWeeks} of ${w.totalWeeks}</span><span>${w.pct}%</span></div>` : ''}
-    </div>`;
-  } else {
-    bulkHtml = `<div class="phase-card upcoming"><div class="top-row"><div class="name">Bulk</div><div class="status">NOT SET</div></div></div>`;
-  }
-  if (phase && phase.cut_start && phase.cut_end){
-    const isActive = activePhase === 'cut';
-    const w = weeksBetween(phase.cut_start, phase.cut_end);
-    cutHtml = `<div class="phase-card ${isActive ? 'active' : 'upcoming'}">
-      <div class="top-row"><div class="name">Cut</div><div class="status">${isActive ? 'ACTIVE' : 'SET'}</div></div>
-      <div class="dates">${phase.cut_start} → ${phase.cut_end}</div>
-      ${isActive && w ? `<div class="progress-track"><div class="progress-fill" style="width:${w.pct}%;"></div></div><div class="progress-labels"><span>Week ${w.elapsedWeeks} of ${w.totalWeeks}</span><span>${w.pct}%</span></div>` : ''}
-    </div>`;
-  } else {
-    cutHtml = `<div class="phase-card upcoming"><div class="top-row"><div class="name">Cut</div><div class="status">NOT SET</div></div></div>`;
-  }
+  const phaseHtml = await buildPhaseHeroHtml(phase, entries);
 
   app.innerHTML = `
     <div class="app-shell">
       <div class="scroll-area">
         <div class="brandbar"><picture><source srcset="icons/logo-dark.svg" media="(prefers-color-scheme: dark)"><img src="icons/logo.svg" alt=""></picture><div class="name">MONOLIFT</div><button class="brandbar-timer" onclick="openTimer()" aria-label="Timer" style="margin-left:auto; background:none; color:var(--slate); padding:6px; display:flex; align-items:center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg></button></div>
-        <div class="header"><div class="eyebrow">BODY</div><h1>Scale</h1></div>
+        <div class="header"><div class="eyebrow">BODY</div><h1>Track</h1></div>
         <div class="stat-card">
           ${latest ? `<div class="big">${latest.weight}${latest.unit}</div><div class="small">${latest.logged_at}</div>${deltaHtml}` : `<div class="small">No entries yet — tap + to log your weight.</div>`}
         </div>
         ${chartHtml}
         <div class="section-label">Recent Entries</div>
         ${rows || '<div class="empty-state">Nothing logged yet.</div>'}
-        <div class="section-label">Phase</div>
-        <div class="section-label" style="padding-top:0; font-size:13px; color:var(--slate);">Bulk</div>
-        ${bulkHtml}
-        <div class="section-label" style="font-size:13px; color:var(--slate);">Cut</div>
-        ${cutHtml}
-        <div style="padding:0 18px; margin-top:16px;"><a class="edit-link" id="editPhaseLink">Edit dates</a></div>
+        <div class="section-label" style="padding-top:20px;">Phase</div>
+        ${phaseHtml}
       </div>
       ${renderTabbar()}
     </div>`;
@@ -8018,6 +7997,161 @@ async function renderScale(){
     row.addEventListener('pointerleave', cancel);
     row.addEventListener('pointercancel', cancel);
   });
+}
+
+// Builds the revamped Phase section: a big color-coded hero card for
+// whichever phase is currently active (or the nearest relevant state if
+// neither is active), a mini preview card for the other phase, and a
+// full-cycle timeline bar. weightEntries is the already-loaded body_weight
+// list (avoids a second query) used to compute the start->current->change
+// stats for the active phase from real weigh-ins during that window.
+async function buildPhaseHeroHtml(phase, weightEntries){
+  const editLinkHtml = `<div style="padding:0 18px; margin-top:14px;"><a class="edit-link" id="editPhaseLink">Edit phase dates</a></div>`;
+  const hasBulk = phase && phase.bulk_start && phase.bulk_end;
+  const hasCut = phase && phase.cut_start && phase.cut_end;
+
+  if (!hasBulk && !hasCut){
+    return `<div class="phase-hero none">
+      <div class="icon-circle"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M18.7 8l-5.1 5.1-2.8-2.8L7 14.1"/></svg></div>
+      <div class="empty-title">No Phase Set</div>
+      <div class="empty-sub">Set your bulk and cut dates to track progress against a plan, with weight change pulled automatically from your weigh-ins.</div>
+      <button class="btn-primary" id="editPhaseLink" style="width:100%;">Set Bulk / Cut Dates</button>
+    </div>`;
+  }
+
+  const activePhase = determineActivePhase(phase);
+  const findWeightNear = (dateStr, preferBefore) => {
+    // Finds the weigh-in closest to a given date, preferring entries on or
+    // before it when preferBefore is true (for "start weight") and on or
+    // after it otherwise (for "current/latest weight"). Falls back to the
+    // closest entry in either direction if no exact-side match exists, so a
+    // phase's stats aren't blank just because you didn't weigh in on the
+    // exact start date.
+    if (!weightEntries.length) return null;
+    const sorted = [...weightEntries].sort((a,b) => a.logged_at.localeCompare(b.logged_at));
+    if (preferBefore){
+      const before = sorted.filter(e => e.logged_at <= dateStr);
+      return before.length ? before[before.length - 1] : sorted[0];
+    } else {
+      const after = sorted.filter(e => e.logged_at <= dateStr);
+      return after.length ? after[after.length - 1] : null;
+    }
+  };
+
+  const renderHeroFor = (kind, start, end) => {
+    const w = weeksBetween(start, end);
+    const today = todayStr();
+    const daysLeft = Math.max(0, Math.round((new Date(end) - new Date(today)) / 86400000));
+    const startEntry = findWeightNear(start, true);
+    const currentEntry = findWeightNear(today, false) || startEntry;
+    let statsHtml = '';
+    if (startEntry && currentEntry && startEntry.id !== currentEntry.id){
+      const unit = currentEntry.unit;
+      const startW = convertWeight(startEntry.weight, startEntry.unit, unit);
+      const curW = convertWeight(currentEntry.weight, currentEntry.unit, unit);
+      const change = curW - startW;
+      // "Positive" (on-track) direction differs by phase: gaining is the
+      // goal in a bulk, losing is the goal in a cut. Color reflects that,
+      // not just whether the number went up or down.
+      const isOnTrack = kind === 'bulk' ? change >= 0 : change <= 0;
+      statsHtml = `<div class="phase-stats-row">
+        <div class="phase-stat"><div class="label">Start Weight</div><div class="value">${fmtNum(startW)}${unit}</div></div>
+        <div class="phase-stat"><div class="label">Current</div><div class="value">${fmtNum(curW)}${unit}</div></div>
+        <div class="phase-stat"><div class="label">Change</div><div class="value ${isOnTrack ? 'positive' : 'negative'}">${change >= 0 ? '+' : ''}${fmtNum(change)}${unit}</div></div>
+      </div>`;
+    }
+    return `<div class="phase-hero ${kind}">
+      <div class="eyebrow-row"><div class="tag">Active Phase</div><div class="daysleft">${daysLeft} day${daysLeft===1?'':'s'} left</div></div>
+      <div class="big-name">${kind === 'bulk' ? 'Bulk' : 'Cut'}</div>
+      <div class="week-of">${w ? `Week ${w.elapsedWeeks} of ${w.totalWeeks} · ` : ''}${formatLoggedDate(start)} — ${formatLoggedDate(end)}</div>
+      ${w ? `<div class="progress-track"><div class="progress-fill" style="width:${w.pct}%;"></div></div><div class="progress-labels"><span>${w.pct}% through</span><span>Week ${w.elapsedWeeks}/${w.totalWeeks}</span></div>` : ''}
+      ${statsHtml}
+    </div>`;
+  };
+
+  const renderMiniFor = (kind, start, end, status) => `<div class="phase-mini ${kind}">
+    <div class="left"><div class="dot"></div><div><div class="name">${kind === 'bulk' ? 'Bulk' : 'Cut'}</div><div class="dates">${formatLoggedDate(start)} → ${formatLoggedDate(end)}</div></div></div>
+    <div class="status-tag">${status}</div>
+  </div>`;
+
+  const renderCycleTimeline = () => {
+    if (!hasBulk || !hasCut) return '';
+    // Only render the combined cycle bar when both phases are set and form
+    // a sensible back-to-back (or overlapping) range - otherwise there's no
+    // single meaningful timeline to draw.
+    const allDates = [phase.bulk_start, phase.bulk_end, phase.cut_start, phase.cut_end].sort();
+    const cycleStart = allDates[0], cycleEnd = allDates[allDates.length - 1];
+    const totalSpan = Math.max(1, (new Date(cycleEnd) - new Date(cycleStart)) / 86400000);
+    const bulkPct = Math.max(0, Math.min(100, ((new Date(phase.bulk_end) - new Date(phase.bulk_start)) / 86400000) / totalSpan * 100));
+    const cutPct = Math.max(0, Math.min(100, ((new Date(phase.cut_end) - new Date(phase.cut_start)) / 86400000) / totalSpan * 100));
+    const today = todayStr();
+    const todayPct = Math.max(0, Math.min(100, ((new Date(today) - new Date(cycleStart)) / 86400000) / totalSpan * 100));
+    // Marker renders inside whichever segment today falls in, positioned
+    // relative to that segment's own width.
+    const bulkMarker = (today >= phase.bulk_start && today <= phase.bulk_end)
+      ? `<div class="cycle-today-marker" style="left:${((new Date(today)-new Date(phase.bulk_start))/86400000)/((new Date(phase.bulk_end)-new Date(phase.bulk_start))/86400000)*100}%;"></div>` : '';
+    const cutMarker = (today >= phase.cut_start && today <= phase.cut_end)
+      ? `<div class="cycle-today-marker" style="left:${((new Date(today)-new Date(phase.cut_start))/86400000)/((new Date(phase.cut_end)-new Date(phase.cut_start))/86400000)*100}%;"></div>` : '';
+    return `<div class="section-label" style="padding-top:14px;">Full Cycle</div>
+      <div class="cycle-timeline">
+        <div class="cycle-track">
+          <div class="cycle-seg bulk" style="width:${bulkPct}%;">${bulkMarker}</div>
+          <div class="cycle-seg cut" style="width:${cutPct}%;">${cutMarker}</div>
+        </div>
+        <div class="cycle-labels"><span>${formatLoggedDate(cycleStart)}</span><span>${formatLoggedDate(cycleEnd)}</span></div>
+      </div>`;
+  };
+
+  if (activePhase === 'bulk' && hasBulk){
+    const cutMini = hasCut ? renderMiniFor('cut', phase.cut_start, phase.cut_end, todayStr() > phase.cut_end ? 'Complete' : 'Scheduled') : '';
+    return renderHeroFor('bulk', phase.bulk_start, phase.bulk_end)
+      + (cutMini ? `<div class="section-label" style="padding-top:6px;">Up Next</div>${cutMini}` : '')
+      + renderCycleTimeline() + editLinkHtml;
+  }
+  if (activePhase === 'cut' && hasCut){
+    const bulkMini = hasBulk ? renderMiniFor('bulk', phase.bulk_start, phase.bulk_end, 'Complete') : '';
+    return renderHeroFor('cut', phase.cut_start, phase.cut_end)
+      + (bulkMini ? `<div class="section-label" style="padding-top:6px;">Just Finished</div>${bulkMini}` : '')
+      + renderCycleTimeline() + editLinkHtml;
+  }
+
+  // Neither phase is active today - either genuinely between two set
+  // phases (gap week), or only one phase has been set and it's not
+  // currently running. Explain clearly rather than silently showing both
+  // as inactive cards with no context.
+  const today = todayStr();
+  let gapMessage = null;
+  if (hasBulk && hasCut){
+    if (today < phase.bulk_start){
+      gapMessage = `Your Bulk is scheduled to start ${formatLoggedDate(phase.bulk_start)}.`;
+    } else if (today > phase.bulk_end && today < phase.cut_start){
+      const daysSince = Math.round((new Date(today) - new Date(phase.bulk_end)) / 86400000);
+      gapMessage = `Your Bulk ended ${daysSince} day${daysSince===1?'':'s'} ago. Cut is scheduled to start ${formatLoggedDate(phase.cut_start)}.`;
+    } else if (today > phase.cut_end){
+      const daysSince = Math.round((new Date(today) - new Date(phase.cut_end)) / 86400000);
+      gapMessage = `Your Cut ended ${daysSince} day${daysSince===1?'':'s'} ago.`;
+    }
+  } else if (hasBulk && today < phase.bulk_start){
+    gapMessage = `Your Bulk is scheduled to start ${formatLoggedDate(phase.bulk_start)}.`;
+  } else if (hasBulk && today > phase.bulk_end){
+    gapMessage = `Your Bulk ended ${formatLoggedDate(phase.bulk_end)}.`;
+  } else if (hasCut && today < phase.cut_start){
+    gapMessage = `Your Cut is scheduled to start ${formatLoggedDate(phase.cut_start)}.`;
+  } else if (hasCut && today > phase.cut_end){
+    gapMessage = `Your Cut ended ${formatLoggedDate(phase.cut_end)}.`;
+  }
+
+  return `<div class="phase-hero none">
+    <div class="icon-circle" style="color:var(--slate);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg></div>
+    <div class="empty-title">Between Phases</div>
+    <div class="empty-sub">${gapMessage || 'No phase is currently active.'}</div>
+    <button class="btn-primary" id="editPhaseLink" style="width:100%; background:var(--panel); color:var(--chalk); border:1px solid var(--line);">Edit Phase Dates</button>
+  </div>` + renderCycleTimeline();
+}
+
+function fmtNum(n){
+  const rounded = Math.round(n * 10) / 10;
+  return rounded.toString();
 }
 
 function confirmDeleteBodyWeight(entryId){
@@ -8182,52 +8316,6 @@ function determineActivePhase(phase){
   if (inRange(phase.bulk_start, phase.bulk_end)) return 'bulk';
   if (inRange(phase.cut_start, phase.cut_end)) return 'cut';
   return phase.current_phase || null; // today falls in neither range - fall back to the stored value
-}
-
-async function renderPhase(){
-  app.innerHTML = `<div class="app-shell"><div class="login-wrap"><div class="login-sub">Loading your phase…</div></div></div>`;
-  const phase = await loadPhase();
-  const activePhase = phase ? determineActivePhase(phase) : null;
-
-  let bulkHtml, cutHtml;
-  if (phase && phase.bulk_start && phase.bulk_end){
-    const isActive = activePhase === 'bulk';
-    const w = weeksBetween(phase.bulk_start, phase.bulk_end);
-    bulkHtml = `<div class="phase-card ${isActive ? 'active' : 'upcoming'}">
-      <div class="top-row"><div class="name">Bulk</div><div class="status">${isActive ? 'ACTIVE' : 'SET'}</div></div>
-      <div class="dates">${phase.bulk_start} → ${phase.bulk_end}</div>
-      ${isActive && w ? `<div class="progress-track"><div class="progress-fill" style="width:${w.pct}%;"></div></div><div class="progress-labels"><span>Week ${w.elapsedWeeks} of ${w.totalWeeks}</span><span>${w.pct}%</span></div>` : ''}
-    </div>`;
-  } else {
-    bulkHtml = `<div class="phase-card upcoming"><div class="top-row"><div class="name">Bulk</div><div class="status">NOT SET</div></div></div>`;
-  }
-  if (phase && phase.cut_start && phase.cut_end){
-    const isActive = activePhase === 'cut';
-    const w = weeksBetween(phase.cut_start, phase.cut_end);
-    cutHtml = `<div class="phase-card ${isActive ? 'active' : 'upcoming'}">
-      <div class="top-row"><div class="name">Cut</div><div class="status">${isActive ? 'ACTIVE' : 'SET'}</div></div>
-      <div class="dates">${phase.cut_start} → ${phase.cut_end}</div>
-      ${isActive && w ? `<div class="progress-track"><div class="progress-fill" style="width:${w.pct}%;"></div></div><div class="progress-labels"><span>Week ${w.elapsedWeeks} of ${w.totalWeeks}</span><span>${w.pct}%</span></div>` : ''}
-    </div>`;
-  } else {
-    cutHtml = `<div class="phase-card upcoming"><div class="top-row"><div class="name">Cut</div><div class="status">NOT SET</div></div></div>`;
-  }
-
-  app.innerHTML = `
-    <div class="app-shell">
-      <div class="scroll-area">
-        <div class="brandbar"><picture><source srcset="icons/logo-dark.svg" media="(prefers-color-scheme: dark)"><img src="icons/logo.svg" alt=""></picture><div class="name">MONOLIFT</div><button class="brandbar-timer" onclick="openTimer()" aria-label="Timer" style="margin-left:auto; background:none; color:var(--slate); padding:6px; display:flex; align-items:center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg></button></div>
-        <div class="header"><div class="eyebrow">BULK / CUT</div><h1>Phase</h1></div>
-        <div class="section-label">Bulk</div>
-        ${bulkHtml}
-        <div class="section-label">Cut</div>
-        ${cutHtml}
-        <div style="padding:0 18px; margin-top:16px;"><a class="edit-link" id="editPhaseLink">Edit dates</a></div>
-      </div>
-      ${renderTabbar()}
-    </div>`;
-  attachShellHandlers();
-  document.getElementById('editPhaseLink').onclick = () => openEditPhaseForm(phase);
 }
 
 function openEditPhaseForm(existing){
