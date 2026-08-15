@@ -152,3 +152,28 @@ input:focus, button:focus{ outline:none; }
 .account-email{ font-size:16px; font-weight:600; }
 .account-tag{ font-size:13px; color:var(--good); margin-top:2px; }
 .me-item{ display:flex; justify-content:space-between; align-items:center; padding:14px 18px; border-bottom:1px solid var(--line); font-size:16px; }
+
+/* ---------- Body Measurements (Scale / Log Weigh-In) ---------- */
+.measure-toggle-row{ display:flex; align-items:center; justify-content:space-between; margin:6px 18px 14px 18px; padding:13px 15px; background:var(--panel); border-radius:14px; cursor:pointer; }
+.measure-toggle-row .left{ display:flex; align-items:center; gap:10px; }
+.measure-toggle-row .icon{ width:30px; height:30px; border-radius:9px; background:rgba(255,107,26,0.14); display:flex; align-items:center; justify-content:center; color:var(--flame); flex-shrink:0; }
+.measure-toggle-row .title{ font-family:'Oswald', sans-serif; font-size:14.5px; font-weight:500; }
+.measure-toggle-row .sub{ font-size:11.5px; color:var(--slate); margin-top:1px; }
+.measure-toggle-row .chev{ color:var(--slate); font-size:18px; transition:transform 0.2s; }
+.measure-toggle-row .chev.open{ transform:rotate(90deg); color:var(--flame); }
+.measure-section{ margin:0 18px 8px 18px; padding:4px 0 8px 0; border-left:2px solid var(--line); padding-left:14px; margin-left:20px; }
+.measure-unit-row{ display:flex; align-items:center; justify-content:space-between; padding:2px 0 12px 0; }
+.measure-unit-row .lbl{ font-family:'JetBrains Mono', monospace; font-size:11px; color:var(--slate); letter-spacing:0.5px; }
+.measure-grid{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.measure-field{ background:var(--panel); border-radius:12px; padding:10px 12px; }
+.measure-field .mlabel{ font-size:11px; color:var(--slate); margin-bottom:4px; display:flex; align-items:center; justify-content:space-between; }
+.measure-field .mlabel .opt-tag{ color:#5d5f64; font-size:9.5px; text-transform:uppercase; letter-spacing:0.5px; }
+.measure-field .minput-row{ display:flex; align-items:baseline; gap:4px; }
+.measure-field input{ font-family:'JetBrains Mono', monospace; font-size:16px; font-weight:600; color:var(--chalk); width:100%; background:none; border:none; outline:none; }
+.measure-field input::placeholder{ color:#5d5f64; }
+.measure-field .unit-suffix{ font-size:11px; color:var(--slate); flex-shrink:0; }
+.measure-group-label{ font-family:'JetBrains Mono', monospace; font-size:10px; color:#5d5f64; letter-spacing:1px; text-transform:uppercase; margin:14px 0 7px 0; }
+.measure-group-label:first-child{ margin-top:2px; }
+.measure-pills{ display:flex; flex-wrap:wrap; gap:5px; margin-top:2px; }
+.measure-pill{ font-family:'JetBrains Mono', monospace; font-size:10.5px; color:var(--slate); background:rgba(255,255,255,0.04); border-radius:6px; padding:3px 7px; }
+.measure-pill b{ color:var(--chalk); font-weight:600; }

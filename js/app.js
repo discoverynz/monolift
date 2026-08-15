@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.180';
+const APP_VERSION = 'Beta 5.181';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -707,7 +707,7 @@ function attachShellHandlers(){
   });
   const fab = document.getElementById('fabBtn');
   if (fab) fab.onclick = () => {
-    if (state.currentTab === 'scale') openLogWeightForm();
+    if (state.currentTab === 'scale') openLogWeightForm(state.lastMeasurementUnit);
     else openPicker(); // track, balance, me all default to the set-logging picker
   };
 }
@@ -7851,9 +7851,30 @@ function openTimer(){
 }
 
 // ---------- SCALE ----------
+const MEASUREMENT_FIELDS = [
+  { key: 'neck', label: 'Neck', group: 'Upper Body' },
+  { key: 'chest', label: 'Chest', group: 'Upper Body' },
+  { key: 'left_arm', label: 'Left Arm', group: 'Upper Body' },
+  { key: 'right_arm', label: 'Right Arm', group: 'Upper Body' },
+  { key: 'waist', label: 'Waist', group: 'Core' },
+  { key: 'hips', label: 'Hips', group: 'Core' },
+  { key: 'left_thigh', label: 'Left Thigh', group: 'Lower Body' },
+  { key: 'right_thigh', label: 'Right Thigh', group: 'Lower Body' },
+  { key: 'left_calf', label: 'Left Calf', group: 'Lower Body' },
+  { key: 'right_calf', label: 'Right Calf', group: 'Lower Body' },
+];
+const MEASUREMENT_GROUPS = ['Upper Body', 'Core', 'Lower Body'];
+// Short labels for the history-row pills, so "Left Arm" -> "L Arm" etc. and
+// the pill row doesn't wrap onto four lines for someone who fills in all 10.
+const MEASUREMENT_SHORT_LABELS = {
+  neck: 'Neck', chest: 'Chest', left_arm: 'L Arm', right_arm: 'R Arm',
+  waist: 'Waist', hips: 'Hips', left_thigh: 'L Thigh', right_thigh: 'R Thigh',
+  left_calf: 'L Calf', right_calf: 'R Calf'
+};
+
 async function loadBodyWeight(){
   const result = await withTimeout(
-    supabaseClient.from('body_weight').select('id, weight, unit, logged_at, notes').order('logged_at', { ascending: false }).limit(20),
+    supabaseClient.from('body_weight').select('id, weight, unit, logged_at, notes, measurement_unit, neck, chest, waist, hips, left_arm, right_arm, left_thigh, right_thigh, left_calf, right_calf').order('logged_at', { ascending: false }).limit(20),
     15000
   );
   return result.__timeout || result.error ? [] : (result.data || []);
@@ -7864,16 +7885,27 @@ async function renderScale(){
   const entries = await loadBodyWeight();
   const latest = entries[0];
   const prev = entries[1];
+  // Cache the most recent measurement unit used (if any entry has one) so
+  // the Log Weigh-In form can default to it without an extra query.
+  const lastWithMeasurements = entries.find(e => e.measurement_unit);
+  state.lastMeasurementUnit = lastWithMeasurements ? lastWithMeasurements.measurement_unit : null;
   let deltaHtml = '';
   if (latest && prev){
     const diff = (latest.weight - prev.weight).toFixed(1);
     const arrow = diff > 0 ? '↑' : (diff < 0 ? '↓' : '→');
     deltaHtml = `<div class="delta">${arrow} ${Math.abs(diff)}${latest.unit} since last entry</div>`;
   }
-  const rows = entries.map(e => `<div class="log-row" data-id="${e.id}" style="flex-direction:column; align-items:flex-start; gap:3px;">
+  const rows = entries.map(e => {
+    const filledMeasurements = MEASUREMENT_FIELDS.filter(f => e[f.key] !== null && e[f.key] !== undefined);
+    const pillsHtml = filledMeasurements.length
+      ? `<div class="measure-pills">${filledMeasurements.map(f => `<div class="measure-pill">${MEASUREMENT_SHORT_LABELS[f.key]} <b>${e[f.key]}${e.measurement_unit || 'cm'}</b></div>`).join('')}</div>`
+      : '';
+    return `<div class="log-row" data-id="${e.id}" style="flex-direction:column; align-items:flex-start; gap:5px;">
     <div style="display:flex; justify-content:space-between; width:100%;"><div class="log-date">${formatLoggedDate(e.logged_at)}</div><div class="log-weight">${e.weight}${e.unit}</div></div>
     ${e.notes ? `<div style="font-size:11px; color:var(--slate); font-style:italic;">${e.notes}</div>` : ''}
-  </div>`).join('');
+    ${pillsHtml}
+  </div>`;
+  }).join('');
 
   let chartHtml = '';
   if (entries.length >= 2){
@@ -8009,36 +8041,109 @@ function confirmDeleteBodyWeight(entryId){
   };
 }
 
-function openLogWeightForm(){
+function openLogWeightForm(lastMeasurementUnit){
   let unit = 'kg';
+  let measurementUnit = lastMeasurementUnit || 'cm';
+  let measurementsExpanded = false;
   const overlay = document.createElement('div');
   overlay.className = 'overlay-screen';
+
+  const measureFieldHtml = (f) => `
+        <div class="measure-field">
+          <div class="mlabel">${f.label} <span class="opt-tag">opt</span></div>
+          <div class="minput-row"><input class="mf-input" data-key="${f.key}" type="number" inputmode="decimal" placeholder="—"><span class="unit-suffix mf-unit-label">${measurementUnit}</span></div>
+        </div>`;
+  const measureGroupHtml = (group) => `
+      <div class="measure-group-label">${group}</div>
+      <div class="measure-grid">
+        ${MEASUREMENT_FIELDS.filter(f => f.group === group).map(measureFieldHtml).join('')}
+      </div>`;
+
   overlay.innerHTML = `
-    <div class="form-header"><button id="closeW">✕</button><h1>Log Weight</h1><div style="width:18px;"></div></div>
+    <div class="form-header"><button id="closeW">✕</button><h1>Log Weigh-In</h1><div style="width:18px;"></div></div>
     <div class="overlay-scroll">
-      <div class="field-label">Weight</div>
+      <div class="field-label"><span style="color:var(--flame); font-size:14px;">●</span> Weight</div>
       <div class="field-card">
         <input class="field-input" id="bwInput" type="number" inputmode="decimal" placeholder="0">
         <div class="unit-toggle"><button class="active" data-u="kg">kg</button><button data-u="lb">lb</button></div>
       </div>
-      <div class="field-label">Notes (optional)</div>
+
+      <div class="measure-toggle-row" id="measureToggleRow">
+        <div class="left">
+          <div class="icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12H3M3 12l4-4M3 12l4 4M21 12l-4-4M21 12l-4 4"/></svg></div>
+          <div>
+            <div class="title">Body Measurements</div>
+            <div class="sub" id="measureSub">Optional — track arms, waist &amp; more</div>
+          </div>
+        </div>
+        <div class="chev" id="measureChev">›</div>
+      </div>
+
+      <div class="measure-section" id="measureSection" style="display:none;">
+        <div class="measure-unit-row">
+          <span class="lbl">MEASUREMENT UNIT</span>
+          <div class="unit-toggle" id="measureUnitToggle"><button class="${measurementUnit==='cm'?'active':''}" data-mu="cm">cm</button><button class="${measurementUnit==='in'?'active':''}" data-mu="in">in</button></div>
+        </div>
+        ${MEASUREMENT_GROUPS.map(measureGroupHtml).join('')}
+      </div>
+
+      <div class="field-label">Notes <span class="opt">(optional)</span></div>
       <div class="field-card"><input class="field-input" id="bwNotes" type="text" placeholder="Anything worth remembering"></div>
-      <button class="save-btn" id="saveWBtn">Save Weight</button>
+      <button class="save-btn" id="saveWBtn">Save Weigh-In</button>
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#closeW').onclick = () => overlay.remove();
-  overlay.querySelectorAll('.unit-toggle button').forEach(b => {
-    b.onclick = () => { overlay.querySelectorAll('.unit-toggle button').forEach(x=>x.classList.remove('active')); b.classList.add('active'); unit = b.dataset.u; };
+  overlay.querySelectorAll('.field-card .unit-toggle button').forEach(b => {
+    b.onclick = () => { overlay.querySelectorAll('.field-card .unit-toggle button').forEach(x=>x.classList.remove('active')); b.classList.add('active'); unit = b.dataset.u; };
   });
+
+  const updateMeasureSub = () => {
+    const filled = overlay.querySelectorAll('.mf-input').length
+      ? [...overlay.querySelectorAll('.mf-input')].filter(i => i.value.trim() !== '').length
+      : 0;
+    const sub = overlay.querySelector('#measureSub');
+    sub.textContent = measurementsExpanded
+      ? `${filled} of ${MEASUREMENT_FIELDS.length} filled in`
+      : 'Optional — track arms, waist & more';
+  };
+
+  overlay.querySelector('#measureToggleRow').onclick = () => {
+    measurementsExpanded = !measurementsExpanded;
+    overlay.querySelector('#measureSection').style.display = measurementsExpanded ? 'block' : 'none';
+    overlay.querySelector('#measureChev').classList.toggle('open', measurementsExpanded);
+    updateMeasureSub();
+  };
+  overlay.querySelectorAll('.mf-input').forEach(inp => { inp.addEventListener('input', updateMeasureSub); });
+  overlay.querySelector('#measureUnitToggle').querySelectorAll('button').forEach(b => {
+    b.onclick = () => {
+      overlay.querySelector('#measureUnitToggle').querySelectorAll('button').forEach(x=>x.classList.remove('active'));
+      b.classList.add('active');
+      measurementUnit = b.dataset.mu;
+      overlay.querySelectorAll('.mf-unit-label').forEach(el => { el.textContent = measurementUnit; });
+    };
+  });
+
   overlay.querySelector('#saveWBtn').onclick = async () => {
     const weight = parseFloat(document.getElementById('bwInput').value);
     if (!weight){ alert('Enter a weight.'); return; }
     await withButtonLoading(overlay.querySelector('#saveWBtn'), 'Saving…', async () => {
       const notes = document.getElementById('bwNotes').value.trim();
       const { data: userData } = await supabaseClient.auth.getUser();
-      const { error } = await supabaseClient.from('body_weight').insert({
+      const payload = {
         user_id: userData.user.id, weight, unit, logged_at: todayStr(), notes: notes || null
-      });
+      };
+      // Only attach measurement fields (and the unit that governs them) if at
+      // least one was actually filled in - keeps weight-only entries from
+      // carrying a pointless measurement_unit value with all-null fields.
+      const anyMeasurementFilled = [...overlay.querySelectorAll('.mf-input')].some(i => i.value.trim() !== '');
+      if (anyMeasurementFilled){
+        payload.measurement_unit = measurementUnit;
+        MEASUREMENT_FIELDS.forEach(f => {
+          const val = overlay.querySelector(`.mf-input[data-key="${f.key}"]`).value.trim();
+          payload[f.key] = val === '' ? null : parseFloat(val);
+        });
+      }
+      const { error } = await supabaseClient.from('body_weight').insert(payload);
       if (error){ alert(error.message); return; }
       overlay.remove();
       renderScale();
