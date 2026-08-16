@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.188';
+const APP_VERSION = 'Beta 5.189';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -8118,6 +8118,21 @@ async function renderScale(){
   if (editPhaseLink) editPhaseLink.onclick = () => openEditPhaseForm(phase);
   const phaseNudgeBtn = document.getElementById('phaseNudgeBtn');
   if (phaseNudgeBtn) phaseNudgeBtn.onclick = () => openEditPhaseForm(phase);
+  const pausePhaseBtn = document.getElementById('pausePhaseBtn');
+  if (pausePhaseBtn) pausePhaseBtn.onclick = () => {
+    showConfirmDialog(
+      'Your phase dates freeze while paused - nothing counts against them. When you resume, every date shifts forward by however long you were paused, so you pick up exactly where you left off.',
+      async () => { await setPhasePaused(phase, true); renderScale(); },
+      { title: 'Pause Bulk/Cut Cycle?', confirmLabel: 'Pause' }
+    );
+  };
+  const resumePhaseBtn = document.getElementById('resumePhaseBtn');
+  if (resumePhaseBtn) resumePhaseBtn.onclick = async () => {
+    await withButtonLoading(resumePhaseBtn, 'Resuming…', async () => {
+      await setPhasePaused(phase, false);
+      renderScale();
+    });
+  };
   document.querySelectorAll('.scroll-area .log-row[data-id]').forEach(row => {
     let pressTimer = null;
     const start = () => { pressTimer = setTimeout(() => confirmDeleteBodyWeight(row.dataset.id), 550); };
@@ -8136,7 +8151,8 @@ async function renderScale(){
 // list (avoids a second query) used to compute the start->current->change
 // stats for the active phase from real weigh-ins during that window.
 async function buildPhaseHeroHtml(phase, weightEntries){
-  const editLinkHtml = `<div style="padding:0 18px; margin-top:14px;"><a class="edit-link" id="editPhaseLink">Edit phase dates</a></div>`;
+  const editLinkHtml = `<div style="padding:0 18px; margin-top:14px; display:flex; gap:18px; align-items:center;"><a class="edit-link" id="editPhaseLink">Edit phase dates</a><a class="edit-link" id="pausePhaseBtn">Pause cycle</a></div>`;
+  const editOnlyLinkHtml = `<div style="padding:0 18px; margin-top:14px;"><a class="edit-link" id="editPhaseLink">Edit phase dates</a></div>`;
   const hasBulk = phase && phase.bulk_start && phase.bulk_end;
   const hasCut = phase && phase.cut_start && phase.cut_end;
 
@@ -8147,6 +8163,30 @@ async function buildPhaseHeroHtml(phase, weightEntries){
       <div class="empty-sub">Set your bulk and cut dates to track progress against a plan, with weight change pulled automatically from your weigh-ins.</div>
       <button class="btn-primary" id="editPhaseLink" style="width:100%;">Set Bulk / Cut Dates</button>
     </div>`;
+  }
+
+  if (isPhasePaused(phase)){
+    // Which phase was running when the pause started - computed against the
+    // pause date, not today, since the dates are deliberately frozen.
+    const pausedOn = phase.paused_at;
+    const inRangeAt = (start, end, d) => start && end && d >= start && d <= end;
+    const heldKind = inRangeAt(phase.bulk_start, phase.bulk_end, pausedOn) ? 'bulk'
+      : inRangeAt(phase.cut_start, phase.cut_end, pausedOn) ? 'cut' : null;
+    const days = daysPaused(phase);
+    let heldDetail = '';
+    if (heldKind){
+      const w = weeksBetweenAtDate(phase[`${heldKind}_start`], phase[`${heldKind}_end`], pausedOn);
+      heldDetail = `Your ${heldKind === 'bulk' ? 'Bulk' : 'Cut'} is on hold${w ? ` at Week ${w.elapsedWeeks} of ${w.totalWeeks}` : ''}.`;
+    } else {
+      heldDetail = 'Your cycle is on hold.';
+    }
+    return `<div class="phase-hero paused">
+      <div class="eyebrow-row"><div class="tag">Paused</div><div class="daysleft">${days === 0 ? 'Paused today' : `${days} day${days===1?'':'s'} paused`}</div></div>
+      <div class="big-name">On Hold</div>
+      <div class="week-of">${heldDetail} Nothing counts against it while paused.</div>
+      <div class="paused-note">When you resume, every phase date shifts forward by however long you were paused — so you pick up exactly where you left off, not further along.</div>
+      <button class="btn-primary" id="resumePhaseBtn" style="width:100%; margin-top:14px;">Resume Cycle</button>
+    </div>` + editOnlyLinkHtml;
   }
 
   const activePhase = determineActivePhase(phase);
@@ -8492,6 +8532,48 @@ function projectPhaseWeightChange(startWeight, weeks, kind){
   return { changeAmount, finishWeight, ratePct: Math.round(rate * 1000) / 10 };
 }
 
+function addDaysToDate(dateStr, days){
+  const d = new Date(dateStr + 'T00:00:00');
+  d.setDate(d.getDate() + days);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function isPhasePaused(phase){
+  return !!(phase && phase.paused_at);
+}
+
+function daysPaused(phase){
+  if (!isPhasePaused(phase)) return 0;
+  return Math.max(0, Math.round((new Date(todayStr()) - new Date(phase.paused_at)) / 86400000));
+}
+
+// Pausing records WHEN the pause started and deliberately leaves the phase
+// dates untouched. Resuming then shifts every date forward by the elapsed
+// pause duration, so progress is preserved rather than draining away while
+// the user isn't training - someone who pauses in Week 6 of 8 comes back to
+// Week 6 of 8, not Week 8.
+async function setPhasePaused(phase, paused){
+  const { data: userData } = await supabaseClient.auth.getUser();
+  if (!userData || !userData.user) return null;
+  if (paused){
+    const payload = { paused_at: todayStr() };
+    const { error } = await supabaseClient.from('phase_settings').update(payload).eq('user_id', userData.user.id);
+    if (error){ alert(error.message); return null; }
+    return { ...phase, ...payload };
+  }
+  const shift = daysPaused(phase);
+  const payload = { paused_at: null };
+  ['bulk_start','bulk_end','cut_start','cut_end'].forEach(k => {
+    if (phase[k]) payload[k] = addDaysToDate(phase[k], shift);
+  });
+  const { error } = await supabaseClient.from('phase_settings').update(payload).eq('user_id', userData.user.id);
+  if (error){ alert(error.message); return null; }
+  return { ...phase, ...payload };
+}
+
 function addWeeksToDate(dateStr, weeks){
   const d = new Date(dateStr + 'T00:00:00');
   d.setDate(d.getDate() + weeks * 7);
@@ -8529,6 +8611,10 @@ function computeChainedDates(anchorStart, order, bulkWeeks, cutWeeks){
 // phase just... expired, with no indication of what comes next.
 async function advanceAutoScheduleIfNeeded(phase){
   if (!phase || phase.schedule_mode !== 'auto' || !phase.auto_repeat) return phase;
+  // Never advance the cycle while paused - the whole point of a pause is
+  // that time stops counting against the phase, so rolling it forward
+  // underneath a paused user would defeat it entirely.
+  if (isPhasePaused(phase)) return phase;
   if (!phase.bulk_weeks || !phase.cut_weeks) return phase;
   if (!phase.bulk_start || !phase.bulk_end || !phase.cut_start || !phase.cut_end) return phase;
   const today = todayStr();
@@ -8573,15 +8659,22 @@ function weeksBetweenRaw(startStr, endStr){
   return (new Date(endStr) - new Date(startStr)) / (86400000 * 7);
 }
 
-function weeksBetween(startStr, endStr){
+// Progress through a date range as of a specific date. Used by the paused
+// card to report the week number frozen at the moment of pausing, rather
+// than letting it drift forward while the cycle is on hold.
+function weeksBetweenAtDate(startStr, endStr, asOfStr){
   if (!startStr || !endStr) return null;
-  const start = new Date(startStr), end = new Date(endStr), now = new Date();
+  const start = new Date(startStr), end = new Date(endStr), ref = new Date(asOfStr);
   const totalDays = Math.max(1, Math.round((end - start) / 86400000));
   const totalWeeks = Math.max(1, Math.round(totalDays / 7));
-  const daysElapsed = Math.max(0, Math.min(totalDays, Math.floor((now - start) / 86400000)));
+  const daysElapsed = Math.max(0, Math.min(totalDays, Math.floor((ref - start) / 86400000)));
   const elapsedWeeks = Math.min(totalWeeks, Math.floor(daysElapsed / 7) + 1);
   const pct = Math.round((daysElapsed / totalDays) * 100);
   return { totalWeeks, elapsedWeeks, pct };
+}
+
+function weeksBetween(startStr, endStr){
+  return weeksBetweenAtDate(startStr, endStr, todayStr());
 }
 
 // Determines which phase is actually active by checking today's real date against

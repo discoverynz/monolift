@@ -269,3 +269,9 @@ input:focus, button:focus{ outline:none; }
 .ending-soon-nudge .txt b{ color:#FFD166; }
 .ending-soon-nudge button{ font-family:'JetBrains Mono', monospace; font-size:11px; color:var(--ink); background:#FFD166; padding:8px 12px; border-radius:9px; font-weight:700; white-space:nowrap; border:none; }
 .cycle-seg.ghost{ background:repeating-linear-gradient(45deg, rgba(255,255,255,0.06), rgba(255,255,255,0.06) 4px, transparent 4px, transparent 8px); }
+
+/* ---------- Paused phase state ---------- */
+.phase-hero.paused{ background:linear-gradient(145deg, rgba(140,142,148,0.14), rgba(140,142,148,0.03)); border:1px solid rgba(140,142,148,0.35); }
+.phase-hero.paused .tag{ background:rgba(140,142,148,0.22); color:var(--slate); }
+.phase-hero.paused .big-name{ color:var(--slate); }
+.phase-hero .paused-note{ font-size:11.5px; color:var(--slate); line-height:1.5; margin-top:12px; padding-top:12px; border-top:1px solid rgba(255,255,255,0.07); }
