@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.186';
+const APP_VERSION = 'Beta 5.187';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -3104,6 +3104,10 @@ async function openDefaultLocationPicker(){
     <div style="width:100%; background:var(--panel); border-radius:18px 18px 0 0; padding:20px 18px calc(20px + env(safe-area-inset-bottom, 0px)) 18px;">
       <div class="field-label" style="padding:0 0 4px 0;">Default Location</div>
       <div class="small" style="padding:0 0 12px 0; color:var(--slate); line-height:1.5;">Used when logging a set if Track isn't currently set to a specific location.</div>
+      ${state.locationDefaultColumnMissing ? `<div style="background:#2a1618; border:1px solid #5c2b2f; border-radius:10px; padding:11px 13px; margin-bottom:12px;">
+        <div class="small" style="color:#E8492A; line-height:1.5;">⚠ Your default location is only stored on this device right now, so it gets lost whenever the browser clears its storage — which is why it may have stopped applying each day.</div>
+        <div class="small" style="color:var(--slate); line-height:1.5; margin-top:6px;">Run <span style="color:var(--chalk); font-family:'JetBrains Mono',monospace;">migration_location_default.sql</span> in Supabase to make it stick permanently.</div>
+      </div>` : ''}
       <div class="pick-row" data-loc="" style="${!currentId ? 'color:var(--flame);' : ''}"><div class="ex-name">None</div>${!currentId ? '<span>✓</span>' : ''}</div>
       ${locations.map(l => `<div class="pick-row" data-loc="${l.id}" style="${l.id===currentId ? 'color:var(--flame);' : ''}"><div class="ex-name">${l.name}</div>${l.id===currentId ? '<span>✓</span>' : ''}</div>`).join('')}
       <div class="pick-row" id="newDefaultLocRow"><div class="ex-name" style="color:var(--flame);">+ New Location</div></div>
@@ -6862,18 +6866,25 @@ async function loadLocations(){
     15000
   );
   let locations;
+  let isDefaultColumnMissing = false;
   if (!result.__timeout && !result.error){
     locations = result.data || [];
   } else {
     // equipment_tags/is_default columns may not exist yet if the migration
     // hasn't been run - retry without them rather than silently losing
-    // every location.
+    // every location. Flag it though: without is_default, the DB-backed
+    // self-heal below can never restore a cleared default location, so the
+    // "defaults to my gym each day" behaviour silently stops working
+    // permanently once localStorage is cleared (a known iOS PWA issue).
+    // Surfacing this beats letting it fail invisibly forever.
+    isDefaultColumnMissing = !result.__timeout && !!result.error;
     const fallback = await withTimeout(
       supabaseClient.from('locations').select('id, name').eq('user_id', userData.user.id).order('name'),
       15000
     );
     locations = fallback.__timeout || fallback.error ? [] : (fallback.data || []).map(l => ({ ...l, equipment_tags: [], is_default: false }));
   }
+  state.locationDefaultColumnMissing = isDefaultColumnMissing;
   // Self-heal: if localStorage's default location got cleared (a known iOS
   // PWA issue) but the database still has one marked, restore it here -
   // this runs every time Track loads, so it recovers on the very next load.
