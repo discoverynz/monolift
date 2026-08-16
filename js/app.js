@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.184';
+const APP_VERSION = 'Beta 5.185';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -6122,7 +6122,10 @@ async function openChangeSingleDay(){
         };
       });
       body.querySelector('#confirmChangeDayBtn').onclick = async () => { await withButtonLoading(body.querySelector('#confirmChangeDayBtn'), 'Applying…', async () => {
-        const snapshot = allExercises.map(ex => ({ id: ex.id, weekday: ex.weekday }));
+        // Snapshot includes masterId (master schema only - undefined/ignored
+        // for legacy) so a revert can RECREATE a link that got deleted by
+        // cleanup, not just update-by-id a row that may no longer exist.
+        const snapshot = allExercises.map(ex => ({ id: ex.id, weekday: ex.weekday, masterId: ex.masterId }));
         localStorage.setItem('zealift_reorg_snapshot', JSON.stringify({ snapshot, at: new Date().toISOString() }));
 
         // Same conservative alt-group rule as the full reorganizer: if a
@@ -6523,8 +6526,11 @@ async function openPlanReorganizer(){
 
     body.querySelector('#confirmReorgBtn').onclick = async () => { await withButtonLoading(body.querySelector('#confirmReorgBtn'), 'Applying…', async () => { try {
       // Snapshot current weekday assignments before touching anything, so this
-      // can be reverted in one tap from Me -> Data.
-      const snapshot = allExercises.map(ex => ({ id: ex.id, weekday: ex.weekday }));
+      // can be reverted in one tap from Me -> Data. Includes masterId (master
+      // schema only) so a revert can RECREATE a link the cleanup step deleted,
+      // not just update-by-id a row that may no longer exist by the time
+      // Revert is tapped.
+      const snapshot = allExercises.map(ex => ({ id: ex.id, weekday: ex.weekday, masterId: ex.masterId }));
       localStorage.setItem('zealift_reorg_snapshot', JSON.stringify({ snapshot, at: new Date().toISOString() }));
 
       // Full Body is fundamentally different from the other splits: every
@@ -6653,14 +6659,42 @@ async function revertLastReorganization(){
   const raw = localStorage.getItem('zealift_reorg_snapshot');
   if (!raw){ alert('No reorganization to revert.'); return; }
   const { snapshot } = JSON.parse(raw);
-  const table = getUseExerciseMasterFlag() ? 'exercise_days' : 'exercises';
+  const useMaster = getUseExerciseMasterFlag();
+  const table = useMaster ? 'exercise_days' : 'exercises';
   showConfirmDialog(`Restore ${snapshot.length} exercises to their previous days?`, async () => {
+    const { data: userData } = await supabaseClient.auth.getUser();
+    let recreated = 0, updated = 0, failed = 0;
     for (const item of snapshot){
-      await supabaseClient.from(table).update({ weekday: item.weekday }).eq('id', item.id);
+      const result = await supabaseClient.from(table).update({ weekday: item.weekday }).eq('id', item.id).select();
+      if (!result.error && result.data && result.data.length){
+        updated++;
+        continue;
+      }
+      // Zero rows matched - the row was DELETED (not just moved) by a
+      // cleanup step, e.g. an exercise that was on a day later marked
+      // "Rest" during this reorganization. An update can't bring back a
+      // deleted row, so recreate the link instead. Only possible on the
+      // master schema, where masterId identifies the actual exercise
+      // independent of the (now-gone) day-link row.
+      if (useMaster && item.masterId && userData && userData.user){
+        // Guard against creating a duplicate link if the user already
+        // manually re-added this exercise to this day before hitting Revert.
+        const existingResult = await supabaseClient.from('exercise_days').select('id').eq('user_id', userData.user.id).eq('exercise_master_id', item.masterId).eq('weekday', item.weekday).limit(1);
+        if (!existingResult.error && existingResult.data && existingResult.data.length){
+          updated++; // already present - count as restored, nothing to do
+          continue;
+        }
+        const { error: insertError } = await supabaseClient.from('exercise_days').insert({
+          user_id: userData.user.id, exercise_master_id: item.masterId, weekday: item.weekday
+        });
+        if (!insertError) recreated++; else failed++;
+      } else {
+        failed++;
+      }
     }
     localStorage.removeItem('zealift_reorg_snapshot');
     if (state.currentTab === 'track') renderTrack();
-    alert('Reverted.');
+    alert(`Reverted. ${updated} restored directly, ${recreated} recreated (had been removed by cleanup)${failed ? `, ${failed} could not be restored` : ''}.`);
   }, { title: 'Revert Reorganization?', confirmLabel: 'Restore' });
 }
 
