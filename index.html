@@ -9,40 +9,27 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="MonoLift">
 <link rel="manifest" href="manifest.json">
-<!-- Default apple-touch-icon is the light-mode variant (design 2: dark M on orange bg). iOS reads this at add-to-home-screen time. Apple never documented supporting the media attribute on apple-touch-icon so we can't rely on two tags with prefers-color-scheme - instead we swap the href with JS below BEFORE iOS captures the icon. -->
-<link rel="apple-touch-icon" id="appleTouchIcon" sizes="180x180" href="icons/icon-180-light-v4.png">
-<script>
-  // iOS reads the current state of link[rel=apple-touch-icon] when the user
-  // taps Share -> Add to Home Screen. Swap to the dark-mode variant if the
-  // user is currently in dark mode so the home-screen icon matches. iOS 18
-  // auto-tints icons that don't already have a dark background - design 1
-  // (orange M on dark bg) is dark-native so it survives that tinting; design
-  // 2 (dark M on orange) gets destroyed since iOS darkens the orange bg and
-  // the M becomes invisible against it. Switching designs is our only way
-  // out on PWAs since iOS doesn't accept dark-icon metadata for web apps.
-  try {
-    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-      document.getElementById('appleTouchIcon').href = 'icons/icon-180-dark-v4.png';
-    }
-  } catch (e) { /* very old browser, keep light default */ }
-</script>
-<!-- SVG favicon is infinitely scalable on every modern browser - always crisp regardless of zoom or DPI -->
-<link rel="icon" type="image/svg+xml" href="icons/logo.svg" media="(prefers-color-scheme: light)">
-<link rel="icon" type="image/svg+xml" href="icons/logo-dark.svg" media="(prefers-color-scheme: dark)">
-<!-- PNG fallback ladder for older browsers - lets the browser pick the sharpest for the display -->
-<link rel="icon" type="image/png" sizes="32x32" href="icons/icon-32.png">
-<link rel="icon" type="image/png" sizes="48x48" href="icons/icon-48.png">
-<link rel="icon" type="image/png" sizes="64x64" href="icons/icon-64.png">
-<link rel="icon" type="image/png" sizes="96x96" href="icons/icon-96.png">
-<link rel="icon" type="image/png" sizes="128x128" href="icons/icon-128.png">
+<!-- Single logo everywhere now - dark background, orange M. No more
+     prefers-color-scheme branching: this design already has a dark
+     background, so there's nothing for iOS's dark-mode home-screen
+     auto-tinting to ruin, and one consistent mark shows in every context
+     (browser tab, PWA home screen, in-app header) regardless of system
+     light/dark mode. -->
+<link rel="apple-touch-icon" sizes="180x180" href="icons/icon-180-v5.png">
+<link rel="icon" type="image/svg+xml" href="icons/logo.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/icon-32-v5.png">
+<link rel="icon" type="image/png" sizes="48x48" href="icons/icon-48-v5.png">
+<link rel="icon" type="image/png" sizes="64x64" href="icons/icon-64-v5.png">
+<link rel="icon" type="image/png" sizes="96x96" href="icons/icon-96-v5.png">
+<link rel="icon" type="image/png" sizes="128x128" href="icons/icon-128-v5.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&family=Bebas+Neue&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/styles.css?v=234">
+<link rel="stylesheet" href="css/styles.css?v=235">
 </head>
 <body>
 <div id="app"></div>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="js/supabase-client.js?v=234"></script>
-<script src="js/app.js?v=234"></script>
+<script src="js/supabase-client.js?v=235"></script>
+<script src="js/app.js?v=235"></script>
 </body>
 </html>
