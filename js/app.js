@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.185';
+const APP_VERSION = 'Beta 5.186';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -6276,6 +6276,40 @@ async function openPlanReorganizer(){
       loadExerciseDB()
     ]);
 
+    // Build the set of "weekday|exercisename" pairs the user has actually
+    // logged sets against. These are protected from the cleanup step later -
+    // an automated tidy-up must never silently remove a placement the user
+    // has done real work on (this is exactly how a manually-built Sunday
+    // session got wiped when Sunday was marked Rest in a reorganize).
+    const protectedDayNames = new Set();
+    try {
+      const useMaster = getUseExerciseMasterFlag();
+      const idField = useMaster ? 'exercise_master_id' : 'exercise_id';
+      const setsResult = await withTimeout(
+        supabaseClient.from('sets').select(`${idField}, logged_at`).eq('user_id', userData.user.id),
+        15000
+      );
+      if (!setsResult.__timeout && !setsResult.error && setsResult.data){
+        const nameById = {};
+        allExercises.forEach(ex => {
+          const key = useMaster ? ex.masterId : ex.id;
+          if (key) nameById[key] = ex.name.toLowerCase();
+        });
+        setsResult.data.forEach(s => {
+          const name = nameById[s[idField]];
+          if (!name || !s.logged_at) return;
+          const d = new Date(s.logged_at + 'T00:00:00');
+          const jsDay = d.getDay();
+          const weekday = jsDay === 0 ? 6 : jsDay - 1; // app uses Monday-first weekdays
+          protectedDayNames.add(weekday + '|' + name);
+        });
+      }
+    } catch(e){
+      // If this lookup fails, leave the set empty rather than blocking the
+      // whole reorganize - the confirm screen still lists removals explicitly.
+      console.error('Could not build protected-set list for reorganize:', e);
+    }
+
     // Group all exercises by distinct name, deriving each name's category once.
     const byName = {};
     allExercises.forEach(ex => {
@@ -6439,8 +6473,51 @@ async function openPlanReorganizer(){
           `}
         </div>
       `).join('')}
-      <button class="save-btn" id="confirmReorgBtn" style="margin:0 18px 20px 18px;">Confirm & Apply</button>
+      <button class="save-btn" id="confirmReorgBtn" style="margin:0 18px 20px 18px;">Confirm &amp; Apply</button>
     `;
+
+    // Compute and display exactly what would be REMOVED before the user
+    // confirms. Without this the confirm screen only ever showed additions,
+    // so exercises sitting on a day about to be marked Rest would silently
+    // disappear with no warning anywhere in the flow.
+    (function renderRemovalPreview(){
+      const reorganizedDayIdxsPreview = new Set(dayPlans.filter(dp => !dp.isCustom && dayAssignments[dp.dayIdx]).map(dp => dp.dayIdx));
+      const plannedNames = new Set();
+      dayPlans.forEach(dp => {
+        if (dp.isCustom){
+          (customSelections[dp.dayIdx] ? [...customSelections[dp.dayIdx]] : []).forEach(n => plannedNames.add(dp.dayIdx + '|' + n.toLowerCase()));
+        } else {
+          dp.slots.forEach((slot, si) => {
+            const chosenName = swapChoices[dp.dayIdx + '|' + si] || slot.representative.name;
+            plannedNames.add(dp.dayIdx + '|' + chosenName.toLowerCase());
+          });
+        }
+      });
+      const willRemove = [], willProtect = [];
+      allExercises.forEach(ex => {
+        if (!reorganizedDayIdxsPreview.has(ex.weekday)) return;
+        const key = ex.weekday + '|' + ex.name.toLowerCase();
+        if (plannedNames.has(key)) return;
+        if (protectedDayNames.has(key)) willProtect.push({ name: ex.name, day: DAY_NAMES[ex.weekday] });
+        else willRemove.push({ name: ex.name, day: DAY_NAMES[ex.weekday] });
+      });
+      if (!willRemove.length && !willProtect.length) return;
+      const panel = document.createElement('div');
+      panel.style = 'margin:0 18px 16px 18px;';
+      panel.innerHTML = `
+        ${willRemove.length ? `<div style="background:#2a1618; border:1px solid #5c2b2f; border-radius:10px; padding:12px 14px; margin-bottom:${willProtect.length?'10px':'0'};">
+          <div class="ex-name" style="font-size:12px; color:#E8492A; margin-bottom:6px;">${willRemove.length} exercise${willRemove.length===1?'':'s'} will be removed from ${willRemove.length===1?'its':'their'} current day</div>
+          <div style="max-height:140px; overflow-y:auto;">${willRemove.map(r => `<div class="small" style="color:#E89A93; padding:2px 0;">• ${r.name} <span style="color:var(--slate);">(from ${r.day})</span></div>`).join('')}</div>
+          <div class="small" style="color:var(--slate); margin-top:7px; line-height:1.45;">These have no logged sets on that day. The exercise and all its history stay in your library — only the day placement is removed.</div>
+        </div>` : ''}
+        ${willProtect.length ? `<div style="background:#16210f; border:1px solid #2f4a1d; border-radius:10px; padding:12px 14px;">
+          <div class="ex-name" style="font-size:12px; color:var(--good); margin-bottom:6px;">${willProtect.length} exercise${willProtect.length===1?'':'s'} kept — you've logged sets on ${willProtect.length===1?'it':'them'}</div>
+          <div style="max-height:120px; overflow-y:auto;">${willProtect.map(r => `<div class="small" style="color:#A8D492; padding:2px 0;">• ${r.name} <span style="color:var(--slate);">(on ${r.day})</span></div>`).join('')}</div>
+          <div class="small" style="color:var(--slate); margin-top:7px; line-height:1.45;">Real training is never removed automatically. Remove ${willProtect.length===1?'it':'them'} manually from Track if you don't want ${willProtect.length===1?'it':'them'} there.</div>
+        </div>` : ''}`;
+      const confirmBtn = body.querySelector('#confirmReorgBtn');
+      confirmBtn.parentNode.insertBefore(panel, confirmBtn);
+    })();
 
     // Removing a shown item means it stays where it is - tracked via a simple
     // exclusion set, pre-populated with anything the balancing step left out
@@ -6598,6 +6675,12 @@ async function openPlanReorganizer(){
       for (const ex of allExercises){
         if (!reorganizedDayIdxs.has(ex.weekday)) continue;
         if (touchedDayNames.has(ex.weekday + '|' + ex.name)) continue;
+        // NEVER silently remove an exercise the user has actually logged sets
+        // against. An automated tidy-up sweeping away real, deliberate work
+        // is far worse than leaving a stale placement behind - the user can
+        // always remove it manually, but they can't get back a day's worth of
+        // logging they didn't know had been unlinked.
+        if (protectedDayNames.has(ex.weekday + '|' + ex.name.toLowerCase())) continue;
         try {
           const result = await removeExerciseFromDay(ex);
           if (result.ok) cleanedUp.push({ name: ex.name, fromDay: DAY_NAMES[ex.weekday] });
