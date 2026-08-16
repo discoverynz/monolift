@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.187';
+const APP_VERSION = 'Beta 5.188';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -8242,37 +8242,56 @@ async function buildPhaseHeroHtml(phase, weightEntries){
     const ghostFraction = isRepeating ? 0.35 : 0;
     const realFraction = 1 - ghostFraction;
     const totalSpan = Math.max(1, (new Date(cycleEnd) - new Date(cycleStart)) / 86400000);
-    const bulkPct = Math.max(0, Math.min(100, ((new Date(phase.bulk_end) - new Date(phase.bulk_start)) / 86400000) / totalSpan * 100 * realFraction));
-    const cutPct = Math.max(0, Math.min(100, ((new Date(phase.cut_end) - new Date(phase.cut_start)) / 86400000) / totalSpan * 100 * realFraction));
     const ghostPct = ghostFraction * 100;
     const today = todayStr();
-    // Marker renders inside whichever segment today falls in, positioned
-    // relative to that segment's own width.
-    const bulkMarker = (today >= phase.bulk_start && today <= phase.bulk_end)
-      ? `<div class="cycle-today-marker" style="left:${((new Date(today)-new Date(phase.bulk_start))/86400000)/((new Date(phase.bulk_end)-new Date(phase.bulk_start))/86400000)*100}%;"></div>` : '';
-    const cutMarker = (today >= phase.cut_start && today <= phase.cut_end)
-      ? `<div class="cycle-today-marker" style="left:${((new Date(today)-new Date(phase.cut_start))/86400000)/((new Date(phase.cut_end)-new Date(phase.cut_start))/86400000)*100}%;"></div>` : '';
+    const segFor = (kind) => {
+      const start = phase[`${kind}_start`], end = phase[`${kind}_end`];
+      const pct = Math.max(0, Math.min(100, ((new Date(end) - new Date(start)) / 86400000) / totalSpan * 100 * realFraction));
+      const marker = (today >= start && today <= end)
+        ? `<div class="cycle-today-marker" style="left:${((new Date(today)-new Date(start))/86400000)/((new Date(end)-new Date(start))/86400000)*100}%;"></div>` : '';
+      return `<div class="cycle-seg ${kind}" style="width:${pct}%;">${marker}</div>`;
+    };
+    // Render segments in real chronological order - whichever phase starts
+    // first is drawn first. Previously this was hardcoded bulk-then-cut,
+    // which drew the bar backwards relative to its own date labels whenever
+    // the cut ran first (as auto-scheduling produces for a mid-cut setup).
+    const chronological = phase.bulk_start <= phase.cut_start ? ['bulk','cut'] : ['cut','bulk'];
     return `<div class="section-label" style="padding-top:14px;">Full Cycle</div>
       <div class="cycle-timeline">
         <div class="cycle-track">
-          <div class="cycle-seg bulk" style="width:${bulkPct}%;">${bulkMarker}</div>
-          <div class="cycle-seg cut" style="width:${cutPct}%;">${cutMarker}</div>
+          ${chronological.map(segFor).join('')}
           ${isRepeating ? `<div class="cycle-seg ghost" style="width:${ghostPct}%;"></div>` : ''}
         </div>
         <div class="cycle-labels"><span>${formatLoggedDate(cycleStart)}</span><span>${isRepeating ? `Repeating beyond ${formatLoggedDate(cycleEnd)} →` : formatLoggedDate(cycleEnd)}</span></div>
       </div>`;
   };
 
+  // Works out how to present the non-active phase relative to today, rather
+  // than assuming a fixed bulk-then-cut order. Auto-scheduling chains
+  // whichever phase is currently running into the other one, so when the
+  // user sets up mid-cut the bulk legitimately comes AFTER the cut - the
+  // old hardcoded "Just Finished / Complete" was wrong in exactly that case.
+  const describeOtherPhase = (kind) => {
+    const start = phase[`${kind}_start`], end = phase[`${kind}_end`];
+    if (!start || !end) return null;
+    const today = todayStr();
+    if (today > end) return { label: 'Just Finished', status: 'Complete' };
+    if (today < start) return { label: 'Up Next', status: 'Scheduled' };
+    return { label: 'Also Active', status: 'Overlapping' }; // overlapping ranges - surface rather than mislabel
+  };
+
   if (activePhase === 'bulk' && hasBulk){
-    const cutMini = hasCut ? renderMiniFor('cut', phase.cut_start, phase.cut_end, todayStr() > phase.cut_end ? 'Complete' : 'Scheduled') : '';
+    const d = hasCut ? describeOtherPhase('cut') : null;
+    const cutMini = d ? renderMiniFor('cut', phase.cut_start, phase.cut_end, d.status) : '';
     return renderHeroFor('bulk', phase.bulk_start, phase.bulk_end)
-      + (cutMini ? `<div class="section-label" style="padding-top:6px;">Up Next</div>${cutMini}` : '')
+      + (cutMini ? `<div class="section-label" style="padding-top:6px;">${d.label}</div>${cutMini}` : '')
       + renderCycleTimeline() + editLinkHtml;
   }
   if (activePhase === 'cut' && hasCut){
-    const bulkMini = hasBulk ? renderMiniFor('bulk', phase.bulk_start, phase.bulk_end, 'Complete') : '';
+    const d = hasBulk ? describeOtherPhase('bulk') : null;
+    const bulkMini = d ? renderMiniFor('bulk', phase.bulk_start, phase.bulk_end, d.status) : '';
     return renderHeroFor('cut', phase.cut_start, phase.cut_end)
-      + (bulkMini ? `<div class="section-label" style="padding-top:6px;">Just Finished</div>${bulkMini}` : '')
+      + (bulkMini ? `<div class="section-label" style="padding-top:6px;">${d.label}</div>${bulkMini}` : '')
       + renderCycleTimeline() + editLinkHtml;
   }
 
