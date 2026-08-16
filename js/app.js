@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.182';
+const APP_VERSION = 'Beta 5.183';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -7988,6 +7988,8 @@ async function renderScale(){
   attachShellHandlers();
   const editPhaseLink = document.getElementById('editPhaseLink');
   if (editPhaseLink) editPhaseLink.onclick = () => openEditPhaseForm(phase);
+  const phaseNudgeBtn = document.getElementById('phaseNudgeBtn');
+  if (phaseNudgeBtn) phaseNudgeBtn.onclick = () => openEditPhaseForm(phase);
   document.querySelectorAll('.scroll-area .log-row[data-id]').forEach(row => {
     let pressTimer = null;
     const start = () => { pressTimer = setTimeout(() => confirmDeleteBodyWeight(row.dataset.id), 550); };
@@ -8060,12 +8062,34 @@ async function buildPhaseHeroHtml(phase, weightEntries){
         <div class="phase-stat"><div class="label">Change</div><div class="value ${isOnTrack ? 'positive' : 'negative'}">${change >= 0 ? '+' : ''}${fmtNum(change)}${unit}</div></div>
       </div>`;
     }
+    const repeatBadge = (phase.schedule_mode === 'auto' && phase.auto_repeat) ? `<span class="repeat-badge">↻ Auto-Repeating</span>` : '';
+    // Proactive nudge in the final week of a phase - either a friendly heads
+    // up (next phase already scheduled) or a call to action (nothing
+    // scheduled after this one ends, so the user isn't left with an
+    // expired phase and no idea what happened).
+    let nudgeHtml = '';
+    if (daysLeft <= 7){
+      const otherKind = kind === 'bulk' ? 'cut' : 'bulk';
+      const otherHasFutureDates = phase[`${otherKind}_start`] && phase[`${otherKind}_start`] >= end;
+      if (otherHasFutureDates){
+        nudgeHtml = `<div class="ending-soon-nudge">
+          <div class="txt">Your ${kind === 'bulk' ? 'Bulk' : 'Cut'} ends in <b>${daysLeft} day${daysLeft===1?'':'s'}</b>. ${otherKind === 'bulk' ? 'Bulk' : 'Cut'} is already scheduled to start right after.</div>
+          <button id="phaseNudgeBtn">Review</button>
+        </div>`;
+      } else {
+        nudgeHtml = `<div class="ending-soon-nudge">
+          <div class="txt">Your ${kind === 'bulk' ? 'Bulk' : 'Cut'} ends in <b>${daysLeft} day${daysLeft===1?'':'s'}</b>. What's next?</div>
+          <button id="phaseNudgeBtn">Schedule</button>
+        </div>`;
+      }
+    }
     return `<div class="phase-hero ${kind}">
       <div class="eyebrow-row"><div class="tag">Active Phase</div><div class="daysleft">${daysLeft} day${daysLeft===1?'':'s'} left</div></div>
-      <div class="big-name">${kind === 'bulk' ? 'Bulk' : 'Cut'}</div>
+      <div class="big-name">${kind === 'bulk' ? 'Bulk' : 'Cut'}${repeatBadge}</div>
       <div class="week-of">${w ? `Week ${w.elapsedWeeks} of ${w.totalWeeks} · ` : ''}${formatLoggedDate(start)} — ${formatLoggedDate(end)}</div>
       ${w ? `<div class="progress-track"><div class="progress-fill" style="width:${w.pct}%;"></div></div><div class="progress-labels"><span>${w.pct}% through</span><span>Week ${w.elapsedWeeks}/${w.totalWeeks}</span></div>` : ''}
       ${statsHtml}
+      ${nudgeHtml}
     </div>`;
   };
 
@@ -8081,11 +8105,19 @@ async function buildPhaseHeroHtml(phase, weightEntries){
     // single meaningful timeline to draw.
     const allDates = [phase.bulk_start, phase.bulk_end, phase.cut_start, phase.cut_end].sort();
     const cycleStart = allDates[0], cycleEnd = allDates[allDates.length - 1];
+    const isRepeating = phase.schedule_mode === 'auto' && phase.auto_repeat;
+    // When repeating, reserve a third of the bar's width for a hatched
+    // "ghost" segment representing future cycles that haven't been
+    // concretely computed yet (they get generated lazily by
+    // advanceAutoScheduleIfNeeded once the current cycle actually elapses,
+    // rather than pre-writing years of dates to the database now).
+    const ghostFraction = isRepeating ? 0.35 : 0;
+    const realFraction = 1 - ghostFraction;
     const totalSpan = Math.max(1, (new Date(cycleEnd) - new Date(cycleStart)) / 86400000);
-    const bulkPct = Math.max(0, Math.min(100, ((new Date(phase.bulk_end) - new Date(phase.bulk_start)) / 86400000) / totalSpan * 100));
-    const cutPct = Math.max(0, Math.min(100, ((new Date(phase.cut_end) - new Date(phase.cut_start)) / 86400000) / totalSpan * 100));
+    const bulkPct = Math.max(0, Math.min(100, ((new Date(phase.bulk_end) - new Date(phase.bulk_start)) / 86400000) / totalSpan * 100 * realFraction));
+    const cutPct = Math.max(0, Math.min(100, ((new Date(phase.cut_end) - new Date(phase.cut_start)) / 86400000) / totalSpan * 100 * realFraction));
+    const ghostPct = ghostFraction * 100;
     const today = todayStr();
-    const todayPct = Math.max(0, Math.min(100, ((new Date(today) - new Date(cycleStart)) / 86400000) / totalSpan * 100));
     // Marker renders inside whichever segment today falls in, positioned
     // relative to that segment's own width.
     const bulkMarker = (today >= phase.bulk_start && today <= phase.bulk_end)
@@ -8097,8 +8129,9 @@ async function buildPhaseHeroHtml(phase, weightEntries){
         <div class="cycle-track">
           <div class="cycle-seg bulk" style="width:${bulkPct}%;">${bulkMarker}</div>
           <div class="cycle-seg cut" style="width:${cutPct}%;">${cutMarker}</div>
+          ${isRepeating ? `<div class="cycle-seg ghost" style="width:${ghostPct}%;"></div>` : ''}
         </div>
-        <div class="cycle-labels"><span>${formatLoggedDate(cycleStart)}</span><span>${formatLoggedDate(cycleEnd)}</span></div>
+        <div class="cycle-labels"><span>${formatLoggedDate(cycleStart)}</span><span>${isRepeating ? `Repeating beyond ${formatLoggedDate(cycleEnd)} →` : formatLoggedDate(cycleEnd)}</span></div>
       </div>`;
   };
 
@@ -8294,7 +8327,103 @@ async function loadPhase(){
     15000
   );
   if (result.__timeout || result.error || !result.data) return null;
-  return result.data;
+  return await advanceAutoScheduleIfNeeded(result.data);
+}
+
+// Typical rate of bodyweight change per week used for the projection helper
+// text on duration pickers - general periodization guidance, not a
+// personalized or clinical figure. Bulk: ~0.35%/week (lean bulk). Cut:
+// ~0.7%/week (a sustainable, muscle-sparing rate for most lifters).
+const PHASE_RATE_PER_WEEK = { bulk: 0.0035, cut: 0.007 };
+
+function projectPhaseWeightChange(startWeight, weeks, kind){
+  if (!startWeight || !weeks) return null;
+  const rate = PHASE_RATE_PER_WEEK[kind];
+  const direction = kind === 'bulk' ? 1 : -1;
+  const changeAmount = Math.round(startWeight * rate * weeks * direction * 10) / 10;
+  const finishWeight = Math.round((startWeight + changeAmount) * 10) / 10;
+  return { changeAmount, finishWeight, ratePct: Math.round(rate * 1000) / 10 };
+}
+
+function addWeeksToDate(dateStr, weeks){
+  const d = new Date(dateStr + 'T00:00:00');
+  d.setDate(d.getDate() + weeks * 7);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+// Chains concrete bulk/cut date ranges starting from anchorStart, in the
+// given order (['bulk','cut'] or ['cut','bulk']), using the two durations.
+// This is the single place that turns "12 weeks then 8 weeks" into actual
+// calendar dates - used both by the Edit Phase form's live preview and by
+// the auto-repeat cycle advancement.
+function computeChainedDates(anchorStart, order, bulkWeeks, cutWeeks){
+  const weeksFor = { bulk: bulkWeeks, cut: cutWeeks };
+  const dates = {};
+  let cursor = anchorStart;
+  order.forEach(kind => {
+    const start = cursor;
+    const end = addWeeksToDate(start, weeksFor[kind]);
+    dates[`${kind}_start`] = start;
+    dates[`${kind}_end`] = end;
+    cursor = end;
+  });
+  return dates;
+}
+
+// Self-healing cycle advancement: if the user has auto_repeat on and the
+// currently-stored bulk/cut dates have both fully elapsed (they haven't
+// opened the app in a while), silently compute and persist the next
+// iteration of the cycle - shifting the whole thing forward by full cycle
+// lengths until today falls within (or before) the new range. Without this,
+// a repeat-enabled user who skips a few weeks would come back to find their
+// phase just... expired, with no indication of what comes next.
+async function advanceAutoScheduleIfNeeded(phase){
+  if (!phase || phase.schedule_mode !== 'auto' || !phase.auto_repeat) return phase;
+  if (!phase.bulk_weeks || !phase.cut_weeks) return phase;
+  if (!phase.bulk_start || !phase.bulk_end || !phase.cut_start || !phase.cut_end) return phase;
+  const today = todayStr();
+  const cycleEnd = phase.bulk_end > phase.cut_end ? phase.bulk_end : phase.cut_end;
+  if (today <= cycleEnd) return phase; // cycle hasn't fully elapsed yet, nothing to do
+
+  // Figure out phase order from whichever currently starts first, and the
+  // total cycle length, then shift forward by whole cycles until today is
+  // within (or before) the new range.
+  const order = phase.bulk_start <= phase.cut_start ? ['bulk','cut'] : ['cut','bulk'];
+  const anchor = order[0] === 'bulk' ? phase.bulk_start : phase.cut_start;
+  const cycleWeeks = phase.bulk_weeks + phase.cut_weeks;
+  // Number of FULLY completed cycles between the original anchor and today -
+  // advancing by exactly this many cycles lands us on the cycle that
+  // contains (or starts closest before) today. Using floor (not ceil) is
+  // what makes this land on the right cycle rather than overshooting into
+  // a future one.
+  let cyclesElapsed = Math.max(1, Math.floor(weeksBetweenRaw(anchor, today) / cycleWeeks));
+  let newAnchor = addWeeksToDate(anchor, cyclesElapsed * cycleWeeks);
+  let newDates = computeChainedDates(newAnchor, order, phase.bulk_weeks, phase.cut_weeks);
+  // Safety check: if today is still past the new cycle's end (can happen
+  // right at a boundary, or if floor undershot by one due to the original
+  // cycle already being elapsed at the very start), advance one more cycle.
+  let newCycleEnd = newDates.bulk_end > newDates.cut_end ? newDates.bulk_end : newDates.cut_end;
+  while (today > newCycleEnd){
+    newAnchor = addWeeksToDate(newAnchor, cycleWeeks);
+    newDates = computeChainedDates(newAnchor, order, phase.bulk_weeks, phase.cut_weeks);
+    newCycleEnd = newDates.bulk_end > newDates.cut_end ? newDates.bulk_end : newDates.cut_end;
+  }
+  const updated = { ...phase, ...newDates };
+  const { data: userData } = await supabaseClient.auth.getUser();
+  if (userData && userData.user){
+    await supabaseClient.from('phase_settings').update(newDates).eq('user_id', userData.user.id);
+  }
+  return updated;
+}
+
+// Raw week count between two date strings (not rounded up to a minimum of 1
+// like weeksBetween's totalWeeks - this is used for cycle-count math where
+// exact precision matters).
+function weeksBetweenRaw(startStr, endStr){
+  return (new Date(endStr) - new Date(startStr)) / (86400000 * 7);
 }
 
 function weeksBetween(startStr, endStr){
@@ -8318,34 +8447,263 @@ function determineActivePhase(phase){
   return phase.current_phase || null; // today falls in neither range - fall back to the stored value
 }
 
-function openEditPhaseForm(existing){
+const PHASE_DURATION_PRESETS = {
+  bulk: [ { label: 'Lean', weeks: 10 }, { label: 'Standard', weeks: 12 }, { label: 'Extended', weeks: 16 } ],
+  cut:  [ { label: 'Fast', weeks: 6 }, { label: 'Standard', weeks: 8 }, { label: 'Gradual', weeks: 12 } ]
+};
+
+function openPhaseDurationInfoSheet(){
   const overlay = document.createElement('div');
   overlay.className = 'overlay-screen';
   overlay.innerHTML = `
+    <div class="form-header"><button id="closeInfo">✕</button><h1>Choosing a Duration</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll" style="padding:6px 18px;">
+      <div style="font-size:12px; color:var(--slate); margin-bottom:16px; line-height:1.5;">General guidance, not personalized medical advice — adjust based on how your body actually responds.</div>
+      <div style="background:var(--panel); border-radius:14px; padding:14px 16px; margin-bottom:10px;">
+        <div style="font-family:'Oswald',sans-serif; font-size:14px; color:var(--flame); margin-bottom:6px;">Bulk — 8 to 16 weeks</div>
+        <div style="font-size:12px; color:var(--slate); line-height:1.6;">Shorter bulks (8–10wk) keep fat gain minimal but leave less time for strength adaptation. Longer bulks (12–16wk) drive more muscle growth at the cost of more fat gained. Most lifters do well around 12 weeks.</div>
+      </div>
+      <div style="background:var(--panel); border-radius:14px; padding:14px 16px;">
+        <div style="font-family:'Oswald',sans-serif; font-size:14px; color:var(--good); margin-bottom:6px;">Cut — 6 to 12 weeks</div>
+        <div style="font-size:12px; color:var(--slate); line-height:1.6;">Faster cuts (6wk) hold onto strength better but are harder to sustain mentally. Slower cuts (10–12wk) protect muscle mass best. Cuts longer than 12 weeks risk diminishing returns and burnout — consider a maintenance break instead.</div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeInfo').onclick = () => overlay.remove();
+}
+
+async function openEditPhaseForm(existing){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  // Determine if today falls inside an already-set phase - if so, that
+  // phase's start date must be preserved when switching into Auto mode,
+  // since Week-X-of-Y and the weight-change stat both depend on it.
+  const active = existing ? determineActivePhase(existing) : null;
+  const lockedKind = (active === 'bulk' && existing && existing.bulk_start && existing.bulk_end) ? 'bulk'
+    : (active === 'cut' && existing && existing.cut_start && existing.cut_end) ? 'cut' : null;
+  const otherKind = lockedKind === 'bulk' ? 'cut' : 'bulk';
+
+  let mode = (existing && existing.schedule_mode) || 'manual';
+  // Latest weigh-in, used to seed the projection math - fetched once up front.
+  const weightEntries = await loadBodyWeight();
+  const latestWeight = weightEntries[0] || null;
+
+  // ----- Auto-mode working state -----
+  let autoRepeat = existing ? !!existing.auto_repeat : false;
+  let startWith = lockedKind || (existing && existing.bulk_start && existing.cut_start && existing.cut_start < existing.bulk_start ? 'cut' : 'bulk');
+  let beginOn = todayStr();
+  if (lockedKind){
+    beginOn = lockedKind === 'bulk' ? existing.bulk_start : existing.cut_start;
+  } else if (existing && existing[`${startWith}_start`]){
+    beginOn = existing[`${startWith}_start`];
+  }
+  let durations = {
+    bulk: (existing && existing.bulk_weeks) || (lockedKind === 'bulk' && existing && weeksBetween(existing.bulk_start, existing.bulk_end) ? weeksBetween(existing.bulk_start, existing.bulk_end).totalWeeks : 12),
+    cut: (existing && existing.cut_weeks) || (lockedKind === 'cut' && existing && weeksBetween(existing.cut_start, existing.cut_end) ? weeksBetween(existing.cut_start, existing.cut_end).totalWeeks : 8)
+  };
+
+  const durationCardHtml = (kind, isLocked) => {
+    const preset = PHASE_DURATION_PRESETS[kind];
+    return `<div class="duration-card ${kind}" data-kind="${kind}">
+      <div class="head-row">
+        <div class="phase-name"><span class="dot"></span> ${isLocked ? 'Current: ' : (lockedKind ? 'Next: ' : '')}${kind === 'bulk' ? 'Bulk' : 'Cut'}</div>
+        ${isLocked ? `<div class="lock-tag">🔒 Start Locked</div>` : `<button class="dur-info-btn" aria-label="Duration guidance">?</button>`}
+      </div>
+      <div class="stepper-row">
+        <button class="stepper-btn" data-act="dec" data-kind="${kind}">–</button>
+        <div class="stepper-value" id="durVal-${kind}">${durations[kind]}<span class="unit">wks</span></div>
+        <button class="stepper-btn" data-act="inc" data-kind="${kind}">+</button>
+      </div>
+      <div class="chip-row" id="chipRow-${kind}">
+        ${preset.map(p => `<div class="dur-chip ${p.weeks===durations[kind]?'active':''}" data-kind="${kind}" data-weeks="${p.weeks}">${p.label} · ${p.weeks}wk</div>`).join('')}
+      </div>
+      <div class="rate-projection ${kind}" id="proj-${kind}"></div>
+      <div class="dates-preview" id="datesPreview-${kind}"></div>
+    </div>`;
+  };
+
+  overlay.innerHTML = `
     <div class="form-header"><button id="closeP">✕</button><h1>Edit Phase Dates</h1><div style="width:18px;"></div></div>
     <div class="overlay-scroll">
-      <div class="form-sub" style="margin-top:0;">Which phase is active is worked out automatically from today's date against these ranges - no need to set it manually.</div>
-      <div class="field-label">Bulk Start</div>
-      <div class="field-card"><input class="field-input" id="bulkStart" type="date" style="font-size:14px;" value="${existing && existing.bulk_start ? existing.bulk_start : ''}"></div>
-      <div class="field-label">Bulk End</div>
-      <div class="field-card"><input class="field-input" id="bulkEnd" type="date" style="font-size:14px;" value="${existing && existing.bulk_end ? existing.bulk_end : ''}"></div>
-      <div class="field-label">Cut Start</div>
-      <div class="field-card"><input class="field-input" id="cutStart" type="date" style="font-size:14px;" value="${existing && existing.cut_start ? existing.cut_start : ''}"></div>
-      <div class="field-label">Cut End</div>
-      <div class="field-card"><input class="field-input" id="cutEnd" type="date" style="font-size:14px;" value="${existing && existing.cut_end ? existing.cut_end : ''}"></div>
+      <div class="mode-toggle">
+        <button class="${mode==='auto'?'active':''}" data-mode="auto">Auto Schedule</button>
+        <button class="${mode==='manual'?'active':''}" data-mode="manual">Manual Dates</button>
+      </div>
+      <div class="mode-sub" id="modeSub"></div>
+
+      <div id="autoSection" style="display:${mode==='auto'?'block':'none'};">
+        ${lockedKind ? `<div class="locked-callout" id="lockedCallout"></div>` : `
+          <div class="field-label">Start With</div>
+          <div style="display:flex; gap:8px; margin:0 18px 14px;">
+            <button class="start-with-btn ${startWith==='bulk'?'active':''}" data-w="bulk" style="flex:1; border-radius:12px; padding:12px; text-align:center; font-family:'Oswald',sans-serif; font-weight:600; font-size:14px; border:1px solid var(--line);">Bulk First</button>
+            <button class="start-with-btn ${startWith==='cut'?'active':''}" data-w="cut" style="flex:1; border-radius:12px; padding:12px; text-align:center; font-family:'Oswald',sans-serif; font-weight:600; font-size:14px; border:1px solid var(--line);">Cut First</button>
+          </div>
+          <div class="field-label">Begin On</div>
+          <div class="field-card"><input class="field-input" id="beginOnInput" type="date" style="font-size:15px;" value="${beginOn}"></div>
+        `}
+        <div id="durationCards"></div>
+        <div class="repeat-row">
+          <div class="left">
+            <div class="icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></div>
+            <div><div class="title">Repeat Cycle Automatically</div><div class="sub">Keeps chaining these two phases forever</div></div>
+          </div>
+          <button class="switch ${autoRepeat?'':'off'}" id="repeatSwitch"></button>
+        </div>
+      </div>
+
+      <div id="manualSection" style="display:${mode==='manual'?'block':'none'};">
+        <div class="form-sub" style="margin-top:0;">Which phase is active is worked out automatically from today's date against these ranges - no need to set it manually.</div>
+        <div class="field-label">Bulk Start</div>
+        <div class="field-card"><input class="field-input" id="bulkStart" type="date" style="font-size:14px;" value="${existing && existing.bulk_start ? existing.bulk_start : ''}"></div>
+        <div class="field-label">Bulk End</div>
+        <div class="field-card"><input class="field-input" id="bulkEnd" type="date" style="font-size:14px;" value="${existing && existing.bulk_end ? existing.bulk_end : ''}"></div>
+        <div class="field-label">Cut Start</div>
+        <div class="field-card"><input class="field-input" id="cutStart" type="date" style="font-size:14px;" value="${existing && existing.cut_start ? existing.cut_start : ''}"></div>
+        <div class="field-label">Cut End</div>
+        <div class="field-card"><input class="field-input" id="cutEnd" type="date" style="font-size:14px;" value="${existing && existing.cut_end ? existing.cut_end : ''}"></div>
+      </div>
+
       <button class="save-btn" id="savePBtn">Save</button>
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#closeP').onclick = () => overlay.remove();
+
+  // ----- Live recompute of duration cards, previews, and projections -----
+  function recomputeAuto(){
+    const order = lockedKind ? [lockedKind, otherKind] : (startWith === 'bulk' ? ['bulk','cut'] : ['cut','bulk']);
+    const anchor = lockedKind ? (lockedKind === 'bulk' ? existing.bulk_start : existing.cut_start)
+      : (document.getElementById('beginOnInput') ? document.getElementById('beginOnInput').value : beginOn);
+    const dates = computeChainedDates(anchor || todayStr(), order, durations.bulk, durations.cut);
+
+    // Weight projection chains across phases: first phase starts from the
+    // latest real weigh-in, second phase starts from the first phase's
+    // projected finish weight, so the numbers stay internally consistent.
+    let runningWeight = latestWeight ? latestWeight.weight : null;
+    let runningUnit = latestWeight ? latestWeight.unit : 'kg';
+    order.forEach(kind => {
+      const card = overlay.querySelector(`.duration-card[data-kind="${kind}"]`);
+      if (!card) return;
+      const proj = runningWeight ? projectPhaseWeightChange(runningWeight, durations[kind], kind) : null;
+      const projEl = document.getElementById(`proj-${kind}`);
+      if (projEl){
+        projEl.innerHTML = proj
+          ? `At a typical <b>${proj.ratePct}%/week</b> ${kind === 'bulk' ? 'bulk' : 'cut'} rate from ${runningWeight === (latestWeight&&latestWeight.weight) ? 'your last weigh-in of' : 'a projected'} ${runningWeight}${runningUnit}, ${durations[kind]} weeks ≈ <b>${proj.changeAmount >= 0 ? '+' : ''}${proj.changeAmount}${runningUnit}</b> → finishing around <b>${proj.finishWeight}${runningUnit}</b>.`
+          : `Log a weigh-in to see a projected weight change for this phase.`;
+      }
+      const previewEl = document.getElementById(`datesPreview-${kind}`);
+      if (previewEl) previewEl.textContent = `${formatLoggedDate(dates[`${kind}_start`])} → ${formatLoggedDate(dates[`${kind}_end`])}`;
+      if (proj) runningWeight = proj.finishWeight;
+    });
+
+    return { order, dates };
+  }
+
+  // Build duration cards in the right order (locked/current first if applicable)
+  const durationCardsEl = overlay.querySelector('#durationCards');
+  if (durationCardsEl){
+    const order = lockedKind ? [lockedKind, otherKind] : (startWith === 'bulk' ? ['bulk','cut'] : ['cut','bulk']);
+    durationCardsEl.innerHTML = order.map(k => durationCardHtml(k, k === lockedKind)).join('');
+  }
+
+  if (lockedKind){
+    const w = weeksBetween(existing[`${lockedKind}_start`], existing[`${lockedKind}_end`]);
+    const startedLabel = formatLoggedDate(existing[`${lockedKind}_start`]);
+    document.getElementById('lockedCallout').innerHTML = `
+      <div class="icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
+      <div>
+        <div class="title">You're in Week ${w ? w.elapsedWeeks : 1} of your ${lockedKind === 'bulk' ? 'Bulk' : 'Cut'}</div>
+        <div class="sub">Started ${startedLabel} — that start date is locked so your weight-change stats stay accurate. Only the end date (and anything after it) will move.</div>
+      </div>`;
+  }
+
+  document.getElementById('modeSub').textContent = mode === 'auto'
+    ? 'Set a duration for each phase and MonoLift schedules the exact dates — chaining Bulk straight into Cut and back again if you want.'
+    : 'Enter exact start and end dates yourself for full manual control.';
+
+  overlay.querySelectorAll('.mode-toggle button').forEach(b => {
+    b.onclick = () => {
+      mode = b.dataset.mode;
+      overlay.querySelectorAll('.mode-toggle button').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      overlay.querySelector('#autoSection').style.display = mode === 'auto' ? 'block' : 'none';
+      overlay.querySelector('#manualSection').style.display = mode === 'manual' ? 'block' : 'none';
+      document.getElementById('modeSub').textContent = mode === 'auto'
+        ? 'Set a duration for each phase and MonoLift schedules the exact dates — chaining Bulk straight into Cut and back again if you want.'
+        : 'Enter exact start and end dates yourself for full manual control.';
+    };
+  });
+
+  overlay.querySelectorAll('.start-with-btn').forEach(b => {
+    b.onclick = () => {
+      startWith = b.dataset.w;
+      overlay.querySelectorAll('.start-with-btn').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      const order = startWith === 'bulk' ? ['bulk','cut'] : ['cut','bulk'];
+      durationCardsEl.innerHTML = order.map(k => durationCardHtml(k, false)).join('');
+      wireDurationCardHandlers();
+      recomputeAuto();
+    };
+  });
+
+  const beginOnInput = document.getElementById('beginOnInput');
+  if (beginOnInput) beginOnInput.addEventListener('change', () => { beginOn = beginOnInput.value; recomputeAuto(); });
+
+  function wireDurationCardHandlers(){
+    overlay.querySelectorAll('.stepper-btn').forEach(b => {
+      b.onclick = () => {
+        const kind = b.dataset.kind;
+        const delta = b.dataset.act === 'inc' ? 1 : -1;
+        durations[kind] = Math.max(1, Math.min(52, durations[kind] + delta));
+        document.getElementById(`durVal-${kind}`).innerHTML = `${durations[kind]}<span class="unit">wks</span>`;
+        overlay.querySelectorAll(`.dur-chip[data-kind="${kind}"]`).forEach(c => c.classList.toggle('active', parseInt(c.dataset.weeks,10) === durations[kind]));
+        recomputeAuto();
+      };
+    });
+    overlay.querySelectorAll('.dur-chip').forEach(c => {
+      c.onclick = () => {
+        const kind = c.dataset.kind;
+        durations[kind] = parseInt(c.dataset.weeks, 10);
+        document.getElementById(`durVal-${kind}`).innerHTML = `${durations[kind]}<span class="unit">wks</span>`;
+        overlay.querySelectorAll(`.dur-chip[data-kind="${kind}"]`).forEach(x => x.classList.remove('active'));
+        c.classList.add('active');
+        recomputeAuto();
+      };
+    });
+    overlay.querySelectorAll('.dur-info-btn').forEach(b => { b.onclick = () => openPhaseDurationInfoSheet(); });
+  }
+  wireDurationCardHandlers();
+  recomputeAuto();
+
+  const repeatSwitch = document.getElementById('repeatSwitch');
+  if (repeatSwitch) repeatSwitch.onclick = () => {
+    autoRepeat = !autoRepeat;
+    repeatSwitch.classList.toggle('off', !autoRepeat);
+  };
+
   overlay.querySelector('#savePBtn').onclick = async () => { await withButtonLoading(overlay.querySelector('#savePBtn'), 'Saving…', async () => {
     const { data: userData } = await supabaseClient.auth.getUser();
-    const payload = {
-      user_id: userData.user.id,
-      bulk_start: document.getElementById('bulkStart').value || null,
-      bulk_end: document.getElementById('bulkEnd').value || null,
-      cut_start: document.getElementById('cutStart').value || null,
-      cut_end: document.getElementById('cutEnd').value || null
-    };
+    let payload;
+    if (mode === 'auto'){
+      const { order, dates } = recomputeAuto();
+      payload = {
+        user_id: userData.user.id,
+        schedule_mode: 'auto',
+        bulk_weeks: durations.bulk,
+        cut_weeks: durations.cut,
+        auto_repeat: autoRepeat,
+        bulk_start: dates.bulk_start, bulk_end: dates.bulk_end,
+        cut_start: dates.cut_start, cut_end: dates.cut_end
+      };
+    } else {
+      payload = {
+        user_id: userData.user.id,
+        schedule_mode: 'manual',
+        bulk_start: document.getElementById('bulkStart').value || null,
+        bulk_end: document.getElementById('bulkEnd').value || null,
+        cut_start: document.getElementById('cutStart').value || null,
+        cut_end: document.getElementById('cutEnd').value || null
+      };
+    }
     const { error } = await supabaseClient.from('phase_settings').upsert(payload, { onConflict: 'user_id' });
     if (error){ alert(error.message); return; }
     overlay.remove();
