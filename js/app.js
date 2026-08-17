@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.196';
+const APP_VERSION = 'Beta 5.197';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -18,7 +18,7 @@ function addCustomCategory(name){
 // category actually in use on the user's own exercises (catches categories
 // created on another device that this one hasn't cached yet).
 async function getAllCategories(){
-  const { data: userData } = await supabaseClient.auth.getUser();
+  const userData = { user: await getCurrentUser() };
   const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
   const result = await withTimeout(
     supabaseClient.from(table).select('category').eq('user_id', userData.user.id),
@@ -108,7 +108,7 @@ function getStarterExercises(dayTypeLabel){
   return STARTER_EXERCISES[key] || DEFAULT_STARTERS;
 }
 async function quickAddStarter(name, category, weekday){
-  const { data: userData } = await supabaseClient.auth.getUser();
+  const userData = { user: await getCurrentUser() };
   const compatEx = await fetchAllExercisesCompat(userData.user.id);
   const existingMatch = compatEx.find(ex => ex.weekday === weekday && ex.name.toLowerCase() === name.toLowerCase());
   if (existingMatch){ renderTrack(); return; }
@@ -157,7 +157,7 @@ async function healMasterFlagFromDb(){
   __masterFlagHealChecked = true;
   if (getUseExerciseMasterFlag()) return; // already on, nothing to heal
   try {
-    const { data: userData } = await supabaseClient.auth.getUser();
+    const userData = { user: await getCurrentUser() };
     if (!userData || !userData.user) return;
     const result = await withTimeout(
       supabaseClient.from('exercise_master').select('id', { count: 'exact', head: true }).eq('user_id', userData.user.id).limit(1),
@@ -632,6 +632,51 @@ function withTimeout(promise, ms){
   const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve({ __timeout: true }), ms); });
   return Promise.race([promise, timeout]).then((r) => { clearTimeout(timer); return r; });
 }
+// How far back the per-exercise set history query reaches. This feeds the
+// "last set", stagnation detection, and the all-time-max PR badge. Pulling
+// unbounded history meant every Track render and every day-chip tap
+// re-transferred the user's entire logging history, which grows without
+// limit. Two years comfortably covers any lift the user is actively
+// training - a "personal record" from more than two years ago on a lift
+// you still do is effectively unheard of, and the badge is more meaningful
+// scoped to recent training anyway.
+const SET_HISTORY_WINDOW_DAYS = 730;
+function setHistoryCutoff(){ return addDaysToDate(todayStr(), -SET_HISTORY_WINDOW_DAYS); }
+
+// Cached, timeout-protected current user.
+//
+// supabaseClient.auth.getUser() can hit the network to validate/refresh the
+// token. With no timeout that call can hang indefinitely, and since it sits
+// at the top of every loader a single stalled call freezes the whole render
+// on "Loading your exercises…" forever. The user also cannot change within a
+// session, so calling it repeatedly per render was wasted round-trips.
+//
+// This caches the resolved user for the session, prefers the already-held
+// local session object (no network at all), and hard-caps the fallback so a
+// stalled auth call degrades into a normal error state instead of a hang.
+let __cachedUser = null;
+let __cachedUserPromise = null;
+async function getCurrentUser(){
+  if (__cachedUser) return __cachedUser;
+  if (__cachedUserPromise) return __cachedUserPromise;
+  __cachedUserPromise = (async () => {
+    // The session we already hold carries the user - use it and skip the
+    // network entirely, which is the common case after login.
+    if (state.session && state.session.user){
+      __cachedUser = state.session.user;
+      return __cachedUser;
+    }
+    const res = await withTimeout(supabaseClient.auth.getUser(), 8000);
+    if (res && !res.__timeout && res.data && res.data.user){
+      __cachedUser = res.data.user;
+      return __cachedUser;
+    }
+    return null;
+  })().finally(() => { __cachedUserPromise = null; });
+  return __cachedUserPromise;
+}
+function clearCachedUser(){ __cachedUser = null; __cachedUserPromise = null; }
+
 function todayStr(){
   const d = new Date();
   const yyyy = d.getFullYear();
@@ -826,7 +871,7 @@ async function loadExercises(generation){
   // a later one, this call must not overwrite state.exercises with its
   // now-outdated day-specific data.
   const isStale = () => generation !== undefined && state.renderGeneration !== generation;
-  const { data: userData } = await supabaseClient.auth.getUser();
+  const userData = { user: await getCurrentUser() };
   if (!userData || !userData.user){
     if (isStale()) return;
     state.exercises = null;
@@ -878,7 +923,7 @@ async function loadExercises(generation){
   let maxSetByExercise = {};
   let loggedOnTargetByExId = new Set();
   if (exerciseIds.length){
-    const { data: userData } = await supabaseClient.auth.getUser();
+    const userData = { user: await getCurrentUser() };
     // The same exercise name can exist as separate records on other days, each
     // with its own isolated set history. Find every sibling record sharing each
     // exercise's name so the PR reflects the true all-time best, not just what
@@ -901,7 +946,7 @@ async function loadExercises(generation){
 
     let setsResult = await withTimeout(
       supabaseClient.from('sets').select('exercise_id, weight, weight_unit, weight_type, reps, num_sets, logged_at, location_id')
-        .in('exercise_id', [...prQueryIds]).order('logged_at', { ascending: false }),
+        .in('exercise_id', [...prQueryIds]).gte('logged_at', setHistoryCutoff()).order('logged_at', { ascending: false }).limit(4000),
       15000
     );
     // Same resilience fix as the exercises query above - a newer optional
@@ -913,7 +958,7 @@ async function loadExercises(generation){
       locationDataAvailable = false;
       setsResult = await withTimeout(
         supabaseClient.from('sets').select('exercise_id, weight, weight_unit, weight_type, reps, num_sets, logged_at')
-          .in('exercise_id', [...prQueryIds]).order('logged_at', { ascending: false }),
+          .in('exercise_id', [...prQueryIds]).gte('logged_at', setHistoryCutoff()).order('logged_at', { ascending: false }).limit(4000),
         15000
       );
     }
@@ -1013,7 +1058,7 @@ function detectWeightStagnation(setsForExercise){
 
 async function loadExercisesFromMaster(generation){
   const isStale = () => generation !== undefined && state.renderGeneration !== generation;
-  const { data: userData } = await supabaseClient.auth.getUser();
+  const userData = { user: await getCurrentUser() };
   if (!userData || !userData.user){
     // Session gone mid-render - fail into the explicit error state rather
     // than crashing, so the user sees "Could not load" not a blank screen.
@@ -1055,7 +1100,7 @@ async function loadExercisesFromMaster(generation){
   if (masterIds.length){
     let setsResult = await withTimeout(
       supabaseClient.from('sets').select('exercise_master_id, weight, weight_unit, weight_type, reps, num_sets, logged_at, location_id')
-        .in('exercise_master_id', masterIds).order('logged_at', { ascending: false }),
+        .in('exercise_master_id', masterIds).gte('logged_at', setHistoryCutoff()).order('logged_at', { ascending: false }).limit(4000),
       15000
     );
     let locationDataAvailable = true;
@@ -1064,7 +1109,7 @@ async function loadExercisesFromMaster(generation){
       locationDataAvailable = false;
       setsResult = await withTimeout(
         supabaseClient.from('sets').select('exercise_master_id, weight, weight_unit, weight_type, reps, num_sets, logged_at')
-          .in('exercise_master_id', masterIds).order('logged_at', { ascending: false }),
+          .in('exercise_master_id', masterIds).gte('logged_at', setHistoryCutoff()).order('logged_at', { ascending: false }).limit(4000),
         15000
       );
     }
@@ -1279,7 +1324,7 @@ async function moveExerciseToDay(item, newWeekday, clearAlt){
   if (!existing.__timeout && !existing.error && existing.data){
     results.push({ id: existing.data.id, ok: true, error: null }); // already exists, nothing to do
   } else {
-    const { data: userData } = await supabaseClient.auth.getUser();
+    const userData = { user: await getCurrentUser() };
     const { data, error } = await supabaseClient.from('exercise_days').insert({
       user_id: userData.user.id, exercise_master_id: item.masterId, weekday: newWeekday
     }).select();
@@ -1378,7 +1423,7 @@ function setDefaultLocationId(id){
   // Persist to the database too, in the background, so this survives a
   // cleared localStorage (a known iOS PWA issue) rather than being lost.
   (async () => {
-    const { data: userData } = await supabaseClient.auth.getUser();
+    const userData = { user: await getCurrentUser() };
     if (!userData || !userData.user) return;
     await supabaseClient.from('locations').update({ is_default: false }).eq('user_id', userData.user.id).eq('is_default', true);
     if (id) await supabaseClient.from('locations').update({ is_default: true }).eq('id', id);
@@ -1661,7 +1706,7 @@ async function quickSaveSet(exerciseId, exerciseName, best){
   // saveEntry: a quick-save during app boot could otherwise land under the
   // wrong exercise-id field and be invisible to subsequent reads.
   await awaitMasterFlagHealed();
-  const { data: userData } = await supabaseClient.auth.getUser();
+  const userData = { user: await getCurrentUser() };
   const useMaster = getUseExerciseMasterFlag();
   const idField = useMaster ? 'exercise_master_id' : 'exercise_id';
   const weight = best.weight, unit = best.weight_unit, weightType = best.weight_type || 'total';
@@ -1780,7 +1825,7 @@ function exerciseRow(ex){
 }
 
 async function loadDayType(weekday){
-  const { data: userData } = await supabaseClient.auth.getUser();
+  const userData = { user: await getCurrentUser() };
   // Not signed in - genuinely nothing to load, return null so the caller
   // shows a neutral fallback (DAY_NAMES[weekday] = "MON", "TUE" etc.) rather
   // than a hardcoded default plan that was never actually set by anyone.
@@ -2041,7 +2086,7 @@ async function openLinkSetsToMasterScreen(){
   document.body.appendChild(overlay);
   overlay.querySelector('#closeLinkSets').onclick = () => overlay.remove();
 
-  const { data: userData } = await supabaseClient.auth.getUser();
+  const userData = { user: await getCurrentUser() };
   const uid = userData.user.id;
   const body = overlay.querySelector('#linkSetsBody');
 
@@ -2130,7 +2175,7 @@ async function openVerifyMigrationScreen(){
   document.body.appendChild(overlay);
   overlay.querySelector('#closeVerify').onclick = () => overlay.remove();
 
-  const { data: userData } = await supabaseClient.auth.getUser();
+  const userData = { user: await getCurrentUser() };
   const uid = userData.user.id;
   const body = overlay.querySelector('#verifyBody');
 
@@ -2201,7 +2246,7 @@ async function openExportFullBackupScreen(){
     const statusArea = overlay.querySelector('#exportStatus');
     btn.textContent = 'Exporting…';
     btn.disabled = true;
-    const { data: userData } = await supabaseClient.auth.getUser();
+    const userData = { user: await getCurrentUser() };
     const uid = userData.user.id;
 
     const tables = ['exercises', 'sets', 'alt_groups', 'locations', 'day_types', 'plan_backups', 'body_weight', 'phase_settings', 'exercise_master', 'exercise_days'];
@@ -2253,7 +2298,7 @@ async function openMigrateToMasterScreen(){
   document.body.appendChild(overlay);
   overlay.querySelector('#closeMigrate').onclick = () => overlay.remove();
 
-  const { data: userData } = await supabaseClient.auth.getUser();
+  const userData = { user: await getCurrentUser() };
 
   // Live status check - what's actually in the new tables right now, not a
   // number to remember from a dismissed alert.
@@ -2418,7 +2463,7 @@ async function openRetagLocationFromNotesScreen(){
   document.body.appendChild(overlay);
   overlay.querySelector('#closeRetag').onclick = () => overlay.remove();
 
-  const { data: userData } = await supabaseClient.auth.getUser();
+  const userData = { user: await getCurrentUser() };
   const uid = userData.user.id;
   const body = overlay.querySelector('#retagBody');
 
@@ -2495,7 +2540,7 @@ async function openMergeDuplicateExercisesScreen(){
   overlay.querySelector('#closeMergeDupes').onclick = () => overlay.remove();
 
   await awaitMasterFlagHealed();
-  const { data: userData } = await supabaseClient.auth.getUser();
+  const userData = { user: await getCurrentUser() };
   const uid = userData.user.id;
   const body = overlay.querySelector('#mergeDupesBody');
   const useMaster = getUseExerciseMasterFlag();
@@ -2648,7 +2693,7 @@ async function openWipeAltGroupsScreen(){
   document.body.appendChild(overlay);
   overlay.querySelector('#closeWipeAlts').onclick = () => overlay.remove();
 
-  const { data: userData } = await supabaseClient.auth.getUser();
+  const userData = { user: await getCurrentUser() };
   const uid = userData.user.id;
   const body = overlay.querySelector('#wipeAltsBody');
 
@@ -2702,7 +2747,7 @@ async function openClearDayScreen(){
       const body = overlay.querySelector('#clearDayBody');
       body.innerHTML = `<div class="small" style="padding:16px 18px; color:var(--slate);">Checking ${DAY_NAMES[dayIdx]}…</div>`;
 
-      const { data: userData } = await supabaseClient.auth.getUser();
+      const userData = { user: await getCurrentUser() };
       const allExercises = await fetchAllExercisesCompat(userData.user.id);
       const onThisDay = allExercises.filter(ex => ex.weekday === dayIdx);
 
@@ -2808,7 +2853,7 @@ async function openPublishToMonoLiftScreen(){
   document.body.appendChild(overlay);
   overlay.querySelector('#closePublishMonoLift').onclick = () => overlay.remove();
 
-  const { data: userData } = await supabaseClient.auth.getUser();
+  const userData = { user: await getCurrentUser() };
   const verified = await isVerifiedContributor(userData.user.id);
   if (!verified){
     overlay.querySelector('#publishList').innerHTML = `<div class="empty-state" style="padding:24px 18px;">Contributing to the shared MonoLift database needs approval first - this keeps it clean and reliable for everyone. Reach out and it'll get sorted quickly.</div>`;
@@ -2989,7 +3034,7 @@ async function openEnvironmentsScreen(){
       btn.onclick = (e) => {
         e.stopPropagation();
         showConfirmDialog(`Exercises tagged to "${btn.dataset.name}" will just lose that tag - nothing else is affected.`, async () => {
-          const { data: userData } = await supabaseClient.auth.getUser();
+          const userData = { user: await getCurrentUser() };
           const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
           const exResult = await withTimeout(supabaseClient.from(table).select('id, location_ids').eq('user_id', userData.user.id), 15000);
           const affected = (exResult.data || []).filter(ex => (ex.location_ids || []).includes(btn.dataset.id));
@@ -3095,7 +3140,7 @@ async function openManageLocationsScreen(){
         showConfirmDialog(`Exercises tagged to "${btn.dataset.name}" will just lose that tag - nothing else is affected.`, async () => {
           // Clear this location from every exercise's location_ids first, so
           // nothing points at a deleted row.
-          const { data: userData } = await supabaseClient.auth.getUser();
+          const userData = { user: await getCurrentUser() };
           const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
           const exResult = await withTimeout(supabaseClient.from(table).select('id, location_ids').eq('user_id', userData.user.id), 15000);
           const affected = (exResult.data || []).filter(ex => (ex.location_ids || []).includes(btn.dataset.id));
@@ -3193,7 +3238,7 @@ function openEditDayTypeForm(weekday, currentLabel){
     const label = document.getElementById('dayTypeInput').value.trim();
     if (!label) return;
     await withButtonLoading(overlay.querySelector('#saveDTBtn'), 'Saving…', async () => {
-      const { data: userData } = await supabaseClient.auth.getUser();
+      const userData = { user: await getCurrentUser() };
       await supabaseClient.from('day_types').upsert({ user_id: userData.user.id, weekday, label }, { onConflict: 'user_id,weekday' });
       overlay.remove();
       if (state.currentTab === 'track') renderTrack();
@@ -3482,7 +3527,7 @@ function showOnboarding(mode){
     // Only write day-type/superset data if this run actually included the setup steps.
     const hadSetup = steps.some(s => s.kind === 'finish' || s.kind === 'confirm');
     if (hadSetup){
-      const { data: userData } = await supabaseClient.auth.getUser();
+      const userData = { user: await getCurrentUser() };
       if (userData && userData.user){
         // In 'setup' mode the user explicitly tapped Redo Setup Week and
         // wants their labels rewritten - overwrite is expected. In 'full'
@@ -3541,7 +3586,7 @@ function showOnboarding(mode){
 }
 
 async function maybeShowOnboarding(){
-  const { data: userData } = await supabaseClient.auth.getUser();
+  const userData = { user: await getCurrentUser() };
   if (!userData || !userData.user) return;
   if (userData.user.user_metadata.onboarded) return; // already onboarded, done
   // If the metadata says not-onboarded but the user has real data, they're
@@ -3707,7 +3752,7 @@ async function openSuggestionPreview(name, category, navList){
     // async chain - state.selectedDay could shift between the existence
     // check and the write (day chip re-tap, day-rollover snap).
     const targetDay = state.selectedDay;
-    const { data: userData } = await supabaseClient.auth.getUser();
+    const userData = { user: await getCurrentUser() };
     // This was the actual source of same-day duplicates: tapping "+ Add" more
     // than once on the same suggestion (e.g. navigating back to it, or
     // re-adding after it resurfaces) inserted a brand new record every time
@@ -3730,7 +3775,7 @@ async function openSuggestionPreview(name, category, navList){
 }
 
 async function fetchTrackHeaderStats(){
-  const { data: userData } = await supabaseClient.auth.getUser();
+  const userData = { user: await getCurrentUser() };
   if (!userData || !userData.user) return { volumeKg: 0, setsToday: 0, streak: 0, targetDateIsToday: true, targetWeekday: todayWeekday(), targetIsFuture: false };
   // Shared date logic - see targetDateInfo() at the top.
   const { targetWeekday, targetDateStr, targetDateIsToday, targetIsFuture } = targetDateInfo();
@@ -3842,7 +3887,7 @@ async function renderTrack(){
     if (state.suggestionsCache[cacheKey]){
       suggestions = state.suggestionsCache[cacheKey];
     } else {
-      const { data: userData } = await supabaseClient.auth.getUser();
+      const userData = { user: await getCurrentUser() };
       const compatEx = await fetchAllExercisesCompat(userData.user.id);
       const fullLibrary = compatEx.length ? compatEx.map(ex => ({ name: ex.name })) : workingExercises;
       const todayNames = new Set(workingExercises.map(ex => ex.name.toLowerCase()));
@@ -3998,7 +4043,7 @@ async function renderTrack(){
         title: `Rename "${oldName}"`, placeholder: 'New category name', initialValue: oldName,
         onConfirm: async (newName) => {
           if (newName === oldName) return;
-          const { data: userData } = await supabaseClient.auth.getUser();
+          const userData = { user: await getCurrentUser() };
           const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
           const { error } = await supabaseClient.from(table)
             .update({ category: newName }).eq('user_id', userData.user.id).eq('category', oldName);
@@ -4138,7 +4183,7 @@ function openRenameExerciseForm(exerciseId, exerciseName){
     const newName = document.getElementById('renameInput').value.trim();
     if (!newName || newName === exerciseName){ overlay.remove(); return; }
     await withButtonLoading(overlay.querySelector('#saveRenameBtn'), 'Renaming…', async () => {
-      const { data: userData } = await supabaseClient.auth.getUser();
+      const userData = { user: await getCurrentUser() };
       let error;
       if (getUseExerciseMasterFlag()){
         // Under the new structure only one record is SUPPOSED to exist per
@@ -4194,7 +4239,7 @@ function openEditAltGroupForm(exerciseId, exerciseName){
       // Update every same-name sibling exercise_master row too, in case duplicates
       // exist. Otherwise the alt group would only apply to the tapped copy and
       // silently miss its ghosts, making group behavior inconsistent.
-      const { data: userData } = await supabaseClient.auth.getUser();
+      const userData = { user: await getCurrentUser() };
       const sameNameResult = await withTimeout(
         supabaseClient.from('exercise_master').select('id').eq('user_id', userData.user.id).ilike('name', exerciseName),
         15000
@@ -4232,7 +4277,7 @@ function openEditMuscleForm(exerciseId, exerciseName){
 
   async function apply(muscleOverride){
     if (getUseExerciseMasterFlag()){
-      const { data: userData } = await supabaseClient.auth.getUser();
+      const userData = { user: await getCurrentUser() };
       const sameNameResult = await withTimeout(
         supabaseClient.from('exercise_master').select('id').eq('user_id', userData.user.id).ilike('name', exerciseName),
         15000
@@ -4245,7 +4290,7 @@ function openEditMuscleForm(exerciseId, exerciseName){
       if (state.currentTab === 'track') renderTrack();
       return;
     }
-    const { data: userData } = await supabaseClient.auth.getUser();
+    const userData = { user: await getCurrentUser() };
     const sameNameResult = await withTimeout(
       supabaseClient.from('exercises').select('id').eq('user_id', userData.user.id).ilike('name', exerciseName),
       15000
@@ -4303,7 +4348,7 @@ function openEditCategoryForm(exerciseId, exerciseName){
     await withButtonLoading(overlay.querySelector('#saveCatBtn'), 'Saving…', async () => {
       if (getUseExerciseMasterFlag()){
         // Update every same-name sibling row so duplicates stay in sync.
-        const { data: userData } = await supabaseClient.auth.getUser();
+        const userData = { user: await getCurrentUser() };
         const sameNameResult = await withTimeout(
           supabaseClient.from('exercise_master').select('id').eq('user_id', userData.user.id).ilike('name', exerciseName),
           15000
@@ -4316,7 +4361,7 @@ function openEditCategoryForm(exerciseId, exerciseName){
         if (state.currentTab === 'track') renderTrack();
         return;
       }
-      const { data: userData } = await supabaseClient.auth.getUser();
+      const userData = { user: await getCurrentUser() };
       const sameNameResult = await withTimeout(
         supabaseClient.from('exercises').select('id').eq('user_id', userData.user.id).ilike('name', exerciseName),
         15000
@@ -4458,7 +4503,7 @@ function openEditLocationForm(exerciseId, exerciseName){
 }
 
 async function deleteExerciseEntirelyNow(exerciseName){
-  const { data: userData } = await supabaseClient.auth.getUser();
+  const userData = { user: await getCurrentUser() };
   const uid = userData.user.id;
   if (getUseExerciseMasterFlag()){
     // Use select (multiple rows OK) instead of maybeSingle - if there are
@@ -4561,7 +4606,7 @@ function confirmRemoveExercise(exerciseId, exerciseName){
         return;
       }
       showUndoToast(exerciseName, async () => {
-        const { data: userData } = await supabaseClient.auth.getUser();
+        const userData = { user: await getCurrentUser() };
         await supabaseClient.from('exercise_days').insert({ user_id: userData.user.id, exercise_master_id: exerciseId, weekday: removalWeekday });
         renderTrack();
       });
@@ -4837,7 +4882,7 @@ async function openPicker(initialTab, jumpToMuscle){
   document.body.appendChild(overlay);
   overlay.querySelector('#closePicker').onclick = () => { removeSideIndex(); overlay.remove(); };
 
-  const { data: userData } = await supabaseClient.auth.getUser();
+  const userData = { user: await getCurrentUser() };
   const all = await fetchAllExercisesCompat(userData.user.id);
   // Matches Track's own location resolution - an exercise linked to today but
   // hidden from Track's display because it's tagged for a different location
@@ -5044,7 +5089,7 @@ async function openPicker(initialTab, jumpToMuscle){
             openLogForm(existingToday.masterId || existingToday.id, existingToday.name);
             return;
           }
-          const { data: userData } = await supabaseClient.auth.getUser();
+          const userData = { user: await getCurrentUser() };
           const { data: inserted, error } = await createExerciseForToday({
             user_id: userData.user.id, name: picked.name, category: picked.category,
             weekday: targetDay, alt_group_id: null
@@ -5062,7 +5107,7 @@ async function openPicker(initialTab, jumpToMuscle){
           // Capture at tap time; state.selectedDay could shift during the async work.
           const targetDay = state.selectedDay;
           await withButtonLoading(btn, 'Adding…', async () => {
-            const { data: userData } = await supabaseClient.auth.getUser();
+            const userData = { user: await getCurrentUser() };
             const errors = [];
             for (const item of items){
               const alreadyToday = all.find(ex => ex.weekday === targetDay && ex.name.toLowerCase() === item.name.toLowerCase());
@@ -5095,7 +5140,7 @@ async function openPicker(initialTab, jumpToMuscle){
             title: 'Rename Exercise', placeholder: 'New name', initialValue: item.name,
             onConfirm: async (newName) => {
               if (!newName || newName === item.name){ selection.active = false; selection.items.clear(); renderList(body.querySelector('#pickerSearch').value); return; }
-              const { data: userData } = await supabaseClient.auth.getUser();
+              const userData = { user: await getCurrentUser() };
               if (getUseExerciseMasterFlag()){
                 // Handle any duplicate rows sharing this name - previously
                 // maybeSingle would error on 2+ matches and rename would
@@ -5308,7 +5353,7 @@ async function openPicker(initialTab, jumpToMuscle){
           const btn = overlay.querySelector('#selectionAdd');
           const items = [...selection.items.values()];
           await withButtonLoading(btn, 'Adding…', async () => {
-            const { data: userData } = await supabaseClient.auth.getUser();
+            const userData = { user: await getCurrentUser() };
             const errors = [];
             for (const item of items){
               const alreadyToday = todayNames.has(item.name.toLowerCase());
@@ -5484,7 +5529,7 @@ async function openAutoAltReview(){
       const toApply = proposals.filter(p => p.included && p.members.length >= 2);
       const toJoin = joinProposals.filter(j => j.included);
       const toAddAsAlt = suggestions.filter(s => s.picked);
-      const { data: userData } = await supabaseClient.auth.getUser();
+      const userData = { user: await getCurrentUser() };
       const useMaster = getUseExerciseMasterFlag();
       const memberTable = useMaster ? 'exercise_master' : 'exercises';
       for (const p of toApply){
@@ -5528,7 +5573,7 @@ async function openAutoAltReview(){
 
 // ---------- SPLIT TAG SCANNER ----------
 async function proposeSplitTags(){
-  const { data: userData } = await supabaseClient.auth.getUser();
+  const userData = { user: await getCurrentUser() };
   const [all, db] = await Promise.all([
     fetchAllExercisesCompat(userData.user.id),
     loadExerciseDB()
@@ -5673,7 +5718,7 @@ async function openBulkLocationAssign(){
     const body = overlay.querySelector('#bulkLocStep1');
     body.innerHTML = `<div class="small" style="padding:16px 18px; color:var(--slate);">Loading exercises…</div>`;
 
-    const { data: userData } = await supabaseClient.auth.getUser();
+    const userData = { user: await getCurrentUser() };
     const all = await fetchAllExercisesCompat(userData.user.id);
     const byName = {};
     all.forEach(ex => {
@@ -5765,7 +5810,7 @@ async function openBulkLocationAssign(){
 
 // ---------- PLAN BACKUPS ----------
 async function createPlanBackup(name){
-  const { data: userData } = await supabaseClient.auth.getUser();
+  const userData = { user: await getCurrentUser() };
   let exercises;
   try {
     exercises = await fetchAllExercisesCompat(userData.user.id);
@@ -5807,7 +5852,7 @@ async function createPlanBackup(name){
   return { backup: result.data[0], errorMessage: null };
 }
 async function loadPlanBackups(){
-  const { data: userData } = await supabaseClient.auth.getUser();
+  const userData = { user: await getCurrentUser() };
   const result = await withTimeout(
     supabaseClient.from('plan_backups').select('id, name, created_at, snapshot').eq('user_id', userData.user.id).order('created_at', { ascending: false }),
     15000
@@ -5819,7 +5864,7 @@ async function loadPlanBackups(){
 // Anything deleted since the backup is skipped rather than recreated, and the
 // summary honestly reports what happened either way.
 async function restorePlanBackup(backup){
-  const { data: userData } = await supabaseClient.auth.getUser();
+  const userData = { user: await getCurrentUser() };
   if (getUseExerciseMasterFlag()){
     const masterResult = await withTimeout(
       supabaseClient.from('exercise_master').select('id').eq('user_id', userData.user.id), 15000
@@ -6070,7 +6115,7 @@ async function openChangeSingleDay(){
       <div class="overlay-scroll"><div class="small" style="padding:20px 18px; color:var(--slate);">Loading…</div></div>`;
     overlay.querySelector('#closeChangeDay').onclick = () => overlay.remove();
 
-    const { data: userData } = await supabaseClient.auth.getUser();
+    const userData = { user: await getCurrentUser() };
     const [compatEx, db] = await Promise.all([
       fetchAllExercisesCompat(userData.user.id),
       loadExerciseDB()
@@ -6098,7 +6143,7 @@ async function openChangeSingleDay(){
       <div class="overlay-scroll" id="changeDayBody"><div class="small" style="padding:20px 18px; color:var(--slate);">Building preview…</div></div>`;
     overlay.querySelector('#closeChangeDay').onclick = () => overlay.remove();
 
-    const { data: userData } = await supabaseClient.auth.getUser();
+    const userData = { user: await getCurrentUser() };
     const [allExercises, db] = await Promise.all([
       fetchAllExercisesCompat(userData.user.id),
       loadExerciseDB()
@@ -6226,7 +6271,7 @@ async function openPlanReorganizer(){
 
     let cats = SPLIT_TYPES.find(s=>s.id===splitType).cats;
     if (splitType === 'muscle' || splitType === 'custom'){
-      const { data: userData } = await supabaseClient.auth.getUser();
+      const userData = { user: await getCurrentUser() };
       const [compatEx, db] = await Promise.all([
         fetchAllExercisesCompat(userData.user.id),
         loadExerciseDB()
@@ -6289,7 +6334,7 @@ async function openPlanReorganizer(){
       <div class="overlay-scroll" id="reorgPreviewBody"><div class="small" style="padding:20px 18px; color:var(--slate);">Building preview…</div></div>`;
     overlay.querySelector('#closeReorg').onclick = () => overlay.remove();
 
-    const { data: userData } = await supabaseClient.auth.getUser();
+    const userData = { user: await getCurrentUser() };
     const [allExercises, db] = await Promise.all([
       fetchAllExercisesCompat(userData.user.id),
       loadExerciseDB()
@@ -6764,7 +6809,7 @@ async function revertLastReorganization(){
   const useMaster = getUseExerciseMasterFlag();
   const table = useMaster ? 'exercise_days' : 'exercises';
   showConfirmDialog(`Restore ${snapshot.length} exercises to their previous days?`, async () => {
-    const { data: userData } = await supabaseClient.auth.getUser();
+    const userData = { user: await getCurrentUser() };
     let recreated = 0, updated = 0, failed = 0;
     for (const item of snapshot){
       const result = await supabaseClient.from(table).update({ weekday: item.weekday }).eq('id', item.id).select();
@@ -6843,7 +6888,7 @@ async function pickAltGroup(container, onPicked){
       btn.onclick = (e) => {
         e.stopPropagation();
         showConfirmDialog(`Exercises in "${btn.dataset.name}" will keep their names but lose the alt-group link.`, async () => {
-          const { data: userData } = await supabaseClient.auth.getUser();
+          const userData = { user: await getCurrentUser() };
           const memberTable = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
           // Clear the reference on every exercise pointing at this group first, so
           // nothing is left referencing a group that no longer exists.
@@ -6859,7 +6904,7 @@ async function pickAltGroup(container, onPicked){
     const createRow = container.querySelector('#createAltRow');
     if (createRow) createRow.onclick = async () => {
       const color = ALT_COLORS[groups.length % ALT_COLORS.length];
-      const { data: userData } = await supabaseClient.auth.getUser();
+      const userData = { user: await getCurrentUser() };
       const insertResult = await withTimeout(
         supabaseClient.from('alt_groups').insert({ user_id: userData.user.id, name: filter, color }).select(),
         15000
@@ -6875,7 +6920,7 @@ async function pickAltGroup(container, onPicked){
 
 // ---------- LOCATIONS ----------
 async function loadLocations(){
-  const { data: userData } = await supabaseClient.auth.getUser();
+  const userData = { user: await getCurrentUser() };
   const result = await withTimeout(
     supabaseClient.from('locations').select('id, name, equipment_tags, is_default').eq('user_id', userData.user.id).order('name'),
     15000
@@ -6934,7 +6979,7 @@ async function loadLocations(){
   return locations;
 }
 async function createLocation(name){
-  const { data: userData } = await supabaseClient.auth.getUser();
+  const userData = { user: await getCurrentUser() };
   const result = await withTimeout(
     supabaseClient.from('locations').insert({ user_id: userData.user.id, name }).select(),
     15000
@@ -7058,7 +7103,7 @@ async function openNewExerciseForm(){
     const name = document.getElementById('exNameInput').value.trim();
     if (!name) return;
     await withButtonLoading(overlay.querySelector('#saveExerciseBtn'), 'Saving…', async () => {
-      const { data: userData } = await supabaseClient.auth.getUser();
+      const userData = { user: await getCurrentUser() };
       const compatEx = await fetchAllExercisesCompat(userData.user.id);
       const existingMatch = compatEx.find(ex => ex.weekday === selectedDay && ex.name.toLowerCase() === name.toLowerCase());
       if (existingMatch){
@@ -7481,7 +7526,7 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
     // land under exercise_id when the app is reading via exercise_master_id
     // (or vice versa) - the set exists in the database but is invisible.
     await awaitMasterFlagHealed();
-    const { data: userData } = await supabaseClient.auth.getUser();
+    const userData = { user: await getCurrentUser() };
     const useMaster = getUseExerciseMasterFlag();
     const idField = useMaster ? 'exercise_master_id' : 'exercise_id';
     // Capture prior best BEFORE inserting, for PR detection (weight-based only).
@@ -7539,7 +7584,7 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
   }
 
   async function loadHistory(){
-    const { data: userData } = await supabaseClient.auth.getUser();
+    const userData = { user: await getCurrentUser() };
     const useMaster = getUseExerciseMasterFlag();
     const idField = useMaster ? 'exercise_master_id' : 'exercise_id';
     let idsToQuery = [exerciseId];
@@ -8464,7 +8509,7 @@ async function renderPhaseTab(){
   let phaseSets = [];
   const activeKindForSets = phase ? determineActivePhase(phase) : null;
   if (activeKindForSets && phase[`${activeKindForSets}_start`]){
-    const { data: ud } = await supabaseClient.auth.getUser();
+    const ud = { user: await getCurrentUser() };
     if (ud && ud.user){
       const r = await withTimeout(
         supabaseClient.from('sets')
@@ -8873,7 +8918,7 @@ function openBodyProfileForm(existing){
       alert(heightUnit === 'cm' ? 'Enter a height in centimetres.' : 'Enter a height in feet and inches.');
       return;
     }
-    const { data: userData } = await supabaseClient.auth.getUser();
+    const userData = { user: await getCurrentUser() };
     const { error } = await supabaseClient.from('phase_settings')
       .upsert({ user_id: userData.user.id, height_cm: Math.round(h * 10) / 10, bf_formula: formula }, { onConflict: 'user_id' });
     if (error){ alert(error.message); return; }
@@ -9747,7 +9792,7 @@ function openLogWeightForm(lastMeasurementUnit, expandMeasurements){
     if (!weight){ alert('Enter a weight.'); return; }
     await withButtonLoading(overlay.querySelector('#saveWBtn'), 'Saving…', async () => {
       const notes = document.getElementById('bwNotes').value.trim();
-      const { data: userData } = await supabaseClient.auth.getUser();
+      const userData = { user: await getCurrentUser() };
       const payload = {
         user_id: userData.user.id, weight, unit, logged_at: todayStr(), notes: notes || null
       };
@@ -9780,7 +9825,7 @@ function openLogWeightForm(lastMeasurementUnit, expandMeasurements){
 
 // ---------- PHASE ----------
 async function loadPhase(){
-  const { data: userData } = await supabaseClient.auth.getUser();
+  const userData = { user: await getCurrentUser() };
   if (!userData || !userData.user) return null;
   const result = await withTimeout(
     supabaseClient.from('phase_settings').select('*').eq('user_id', userData.user.id).maybeSingle(),
@@ -9829,7 +9874,7 @@ function daysPaused(phase){
 // the user isn't training - someone who pauses in Week 6 of 8 comes back to
 // Week 6 of 8, not Week 8.
 async function setPhasePaused(phase, paused){
-  const { data: userData } = await supabaseClient.auth.getUser();
+  const userData = { user: await getCurrentUser() };
   if (!userData || !userData.user) return null;
   if (paused){
     const payload = { paused_at: todayStr() };
@@ -9967,7 +10012,7 @@ async function advanceAutoScheduleIfNeeded(phase){
     newCycleEnd = newDates.bulk_end > newDates.cut_end ? newDates.bulk_end : newDates.cut_end;
   }
   const updated = { ...phase, ...newDates };
-  const { data: userData } = await supabaseClient.auth.getUser();
+  const userData = { user: await getCurrentUser() };
   if (userData && userData.user){
     await supabaseClient.from('phase_settings').update(newDates).eq('user_id', userData.user.id);
   }
@@ -10243,7 +10288,7 @@ async function openEditPhaseForm(existing){
   };
 
   overlay.querySelector('#savePBtn').onclick = async () => { await withButtonLoading(overlay.querySelector('#savePBtn'), 'Saving…', async () => {
-    const { data: userData } = await supabaseClient.auth.getUser();
+    const userData = { user: await getCurrentUser() };
     let payload;
     if (mode === 'auto'){
       const { order, dates } = recomputeAuto();
@@ -10331,7 +10376,7 @@ function pplBarsHtml(pplTally){
 
 async function fetchExtendedWorkoutData(weeksBack){
   weeksBack = weeksBack || 8;
-  const { data: userData } = await supabaseClient.auth.getUser();
+  const userData = { user: await getCurrentUser() };
   const useMaster = getUseExerciseMasterFlag();
   const since = new Date(Date.now() - weeksBack*7*86400000).toISOString().slice(0,10);
   const [exercises, setResult, db] = await Promise.all([
@@ -10860,7 +10905,7 @@ async function computeMuscleRecommendations(tally, existingLibraryNames){
 // once), the same unit tallyFullPlan uses - shared so every plan-mode
 // analytic below is counting the same "real" set of planned exercises.
 async function fetchDedupedPlanExercises(){
-  const { data: userData } = await supabaseClient.auth.getUser();
+  const userData = { user: await getCurrentUser() };
   const allExercises = await fetchAllExercisesCompat(userData.user.id);
   const placed = allExercises.filter(ex => ex.weekday !== null && ex.weekday !== undefined);
   const seenSlots = new Set();
@@ -10938,7 +10983,7 @@ function computeBiggestSmallestDay(exercisesPerDay){
 async function tallyLoggedInRange(sinceDate, untilDate){
   const useMaster = getUseExerciseMasterFlag();
   const [exercises, setResult, db] = await Promise.all([
-    fetchAllExercisesCompat((await supabaseClient.auth.getUser()).data.user.id),
+    fetchAllExercisesCompat((await getCurrentUser()).id),
     withTimeout(
       (untilDate
         ? supabaseClient.from('sets').select('exercise_id, exercise_master_id, num_sets, logged_at').gte('logged_at', sinceDate).lt('logged_at', untilDate)
@@ -10973,7 +11018,7 @@ async function tallyLoggedPreviousWeek(){
 }
 
 async function tallyFullPlan(){
-  const { data: userData } = await supabaseClient.auth.getUser();
+  const userData = { user: await getCurrentUser() };
   const [allExercises, db] = await Promise.all([
     fetchAllExercisesCompat(userData.user.id),
     loadExerciseDB()
@@ -11647,7 +11692,7 @@ async function renderBalance(mode, view){
 
 // ---------- ME ----------
 async function getDayStats(weekday){
-  const { data: userData } = await supabaseClient.auth.getUser();
+  const userData = { user: await getCurrentUser() };
   if (!userData || !userData.user) return { weekday, label: DAY_NAMES[weekday], exerciseCount: 0, setCount: 0 };
   const useMaster = getUseExerciseMasterFlag();
   const allExercises = await fetchAllExercisesCompat(userData.user.id);
@@ -11735,7 +11780,7 @@ function openSwapDaysForm(){
 }
 
 async function performDaySwap(dayA, dayB){
-  const { data: userData } = await supabaseClient.auth.getUser();
+  const userData = { user: await getCurrentUser() };
   const uid = userData.user.id;
   const useMaster = getUseExerciseMasterFlag();
   const failures = [];
@@ -11830,7 +11875,7 @@ async function performDaySwap(dayA, dayB){
 }
 
 async function renderMe(){
-  const { data: userData } = await supabaseClient.auth.getUser();
+  const userData = { user: await getCurrentUser() };
   const email = userData && userData.user ? userData.user.email : '';
   const initial = email ? email[0].toUpperCase() : '?';
   const isOwner = !!(userData && userData.user && userData.user.id === APP_OWNER_USER_ID);
@@ -11926,6 +11971,9 @@ supabaseClient.auth.onAuthStateChange((_event, session) => {
   const hadSession = !!state.session;
   const hasSession = !!session;
   state.session = session;
+  // Identity may have changed - drop the memoised user so nothing reads a
+  // stale id against a different session.
+  clearCachedUser();
   if (hadSession === hasSession) return;
   if (session) { state.currentTab = 'track'; renderTrack(); }
   else renderLogin();
