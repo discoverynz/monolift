@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.189';
+const APP_VERSION = 'Beta 5.190';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -8097,6 +8097,52 @@ async function renderScale(){
   const phase = await loadPhase();
   const phaseHtml = await buildPhaseHeroHtml(phase, entries);
 
+  // Sets are needed for the strength-retention insight. Only fetch from the
+  // active phase's start onward - keeps this a small bounded query instead
+  // of pulling the user's entire training history every time Track opens.
+  let phaseSets = [];
+  const activeKindForSets = phase ? determineActivePhase(phase) : null;
+  if (activeKindForSets && phase[`${activeKindForSets}_start`]){
+    const { data: userDataForSets } = await supabaseClient.auth.getUser();
+    if (userDataForSets && userDataForSets.user){
+      const setsResult = await withTimeout(
+        supabaseClient.from('sets')
+          .select('weight, weight_unit, weight_type, reps, num_sets, logged_at')
+          .eq('user_id', userDataForSets.user.id)
+          .gte('logged_at', phase[`${activeKindForSets}_start`]),
+        15000
+      );
+      if (!setsResult.__timeout && !setsResult.error) phaseSets = setsResult.data || [];
+    }
+  }
+  const insights = buildPhaseInsights(phase, entries, phaseSets);
+  const tip = buildPhaseTip(phase);
+  const INSIGHT_ICONS = {
+    rate: '<path d="M3 17l6-6 4 4 8-8"/><path d="M21 7v6h-6"/>',
+    project: '<path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/>',
+    strength: '<path d="M6 7v10M18 7v10M3 10v4M21 10v4M6 12h12"/>',
+    tape: '<rect x="2" y="8" width="20" height="8" rx="2"/><path d="M6 12v2M10 12v2M14 12v2M18 12v2"/>',
+    cadence: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/>'
+  };
+  const insightsHtml = (insights.length || tip) ? `
+    <div class="section-label" style="padding-top:22px;">Insights</div>
+    ${insights.map(c => `
+      <div class="insight-card ${c.tone}">
+        <div class="insight-head">
+          <div class="insight-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${INSIGHT_ICONS[c.icon] || ''}</svg></div>
+          <div class="insight-title">${c.title}</div>
+          ${c.stat ? `<div class="insight-stat">${c.stat}</div>` : ''}
+        </div>
+        <div class="insight-body">${c.body}</div>
+      </div>`).join('')}
+    ${tip ? `<div class="tip-card">
+        <div class="tip-eyebrow">Worth knowing</div>
+        <div class="tip-title">${tip.title}</div>
+        <div class="tip-body">${tip.body}</div>
+      </div>` : ''}
+    ${insights.length ? `<div class="insight-footnote">Worked out from your own weigh-ins and logged sets in this phase. General training guidance — not medical advice.</div>` : ''}
+  ` : '';
+
   app.innerHTML = `
     <div class="app-shell">
       <div class="scroll-area">
@@ -8110,6 +8156,7 @@ async function renderScale(){
         ${rows || '<div class="empty-state">Nothing logged yet.</div>'}
         <div class="section-label" style="padding-top:20px;">Phase</div>
         ${phaseHtml}
+        ${insightsHtml}
       </div>
       ${renderTabbar()}
     </div>`;
@@ -8320,18 +8367,48 @@ async function buildPhaseHeroHtml(phase, weightEntries){
     return { label: 'Also Active', status: 'Overlapping' }; // overlapping ranges - surface rather than mislabel
   };
 
+  // Shows the next few cycles rather than only the immediate next phase, so
+  // the user can see where the pattern actually takes them. Projected
+  // entries (extrapolated from auto-repeat rather than concretely stored)
+  // are visually distinguished so speculative dates never look booked.
+  const renderUpNextList = () => {
+    const upcoming = projectUpcomingPhases(phase, 3);
+    if (!upcoming.length) return '';
+    const anyProjected = upcoming.some(u => u.isProjected);
+    return `<div class="section-label" style="padding-top:6px; display:flex; align-items:center; justify-content:space-between;">
+        <span>Up Next</span>
+        ${anyProjected ? `<span style="font-family:'JetBrains Mono',monospace; font-size:9px; color:var(--slate); letter-spacing:0.3px; text-transform:none;">dashed = projected</span>` : ''}
+      </div>
+      ${upcoming.map((u, i) => {
+        const weeks = Math.max(1, Math.round((new Date(u.end) - new Date(u.start)) / (86400000 * 7)));
+        const startsIn = Math.round((new Date(u.start) - new Date(todayStr())) / 86400000);
+        return `<div class="phase-mini ${u.kind}${u.isProjected ? ' projected' : ''}">
+          <div class="left">
+            <div class="dot"></div>
+            <div>
+              <div class="name">${u.kind === 'bulk' ? 'Bulk' : 'Cut'} <span style="font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--slate); font-weight:400;">${weeks}wk</span></div>
+              <div class="dates">${formatLoggedDate(u.start)} → ${formatLoggedDate(u.end)}</div>
+            </div>
+          </div>
+          <div class="status-tag">${u.isProjected ? 'Projected' : (startsIn <= 0 ? 'Scheduled' : `in ${startsIn}d`)}</div>
+        </div>`;
+      }).join('')}`;
+  };
+
   if (activePhase === 'bulk' && hasBulk){
     const d = hasCut ? describeOtherPhase('cut') : null;
-    const cutMini = d ? renderMiniFor('cut', phase.cut_start, phase.cut_end, d.status) : '';
+    const finishedCard = (d && d.label === 'Just Finished')
+      ? `<div class="section-label" style="padding-top:6px;">Just Finished</div>${renderMiniFor('cut', phase.cut_start, phase.cut_end, d.status)}` : '';
     return renderHeroFor('bulk', phase.bulk_start, phase.bulk_end)
-      + (cutMini ? `<div class="section-label" style="padding-top:6px;">${d.label}</div>${cutMini}` : '')
+      + finishedCard + renderUpNextList()
       + renderCycleTimeline() + editLinkHtml;
   }
   if (activePhase === 'cut' && hasCut){
     const d = hasBulk ? describeOtherPhase('bulk') : null;
-    const bulkMini = d ? renderMiniFor('bulk', phase.bulk_start, phase.bulk_end, d.status) : '';
+    const finishedCard = (d && d.label === 'Just Finished')
+      ? `<div class="section-label" style="padding-top:6px;">Just Finished</div>${renderMiniFor('bulk', phase.bulk_start, phase.bulk_end, d.status)}` : '';
     return renderHeroFor('cut', phase.cut_start, phase.cut_end)
-      + (bulkMini ? `<div class="section-label" style="padding-top:6px;">${d.label}</div>${bulkMini}` : '')
+      + finishedCard + renderUpNextList()
       + renderCycleTimeline() + editLinkHtml;
   }
 
@@ -8372,6 +8449,184 @@ async function buildPhaseHeroHtml(phase, weightEntries){
 function fmtNum(n){
   const rounded = Math.round(n * 10) / 10;
   return rounded.toString();
+}
+
+// ---------- Phase Insights ----------
+// Everything here is derived from the user's own weigh-ins and logged sets
+// inside the current phase window. Each card self-suppresses when there
+// isn't enough data to say something actually true, so the section stays
+// honest rather than padding itself with generic filler.
+function buildPhaseInsights(phase, weightEntries, sets){
+  if (!phase || isPhasePaused(phase)) return [];
+  const kind = determineActivePhase(phase);
+  if (!kind) return [];
+  const start = phase[`${kind}_start`], end = phase[`${kind}_end`];
+  if (!start || !end) return [];
+  const today = todayStr();
+  const cards = [];
+
+  const inPhase = (d) => d >= start && d <= today;
+  const phaseWeights = (weightEntries || []).filter(e => inPhase(e.logged_at))
+    .sort((a,b) => a.logged_at.localeCompare(b.logged_at));
+  const daysElapsed = Math.max(1, Math.round((new Date(today) - new Date(start)) / 86400000));
+  const weeksElapsed = daysElapsed / 7;
+
+  // --- 1. Rate check: actual %/week vs the target rate for this phase ---
+  if (phaseWeights.length >= 2 && weeksElapsed >= 1){
+    const first = phaseWeights[0], last = phaseWeights[phaseWeights.length - 1];
+    const unit = last.unit;
+    const startW = convertWeight(first.weight, first.unit, unit);
+    const curW = convertWeight(last.weight, last.unit, unit);
+    const change = curW - startW;
+    const actualRatePct = Math.abs(change / startW * 100) / weeksElapsed;
+    const targetRatePct = PHASE_RATE_PER_WEEK[kind] * 100;
+    const goingRightWay = kind === 'bulk' ? change >= 0 : change <= 0;
+    const ratio = actualRatePct / targetRatePct;
+    let verdict, tone, detail;
+    if (!goingRightWay){
+      verdict = kind === 'bulk' ? 'Losing during a bulk' : 'Gaining during a cut';
+      tone = 'warn';
+      detail = `You're moving the opposite way to your ${kind}. A week or two of this is usually just water or timing noise — a sustained trend means intake needs a look.`;
+    } else if (ratio > 1.5){
+      verdict = 'Faster than target';
+      tone = 'warn';
+      detail = kind === 'cut'
+        ? `At ${actualRatePct.toFixed(2)}%/week you're cutting well above the ~${targetRatePct}% guideline. Aggressive cuts cost more lean mass and get harder to sustain.`
+        : `At ${actualRatePct.toFixed(2)}%/week you're gaining well above the ~${targetRatePct}% guideline, which usually means more of the gain is fat than it needs to be.`;
+    } else if (ratio < 0.4){
+      verdict = 'Slower than target';
+      tone = 'neutral';
+      detail = `At ${actualRatePct.toFixed(2)}%/week you're well under the ~${targetRatePct}% guideline. Not a problem in itself — just means this phase will take longer than the dates suggest.`;
+    } else {
+      verdict = 'On target';
+      tone = 'good';
+      detail = `${actualRatePct.toFixed(2)}%/week against a ~${targetRatePct}% guideline. That's the range where most people hold onto muscle.`;
+    }
+    cards.push({ icon: 'rate', title: verdict, tone, body: detail,
+      stat: `${change >= 0 ? '+' : ''}${fmtNum(change)}${unit} over ${Math.round(weeksElapsed)}wk` });
+  }
+
+  // --- 2. Projected finish from the user's ACTUAL trend, not the generic rate ---
+  if (phaseWeights.length >= 3 && weeksElapsed >= 1.5){
+    const first = phaseWeights[0], last = phaseWeights[phaseWeights.length - 1];
+    const unit = last.unit;
+    const startW = convertWeight(first.weight, first.unit, unit);
+    const curW = convertWeight(last.weight, last.unit, unit);
+    const perWeek = (curW - startW) / weeksElapsed;
+    const weeksRemaining = Math.max(0, (new Date(end) - new Date(today)) / (86400000 * 7));
+    if (weeksRemaining > 0.5){
+      const projected = curW + perWeek * weeksRemaining;
+      cards.push({ icon: 'project', title: 'Projected finish', tone: 'neutral',
+        body: `If your current trend holds for the remaining ${weeksRemaining.toFixed(1)} weeks, you'll finish this ${kind} around <b>${fmtNum(projected)}${unit}</b>. This uses your real weigh-ins, not the generic rate estimate.`,
+        stat: `${fmtNum(curW)}${unit} → ${fmtNum(projected)}${unit}` });
+    }
+  }
+
+  // --- 3. Strength retention: is training volume holding up? ---
+  // The question that actually matters in a cut and that bodyweight alone
+  // can't answer. Compares average weekly volume across the first and
+  // second half of the elapsed phase.
+  const phaseSets = (sets || []).filter(s => inPhase(s.logged_at));
+  if (phaseSets.length >= 8 && daysElapsed >= 21){
+    const midpoint = addDaysToDate(start, Math.floor(daysElapsed / 2));
+    const volOf = (arr) => arr.reduce((sum, s) => {
+      const w = Number(s.weight);
+      if (!w || isNaN(w) || (s.weight_unit !== 'kg' && s.weight_unit !== 'lb')) return sum;
+      const kg = s.weight_unit === 'lb' ? convertWeight(w, 'lb', 'kg') : w;
+      return sum + kg * (s.weight_type === 'per' ? 2 : 1) * (Number(s.reps) || 1) * (Number(s.num_sets) || 1);
+    }, 0);
+    const firstHalf = phaseSets.filter(s => s.logged_at < midpoint);
+    const secondHalf = phaseSets.filter(s => s.logged_at >= midpoint);
+    if (firstHalf.length >= 3 && secondHalf.length >= 3){
+      const halfWeeks = Math.max(0.5, daysElapsed / 2 / 7);
+      const v1 = volOf(firstHalf) / halfWeeks, v2 = volOf(secondHalf) / halfWeeks;
+      if (v1 > 0){
+        const pctChange = (v2 - v1) / v1 * 100;
+        let title, tone, body;
+        if (pctChange >= 5){
+          title = 'Strength trending up';
+          tone = 'good';
+          body = kind === 'cut'
+            ? `Your weekly training volume is up ${Math.round(pctChange)}% in the back half of this cut. Adding work while losing weight is the best signal you're keeping muscle.`
+            : `Weekly volume is up ${Math.round(pctChange)}% in the back half of this bulk — the extra food is going somewhere useful.`;
+        } else if (pctChange > -10){
+          title = 'Strength holding';
+          tone = 'good';
+          body = kind === 'cut'
+            ? `Weekly volume is within ${Math.abs(Math.round(pctChange))}% of where it started. Holding your work rate through a cut is exactly what you want.`
+            : `Weekly volume is steady through this bulk.`;
+        } else {
+          title = 'Volume slipping';
+          tone = 'warn';
+          body = kind === 'cut'
+            ? `Weekly volume is down ${Math.abs(Math.round(pctChange))}% in the back half of this cut. Some drop is normal deep into a deficit, but a big fall often means the deficit is too steep or recovery is short.`
+            : `Weekly volume is down ${Math.abs(Math.round(pctChange))}% in the back half of this bulk, which is worth a look given you're eating to grow.`;
+        }
+        cards.push({ icon: 'strength', title, tone, body,
+          stat: `${pctChange >= 0 ? '+' : ''}${Math.round(pctChange)}% weekly volume` });
+      }
+    }
+  }
+
+  // --- 4. Recomposition signal from tape measurements ---
+  const measured = phaseWeights.filter(e => e.measurement_unit && (e.waist || e.chest || e.left_arm || e.right_arm));
+  if (measured.length >= 2){
+    const a = measured[0], b = measured[measured.length - 1];
+    const diff = (k) => (a[k] != null && b[k] != null) ? b[k] - a[k] : null;
+    const waistD = diff('waist');
+    const armD = [diff('left_arm'), diff('right_arm')].filter(v => v != null);
+    const chestD = diff('chest');
+    const upperD = armD.length ? armD.reduce((x,y)=>x+y,0)/armD.length : chestD;
+    if (waistD != null && upperD != null){
+      const u = b.measurement_unit;
+      if (waistD < -0.3 && upperD >= -0.2){
+        cards.push({ icon: 'tape', title: 'Recomp signal', tone: 'good',
+          body: `Your waist is down ${Math.abs(waistD).toFixed(1)}${u} while your upper-body measurements have held. That's the shape change people actually want — and it's invisible on the scale alone.`,
+          stat: `Waist ${waistD.toFixed(1)}${u} · Upper ${upperD >= 0 ? '+' : ''}${upperD.toFixed(1)}${u}` });
+      } else if (waistD > 0.3 && kind === 'bulk' && upperD > 0.3){
+        cards.push({ icon: 'tape', title: 'Gaining everywhere', tone: 'neutral',
+          body: `Waist up ${waistD.toFixed(1)}${u} and upper body up ${upperD.toFixed(1)}${u}. Normal in a bulk — but if the waist is climbing faster than the arms and chest, the surplus is probably bigger than it needs to be.`,
+          stat: `Waist +${waistD.toFixed(1)}${u} · Upper +${upperD.toFixed(1)}${u}` });
+      }
+    }
+  }
+
+  // --- 5. Weigh-in cadence: is the trend line even trustworthy? ---
+  if (daysElapsed >= 14){
+    const perWeek = phaseWeights.length / weeksElapsed;
+    if (perWeek < 1){
+      cards.push({ icon: 'cadence', title: 'Weigh in more often', tone: 'neutral',
+        body: `You've logged ${phaseWeights.length} weigh-in${phaseWeights.length===1?'':'s'} in ${Math.round(weeksElapsed)} weeks. Daily bodyweight swings of 1–2kg from water and food are normal, so with sparse entries a single reading can look like real progress when it isn't. Two or three a week makes the trend readable.`,
+        stat: `${perWeek.toFixed(1)}/week` });
+    }
+  }
+
+  return cards;
+}
+
+// Contextual guidance tied to which phase you're in and how far through it -
+// the advice that's relevant in week 1 of a bulk is not the advice that's
+// relevant in the last fortnight of a cut, so a single static tips list
+// would be mostly noise.
+function buildPhaseTip(phase){
+  if (!phase) return null;
+  if (isPhasePaused(phase)){
+    return { title: 'Pausing is a real strategy', body: `Extended time at maintenance between phases lets appetite, hormones and training performance normalise. Long uninterrupted deficits get progressively harder to sustain — a deliberate break is often what makes the next cut work.` };
+  }
+  const kind = determineActivePhase(phase);
+  if (!kind) return { title: 'Between phases', body: `Time at maintenance is genuinely useful — it's when a lot of recomposition happens, especially after a long cut. It doesn't have to be dead time.` };
+  const start = phase[`${kind}_start`], end = phase[`${kind}_end`];
+  const w = weeksBetween(start, end);
+  if (!w) return null;
+  const pct = w.pct;
+  if (kind === 'cut'){
+    if (pct < 20) return { title: 'Early cut: ignore the first drop', body: `The fast loss in the first week or two is mostly water and glycogen, not fat. Don't extrapolate it — and don't panic when the rate slows to something more normal, because that slower number is the real one.` };
+    if (pct < 70) return { title: 'Mid cut: protect the work rate', body: `This is where training volume usually starts sliding. Keeping your loads heavy — even with slightly fewer sets — is what signals your body to hold onto muscle while losing weight. Cutting intensity to "save energy" tends to cost you the exact thing you're dieting to keep.` };
+    return { title: 'Late cut: the hardest stretch', body: `Adherence and recovery both tend to dip here while the scale moves slowest. If you're stalling and miserable, ending the cut a week or two early at a good result beats grinding out a bad one. The dates are a plan, not a contract.` };
+  }
+  if (pct < 20) return { title: 'Early bulk: slower is better', body: `Early scale jumps are largely glycogen and water refilling — a good sign, but not muscle. Muscle accrues slowly enough that a fast-moving scale in week three usually means the surplus is bigger than it needs to be.` };
+  if (pct < 70) return { title: 'Mid bulk: the surplus is for training', body: `Extra food only turns into muscle if there's a training stimulus asking for it. This is the stretch to be adding reps or load on your main lifts — a bulk without progressive overload is mostly just a gain in bodyfat.` };
+  return { title: 'Late bulk: plan the exit', body: `Deciding in advance when to stop is what keeps a bulk from drifting into a long slow fat gain. Knowing your next cut is already scheduled makes it much easier to end this one on time.` };
 }
 
 function confirmDeleteBodyWeight(entryId){
@@ -8572,6 +8827,55 @@ async function setPhasePaused(phase, paused){
   const { error } = await supabaseClient.from('phase_settings').update(payload).eq('user_id', userData.user.id);
   if (error){ alert(error.message); return null; }
   return { ...phase, ...payload };
+}
+
+// Returns the next `count` upcoming phases after today. Concretely-scheduled
+// phases (already stored as real dates) come first and are marked
+// isProjected:false. If auto-repeat is on, the cycle is then extrapolated
+// beyond those using the stored week durations to fill the remainder, marked
+// isProjected:true - so the UI can distinguish "this is actually booked" from
+// "this is where the pattern takes you", rather than presenting speculative
+// dates with the same confidence as real ones.
+function projectUpcomingPhases(phase, count){
+  if (!phase) return [];
+  const today = todayStr();
+  const upcoming = [];
+
+  ['bulk','cut'].forEach(kind => {
+    const start = phase[`${kind}_start`], end = phase[`${kind}_end`];
+    if (start && end && start > today) upcoming.push({ kind, start, end, isProjected: false });
+  });
+  upcoming.sort((a,b) => a.start.localeCompare(b.start));
+
+  const canProject = phase.schedule_mode === 'auto' && phase.auto_repeat
+    && phase.bulk_weeks && phase.cut_weeks && !isPhasePaused(phase);
+  if (canProject){
+    // Continue the alternating pattern from whichever phase runs last -
+    // either the last upcoming one, or (if nothing is upcoming) whichever
+    // currently-set phase ends latest.
+    let lastKind, lastEnd;
+    if (upcoming.length){
+      lastKind = upcoming[upcoming.length - 1].kind;
+      lastEnd = upcoming[upcoming.length - 1].end;
+    } else {
+      const bulkEnd = phase.bulk_end, cutEnd = phase.cut_end;
+      if (bulkEnd && cutEnd){
+        lastKind = bulkEnd >= cutEnd ? 'bulk' : 'cut';
+        lastEnd = bulkEnd >= cutEnd ? bulkEnd : cutEnd;
+      } else if (bulkEnd){ lastKind = 'bulk'; lastEnd = bulkEnd; }
+      else if (cutEnd){ lastKind = 'cut'; lastEnd = cutEnd; }
+    }
+    const weeksFor = { bulk: phase.bulk_weeks, cut: phase.cut_weeks };
+    let guard = 0;
+    while (lastEnd && upcoming.length < count && guard++ < 20){
+      const nextKind = lastKind === 'bulk' ? 'cut' : 'bulk';
+      const nextStart = lastEnd;
+      const nextEnd = addWeeksToDate(nextStart, weeksFor[nextKind]);
+      upcoming.push({ kind: nextKind, start: nextStart, end: nextEnd, isProjected: true });
+      lastKind = nextKind; lastEnd = nextEnd;
+    }
+  }
+  return upcoming.slice(0, count);
 }
 
 function addWeeksToDate(dateStr, weeks){

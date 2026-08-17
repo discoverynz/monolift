@@ -275,3 +275,25 @@ input:focus, button:focus{ outline:none; }
 .phase-hero.paused .tag{ background:rgba(140,142,148,0.22); color:var(--slate); }
 .phase-hero.paused .big-name{ color:var(--slate); }
 .phase-hero .paused-note{ font-size:11.5px; color:var(--slate); line-height:1.5; margin-top:12px; padding-top:12px; border-top:1px solid rgba(255,255,255,0.07); }
+
+/* ---------- Phase Insights ---------- */
+.insight-card{ margin:0 18px 10px 18px; background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:14px 16px; border-left-width:3px; }
+.insight-card.good{ border-left-color:var(--good); }
+.insight-card.warn{ border-left-color:#E8A33D; }
+.insight-card.neutral{ border-left-color:var(--slate); }
+.insight-head{ display:flex; align-items:center; gap:9px; margin-bottom:7px; }
+.insight-icon{ width:26px; height:26px; border-radius:8px; display:flex; align-items:center; justify-content:center; flex-shrink:0; background:rgba(255,255,255,0.05); }
+.insight-card.good .insight-icon{ background:rgba(143,191,122,0.15); color:var(--good); }
+.insight-card.warn .insight-icon{ background:rgba(232,163,61,0.15); color:#E8A33D; }
+.insight-card.neutral .insight-icon{ background:rgba(140,142,148,0.15); color:var(--slate); }
+.insight-title{ font-family:'Oswald', sans-serif; font-size:14px; font-weight:500; }
+.insight-stat{ margin-left:auto; font-family:'JetBrains Mono', monospace; font-size:10.5px; color:var(--slate); text-align:right; white-space:nowrap; }
+.insight-body{ font-size:12.5px; color:var(--slate); line-height:1.6; }
+.insight-body b{ color:var(--chalk); font-weight:600; }
+.tip-card{ margin:14px 18px 6px 18px; background:linear-gradient(145deg, rgba(201,162,39,0.10), rgba(201,162,39,0.02)); border:1px solid rgba(201,162,39,0.28); border-radius:14px; padding:15px 16px; }
+.tip-eyebrow{ font-family:'JetBrains Mono', monospace; font-size:9.5px; color:var(--brass); letter-spacing:1.2px; text-transform:uppercase; margin-bottom:6px; }
+.tip-title{ font-family:'Oswald', sans-serif; font-size:15px; margin-bottom:6px; }
+.tip-body{ font-size:12.5px; color:var(--slate); line-height:1.6; }
+.insight-footnote{ padding:10px 18px 4px 18px; font-size:10.5px; color:#5d5f64; line-height:1.5; }
+.phase-mini.projected{ border:1px dashed var(--line); background:transparent; opacity:0.75; }
+.phase-mini.projected .status-tag{ background:transparent; border:1px dashed var(--line); }
