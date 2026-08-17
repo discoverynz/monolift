@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.194';
+const APP_VERSION = 'Beta 5.195';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -8039,7 +8039,7 @@ const MEASUREMENT_SHORT_LABELS = {
 
 async function loadBodyWeight(){
   const result = await withTimeout(
-    supabaseClient.from('body_weight').select('id, weight, unit, logged_at, notes, measurement_unit, neck, chest, waist, hips, left_arm, right_arm, left_thigh, right_thigh, left_calf, right_calf').order('logged_at', { ascending: false }).limit(20),
+    supabaseClient.from('body_weight').select('id, weight, unit, logged_at, notes, measurement_unit, body_fat_pct, neck, chest, waist, hips, left_arm, right_arm, left_thigh, right_thigh, left_calf, right_calf').order('logged_at', { ascending: false }).limit(20),
     15000
   );
   return result.__timeout || result.error ? [] : (result.data || []);
@@ -8062,8 +8062,10 @@ async function renderScale(){
   }
   const rows = entries.map(e => {
     const filledMeasurements = MEASUREMENT_FIELDS.filter(f => e[f.key] !== null && e[f.key] !== undefined);
-    const pillsHtml = filledMeasurements.length
-      ? `<div class="measure-pills">${filledMeasurements.map(f => `<div class="measure-pill">${MEASUREMENT_SHORT_LABELS[f.key]} <b>${e[f.key]}${e.measurement_unit || 'cm'}</b></div>`).join('')}</div>`
+    const bfPill = (e.body_fat_pct != null)
+      ? `<div class="measure-pill bf">BF <b>${e.body_fat_pct}%</b></div>` : '';
+    const pillsHtml = (filledMeasurements.length || bfPill)
+      ? `<div class="measure-pills">${bfPill}${filledMeasurements.map(f => `<div class="measure-pill">${MEASUREMENT_SHORT_LABELS[f.key]} <b>${e[f.key]}${e.measurement_unit || 'cm'}</b></div>`).join('')}</div>`
       : '';
     return `<div class="log-row" data-id="${e.id}" style="flex-direction:column; align-items:flex-start; gap:5px;">
     <div style="display:flex; justify-content:space-between; width:100%;"><div class="log-date">${formatLoggedDate(e.logged_at)}</div><div class="log-weight">${e.weight}${e.unit}</div></div>
@@ -8214,6 +8216,52 @@ async function renderScale(){
   }
 
 
+  // ---- Body fat section ----
+  // Prefers directly-measured readings; falls back to tape-derived estimates
+  // when height is configured. Always labels which source is on screen, since
+  // a circumference estimate and a DEXA reading are not the same kind of number.
+  let bodyFatHtml = '';
+  const bfChrono = [...entries].sort((a,b) => a.logged_at.localeCompare(b.logged_at));
+  const bfPoints = bfChrono.map(e => {
+    const r = resolveBodyFat(e, phase && phase.height_cm, phase && phase.bf_formula);
+    return r ? { date: e.logged_at, value: r.pct, source: r.source } : null;
+  }).filter(Boolean);
+  if (bfPoints.length >= 1){
+    const latestBf = bfPoints[bfPoints.length - 1];
+    const anyMeasured = bfPoints.some(p => p.source === 'measured');
+    const allMeasured = bfPoints.every(p => p.source === 'measured');
+    const sourceLabel = allMeasured ? 'Measured' : (anyMeasured ? 'Measured + estimated' : 'Estimated from measurements');
+    const bfChange = bfPoints.length >= 2 ? +(latestBf.value - bfPoints[0].value).toFixed(1) : null;
+    const bfAccent = bfChange == null ? '#8C8E94' : (bfChange < 0 ? '#8FBF7A' : (bfChange > 0 ? '#E8A33D' : '#8C8E94'));
+    bodyFatHtml = `
+      <div class="section-label" style="padding-top:20px;">Body Fat</div>
+      <div class="stat-card">
+        <div style="display:flex; align-items:baseline; justify-content:space-between;">
+          <div>
+            <div class="big">${latestBf.value}%</div>
+            <div class="small">${formatLoggedDate(latestBf.date)} · ${latestBf.source === 'measured' ? 'measured' : 'estimated'}</div>
+          </div>
+          ${bfChange != null ? `<div style="font-family:'JetBrains Mono',monospace; font-size:13px; color:${bfAccent};">${bfChange>=0?'+':''}${bfChange}% overall</div>` : ''}
+        </div>
+        ${bfPoints.length >= 2 ? `<div style="margin-top:10px;">
+          <div style="font-family:'JetBrains Mono',monospace; font-size:9.5px; color:var(--slate); margin-bottom:4px;">${sourceLabel.toUpperCase()}</div>
+          ${renderMetricChart(bfPoints.map(p => ({ date: p.date, value: p.value })), '%', bfAccent)}
+        </div>` : `<div style="font-size:11.5px; color:var(--slate); line-height:1.5; margin-top:8px;">Log body fat on another weigh-in to start a trend.</div>`}
+        ${!anyMeasured ? `<div style="font-size:10.5px; color:#5d5f64; line-height:1.5; margin-top:9px; padding-top:9px; border-top:1px solid var(--line);">Estimated from your waist and neck. If you have access to a DEXA scan, InBody or smart scale, a measured reading will be used instead.</div>` : ''}
+      </div>`;
+  } else {
+    bodyFatHtml = `
+      <div class="section-label" style="padding-top:20px;">Body Fat</div>
+      ${previewWrap(`<div class="stat-card">
+          <div class="big">21.9%</div><div class="small">measured</div>
+          <div style="margin-top:10px;">${renderMetricChart(
+            sampleMeasurementEntries().map((e,i) => ({ date: e.logged_at, value: [24.1,23.4,22.8,22.2,21.9][i] })), '%', '#8FBF7A')}</div>
+        </div>`,
+        'Track body fat percentage',
+        'Got a DEXA scan, InBody or smart scale? Log the reading with your weigh-in. No machine? Add your height and we estimate it from your waist and neck.',
+        'Log a reading')}`;
+  }
+
   app.innerHTML = `
     <div class="app-shell">
       <div class="scroll-area">
@@ -8223,6 +8271,7 @@ async function renderScale(){
           ${latest ? `<div class="big">${latest.weight}${latest.unit}</div><div class="small">${latest.logged_at}</div>${deltaHtml}` : `<div class="small">No entries yet — tap + to log your weight.</div>`}
         </div>
         ${chartHtml}
+        ${bodyFatHtml}
         ${measurementsHtml}
         <div class="section-label">Recent Entries</div>
         ${rows || '<div class="empty-state">Nothing logged yet.</div>'}
@@ -9026,14 +9075,33 @@ function estimateBodyFatPct(entry, heightCm, formula){
   return Math.round(bf * 10) / 10;
 }
 
+// Resolves the best available body fat figure for an entry, preferring a
+// directly-measured reading (DEXA, InBody, calipers) over the tape-based
+// Navy estimate. Returns the source too, so the UI can say which it used -
+// the two carry very different confidence and conflating them would be
+// misleading.
+function resolveBodyFat(entry, heightCm, formula){
+  if (!entry) return null;
+  if (entry.body_fat_pct != null && entry.body_fat_pct > 0){
+    return { pct: Math.round(entry.body_fat_pct * 10) / 10, source: 'measured' };
+  }
+  const est = estimateBodyFatPct(entry, heightCm, formula);
+  return est == null ? null : { pct: est, source: 'estimated' };
+}
+
 // Splits a weight change into estimated fat and lean components using
-// body-fat estimates at each end. This is the number people actually care
+// body-fat figures at each end. This is the number people actually care
 // about and almost never get: losing 3kg means something completely
 // different if it was 3kg of fat versus 1.5kg fat and 1.5kg muscle.
 function partitionWeightChange(startEntry, endEntry, heightCm, formula){
-  const bfStart = estimateBodyFatPct(startEntry, heightCm, formula);
-  const bfEnd = estimateBodyFatPct(endEntry, heightCm, formula);
-  if (bfStart == null || bfEnd == null) return null;
+  const bfS = resolveBodyFat(startEntry, heightCm, formula);
+  const bfE = resolveBodyFat(endEntry, heightCm, formula);
+  if (!bfS || !bfE) return null;
+  const bfStart = bfS.pct, bfEnd = bfE.pct;
+  // If either end is estimated, the whole comparison inherits that lower
+  // confidence - a measured-to-estimated comparison is not a measured one.
+  const source = (bfS.source === 'measured' && bfE.source === 'measured') ? 'measured'
+    : (bfS.source === 'estimated' && bfE.source === 'estimated') ? 'estimated' : 'mixed';
   const unit = endEntry.unit;
   const wStart = convertWeight(startEntry.weight, startEntry.unit, unit);
   const wEnd = convertWeight(endEntry.weight, endEntry.unit, unit);
@@ -9041,6 +9109,7 @@ function partitionWeightChange(startEntry, endEntry, heightCm, formula){
   const leanStart = wStart - fatStart, leanEnd = wEnd - fatEnd;
   return {
     unit,
+    source,
     startWeight: Math.round(wStart * 10) / 10,
     endWeight: Math.round(wEnd * 10) / 10,
     bfStart, bfEnd, bfChange: Math.round((bfEnd - bfStart) * 10) / 10,
@@ -9205,8 +9274,13 @@ function buildPhaseInsights(phase, weightEntries, sets){
   // 3kg lost was fat or muscle, and that distinction is the entire point
   // of a well-run cut. Requires height + formula + tape measurements at
   // both ends of the window.
-  const measuredEntries = phaseWeights.filter(e => e.measurement_unit && e.waist && e.neck);
-  if (measuredEntries.length >= 2 && phase.height_cm && phase.bf_formula){
+  // Usable for composition if it has a measured reading, or the tape figures
+  // the estimate needs. Measured entries work without height configured.
+  const measuredEntries = phaseWeights.filter(e =>
+    e.body_fat_pct != null || (e.measurement_unit && e.waist && e.neck));
+  const canPartition = measuredEntries.length >= 2 && (
+    measuredEntries.filter(e => e.body_fat_pct != null).length >= 2 || (phase.height_cm && phase.bf_formula));
+  if (canPartition){
     const split = partitionWeightChange(measuredEntries[0], measuredEntries[measuredEntries.length-1], phase.height_cm, phase.bf_formula);
     if (split){
       const u = split.unit;
@@ -9224,11 +9298,17 @@ function buildPhaseInsights(phase, weightEntries, sets){
       } else {
         body = `Estimated ${fmtNum(split.fatChange)}${u} fat and ${fmtNum(split.leanChange)}${u} lean change so far.`;
       }
+      const srcNote = split.source === 'measured'
+        ? ` Body fat moved ${split.bfStart}% → ${split.bfEnd}%, from your logged readings.`
+        : split.source === 'mixed'
+        ? ` Body fat moved ${split.bfStart}% → ${split.bfEnd}% — one end measured, the other estimated from tape, so treat the gap loosely.`
+        : ` Body fat estimate moved ${split.bfStart}% → ${split.bfEnd}%, calculated from your tape measurements.`;
       cards.push({ icon: 'body', title: 'Fat vs lean', tone: (goodCut || goodBulk) ? 'good' : 'warn',
-        body: body + ` Body fat estimate moved ${split.bfStart}% → ${split.bfEnd}%.`,
+        body: body + srcNote,
         stat: `${split.bfChange >= 0 ? '+' : ''}${split.bfChange}% BF` });
     }
   } else if (measuredEntries.length >= 2 && (!phase.height_cm || !phase.bf_formula)){
+    // Has tape data but no height, and not enough measured readings to skip it.
     cards.push({ icon: 'body', title: 'Unlock body composition', tone: 'neutral',
       body: `You're already logging waist and neck measurements — add your height and we can estimate what portion of your weight change is fat versus lean mass, which the scale alone can never tell you.`,
       action: 'setupBodyProfile', actionLabel: 'Add height' });
@@ -9437,6 +9517,13 @@ function openLogWeightForm(lastMeasurementUnit, expandMeasurements){
         <div class="unit-toggle"><button class="active" data-u="kg">kg</button><button data-u="lb">lb</button></div>
       </div>
 
+      <div class="field-label">Body Fat <span class="opt">(optional)</span></div>
+      <div class="field-card">
+        <input class="field-input" id="bfInput" type="number" inputmode="decimal" step="0.1" placeholder="—">
+        <div style="font-size:15px; color:var(--slate);">%</div>
+      </div>
+      <div style="font-size:11px; color:var(--slate); line-height:1.5; padding:0 18px 4px 18px;">From a DEXA scan, InBody, smart scale or calipers. A measured reading always takes priority over the estimate calculated from your tape measurements.</div>
+
       <div class="measure-toggle-row" id="measureToggleRow">
         <div class="left">
           <div class="icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12H3M3 12l4-4M3 12l4 4M21 12l-4-4M21 12l-4 4"/></svg></div>
@@ -9502,6 +9589,14 @@ function openLogWeightForm(lastMeasurementUnit, expandMeasurements){
       const payload = {
         user_id: userData.user.id, weight, unit, logged_at: todayStr(), notes: notes || null
       };
+      const bfRaw = document.getElementById('bfInput').value.trim();
+      if (bfRaw !== ''){
+        const bf = parseFloat(bfRaw);
+        // Guard against a mistyped value being stored as though it were real -
+        // anything outside this range is a typo, not a body composition.
+        if (isNaN(bf) || bf < 2 || bf > 70){ alert('Enter a body fat percentage between 2 and 70, or leave it blank.'); return; }
+        payload.body_fat_pct = bf;
+      }
       // Only attach measurement fields (and the unit that governs them) if at
       // least one was actually filled in - keeps weight-only entries from
       // carrying a pointless measurement_unit value with all-null fields.
