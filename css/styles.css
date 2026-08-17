@@ -300,3 +300,5 @@ input:focus, button:focus{ outline:none; }
 .insight-action{ margin-top:11px; background:var(--flame); color:var(--ink); font-family:'Oswald', sans-serif; font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; padding:9px 16px; border-radius:9px; border:none; }
 .bf-formula-btn{ background:var(--panel); color:var(--slate); }
 .bf-formula-btn.active{ background:var(--flame); color:var(--ink); border-color:var(--flame) !important; }
+.metric-chip{ font-family:'JetBrains Mono', monospace; font-size:10.5px; padding:6px 10px; border-radius:20px; background:var(--ink); color:var(--slate); border:1px solid var(--line); }
+.metric-chip.active{ background:var(--flame); color:var(--ink); border-color:var(--flame); font-weight:600; }

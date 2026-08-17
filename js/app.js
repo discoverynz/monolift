@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.191';
+const APP_VERSION = 'Beta 5.192';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -8117,6 +8117,54 @@ async function renderScale(){
   }
   const insights = buildPhaseInsights(phase, entries, phaseSets);
   const tip = buildPhaseTip(phase);
+
+  // ---- Measurements visual section ----
+  // Chronological entries that actually carry tape data. Everything in this
+  // block self-suppresses when there isn't enough logged to be meaningful,
+  // so a user who only tracks bodyweight never sees empty scaffolding.
+  const measuredChrono = [...entries].filter(e => e.measurement_unit).sort((a,b) => a.logged_at.localeCompare(b.logged_at));
+  let measurementsHtml = '';
+  if (measuredChrono.length >= 2){
+    // Only offer a chip for metrics with at least two data points - a chip
+    // that opens an un-drawable chart is worse than no chip.
+    const available = MEASUREMENT_FIELDS.filter(f => measuredChrono.filter(e => e[f.key] != null).length >= 2);
+    if (available.length){
+      if (!state.selectedMetric || !available.some(f => f.key === state.selectedMetric)){
+        // Default to waist when present - it's the metric that moves most
+        // meaningfully during a phase for most people.
+        state.selectedMetric = available.some(f => f.key === 'waist') ? 'waist' : available[0].key;
+      }
+      const sel = available.find(f => f.key === state.selectedMetric);
+      const pts = measuredChrono.filter(e => e[sel.key] != null)
+        .map(e => ({ date: e.logged_at, value: e[sel.key] }));
+      const unit = measuredChrono[measuredChrono.length-1].measurement_unit;
+      const first = pts[0].value, last = pts[pts.length-1].value;
+      const change = +(last - first).toFixed(1);
+      const favourableDown = new Set(['waist','hips']);
+      const good = Math.abs(change) < 0.2 ? null : (favourableDown.has(sel.key) ? change < 0 : change > 0);
+      const accent = good === null ? '#8C8E94' : (good ? '#8FBF7A' : '#E8A33D');
+      measurementsHtml = `
+        <div class="section-label" style="padding-top:20px;">Measurements</div>
+        <div class="stat-card">
+          <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px;">
+            <span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--slate);">${sel.label.toUpperCase()} · ${unit.toUpperCase()}</span>
+            <span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:${accent};">${change>=0?'+':''}${change}${unit} overall</span>
+          </div>
+          ${renderMetricChart(pts, unit, accent)}
+          <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:10px;">
+            ${available.map(f => `<button class="metric-chip ${f.key===state.selectedMetric?'active':''}" data-metric="${f.key}">${MEASUREMENT_SHORT_LABELS[f.key]}</button>`).join('')}
+          </div>
+        </div>
+        ${renderBodyMap(measuredChrono)}
+        ${renderMeasurementDeltaChart(measuredChrono)}
+        ${(phase && phase.height_cm && phase.bf_formula)
+          ? renderCompositionBar(partitionWeightChange(
+              measuredChrono.filter(e => e.waist && e.neck)[0],
+              measuredChrono.filter(e => e.waist && e.neck).slice(-1)[0],
+              phase.height_cm, phase.bf_formula))
+          : ''}`;
+    }
+  }
   const INSIGHT_ICONS = {
     rate: '<path d="M3 17l6-6 4 4 8-8"/><path d="M21 7v6h-6"/>',
     project: '<path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/>',
@@ -8161,6 +8209,7 @@ async function renderScale(){
           ${latest ? `<div class="big">${latest.weight}${latest.unit}</div><div class="small">${latest.logged_at}</div>${deltaHtml}` : `<div class="small">No entries yet — tap + to log your weight.</div>`}
         </div>
         ${chartHtml}
+        ${measurementsHtml}
         <div class="section-label">Recent Entries</div>
         ${rows || '<div class="empty-state">Nothing logged yet.</div>'}
         <div class="section-label" style="padding-top:20px;">Phase</div>
@@ -8189,6 +8238,19 @@ async function renderScale(){
       renderScale();
     });
   };
+  document.querySelectorAll('.metric-chip').forEach(chip => {
+    chip.onclick = () => {
+      state.selectedMetric = chip.dataset.metric;
+      const scrollEl = document.querySelector('.scroll-area');
+      const y = scrollEl ? scrollEl.scrollTop : 0;
+      renderScale().then(() => {
+        // Restore scroll so switching metrics doesn't yank the user back to
+        // the top of the page on every tap.
+        const el = document.querySelector('.scroll-area');
+        if (el) el.scrollTop = y;
+      });
+    };
+  });
   document.querySelectorAll('.insight-action').forEach(btn => {
     btn.onclick = () => {
       if (btn.dataset.action === 'setupBodyProfile') openBodyProfileForm(phase);
@@ -8509,6 +8571,194 @@ function fmtNum(n){
   return rounded.toString();
 }
 
+// ---------- Measurement visualisations ----------
+
+// Generic line chart used by the per-measurement trend view. Mirrors the
+// body-weight chart's visual language so the whole Track tab reads as one
+// coherent thing rather than a collection of differently-styled widgets.
+function renderMetricChart(points, unit, accent){
+  if (!points || points.length < 2) return '';
+  const vals = points.map(p => p.value);
+  const dataMin = Math.min(...vals), dataMax = Math.max(...vals);
+  const span = (dataMax - dataMin) || 1;
+  const yMin = dataMin - span * 0.2, yMax = dataMax + span * 0.2;
+  const yRange = (yMax - yMin) || 1;
+  const W = 320, H = 140, mL = 34, mR = 10, mT = 12, mB = 22;
+  const plotW = W - mL - mR, plotH = H - mT - mB;
+  const fmt = v => (Math.round(v * 10) / 10).toString();
+  const xAt = i => mL + (points.length === 1 ? plotW / 2 : (i / (points.length - 1)) * plotW);
+  const yAt = v => mT + plotH - ((v - yMin) / yRange) * plotH;
+  const gridLines = [yMin, (yMin + yMax) / 2, yMax].map(t => {
+    const y = yAt(t);
+    return `<line x1="${mL}" y1="${y.toFixed(1)}" x2="${W-mR}" y2="${y.toFixed(1)}" stroke="#2B2C2E" stroke-width="1"/>
+      <text x="${mL-5}" y="${(y+3).toFixed(1)}" text-anchor="end" font-family="monospace" font-size="9" fill="#8C8E94">${fmt(t)}</text>`;
+  }).join('');
+  const shortDate = d => { const p = d.split('-'); return `${p[2]}/${p[1]}`; };
+  const xIdx = points.length <= 2 ? [0, points.length-1] : [0, Math.floor((points.length-1)/2), points.length-1];
+  const xLabels = xIdx.map(i => `<text x="${xAt(i).toFixed(1)}" y="${H-6}" text-anchor="middle" font-family="monospace" font-size="9" fill="#8C8E94">${shortDate(points[i].date)}</text>`).join('');
+  const linePts = points.map((p,i) => `${xAt(i).toFixed(1)},${yAt(p.value).toFixed(1)}`).join(' ');
+  const areaPts = `${mL},${(mT+plotH).toFixed(1)} ${linePts} ${(W-mR)},${(mT+plotH).toFixed(1)}`;
+  const dots = points.map((p,i) => {
+    const last = i === points.length-1;
+    return `<circle cx="${xAt(i).toFixed(1)}" cy="${yAt(p.value).toFixed(1)}" r="${last?4:2.8}" fill="${last?accent:'#EDEAE2'}" stroke="#1C1D1F" stroke-width="1.5"/>`;
+  }).join('');
+  const gid = 'mFill' + Math.random().toString(36).slice(2,8);
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="auto">
+    <defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="${accent}" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="${accent}" stop-opacity="0"/>
+    </linearGradient></defs>
+    ${gridLines}
+    <polygon points="${areaPts}" fill="url(#${gid})"/>
+    <polyline points="${linePts}" fill="none" stroke="${accent}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+    ${dots}${xLabels}
+  </svg>`;
+}
+
+// Anatomical body map. Each measured region gets a marker coloured by
+// direction of change, so the shape of your progress is readable at a
+// glance in a way a column of numbers never is - you can immediately see
+// "waist down, arms up" as a picture rather than assembling it mentally.
+function renderBodyMap(measuredEntries){
+  if (!measuredEntries || measuredEntries.length < 2) return '';
+  const a = measuredEntries[0], b = measuredEntries[measuredEntries.length - 1];
+  const u = b.measurement_unit || 'cm';
+  const delta = k => (a[k] != null && b[k] != null) ? +(b[k] - a[k]).toFixed(1) : null;
+  // Regions positioned against the silhouette drawn below. `x,y` is the
+  // marker on the body; `lx,ly` is where the callout text sits, kept
+  // separate so labels can be spaced apart vertically without moving the
+  // anatomical markers off their actual positions.
+  const regions = [
+    { key:'neck',        label:'Neck',    x:100, y:47,  lx:44,  ly:44,  leftSide:true },
+    { key:'chest',       label:'Chest',   x:100, y:74,  lx:158, ly:70,  leftSide:false },
+    { key:'left_arm',    label:'L Arm',   x:62,  y:92,  lx:44,  ly:96,  leftSide:true },
+    { key:'right_arm',   label:'R Arm',   x:138, y:92,  lx:158, ly:100, leftSide:false },
+    { key:'waist',       label:'Waist',   x:100, y:104, lx:44,  ly:126, leftSide:true },
+    { key:'hips',        label:'Hips',    x:100, y:126, lx:158, ly:132, leftSide:false },
+    { key:'left_thigh',  label:'L Thigh', x:84,  y:166, lx:44,  ly:166, leftSide:true },
+    { key:'right_thigh', label:'R Thigh', x:116, y:166, lx:158, ly:172, leftSide:false },
+    { key:'left_calf',   label:'L Calf',  x:84,  y:216, lx:44,  ly:212, leftSide:true },
+    { key:'right_calf',  label:'R Calf',  x:116, y:216, lx:158, ly:218, leftSide:false }
+  ].map(r => ({ ...r, d: delta(r.key) })).filter(r => r.d != null);
+  if (!regions.length) return '';
+  // Waist/hips shrinking is favourable; limb and chest girth growing is
+  // favourable. Colour encodes that rather than raw direction, so green
+  // always means "the way you'd want it to go".
+  const favourableDown = new Set(['waist','hips']);
+  const colourFor = (r) => {
+    if (Math.abs(r.d) < 0.2) return '#8C8E94';
+    const good = favourableDown.has(r.key) ? r.d < 0 : r.d > 0;
+    return good ? '#8FBF7A' : '#E8A33D';
+  };
+  const markers = regions.map(r => {
+    const c = colourFor(r);
+    const anchor = r.leftSide ? 'end' : 'start';
+    const lineEndX = r.lx + (r.leftSide ? 6 : -6);
+    return `<path d="M${r.x} ${r.y} L${(r.x + lineEndX) / 2} ${r.y} L${(r.x + lineEndX) / 2} ${r.ly} L${lineEndX} ${r.ly}" fill="none" stroke="${c}" stroke-width="1" stroke-dasharray="2 2" opacity="0.5"/>
+      <circle cx="${r.x}" cy="${r.y}" r="3.4" fill="${c}" stroke="#17181A" stroke-width="1.2"/>
+      <text x="${r.lx}" y="${r.ly - 2}" text-anchor="${anchor}" font-family="'JetBrains Mono',monospace" font-size="8" fill="#8C8E94">${r.label}</text>
+      <text x="${r.lx}" y="${r.ly + 8}" text-anchor="${anchor}" font-family="'JetBrains Mono',monospace" font-size="9.5" font-weight="600" fill="${c}">${r.d >= 0 ? '+' : ''}${r.d.toFixed(1)}${u}</text>`;
+  }).join('');
+  return `<div class="stat-card" style="padding-bottom:8px;">
+    <div style="display:flex; justify-content:space-between; font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--slate); margin-bottom:2px;">
+      <span>Body map</span><span>${formatLoggedDate(a.logged_at)} → ${formatLoggedDate(b.logged_at)}</span>
+    </div>
+    <svg viewBox="-6 8 212 240" width="100%" height="auto" style="max-height:300px;">
+      <g fill="none" stroke="#3A3B3F" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="100" cy="26" r="13"/>
+        <path d="M100 39 L100 50"/>
+        <path d="M78 56 Q100 48 122 56 L128 104 Q100 112 72 104 Z"/>
+        <path d="M78 58 L60 76 L56 118"/>
+        <path d="M122 58 L140 76 L144 118"/>
+        <path d="M76 106 L82 150 L80 196 L78 232"/>
+        <path d="M124 106 L118 150 L120 196 L122 232"/>
+        <path d="M82 150 L118 150"/>
+      </g>
+      ${markers}
+    </svg>
+    <div style="display:flex; gap:12px; justify-content:center; padding-top:4px;">
+      <span style="font-size:9.5px; color:var(--slate);"><span style="color:#8FBF7A;">●</span> favourable</span>
+      <span style="font-size:9.5px; color:var(--slate);"><span style="color:#E8A33D;">●</span> against goal</span>
+      <span style="font-size:9.5px; color:var(--slate);"><span style="color:#8C8E94;">●</span> unchanged</span>
+    </div>
+  </div>`;
+}
+
+// Stacked fat/lean composition bar. Shows the two ends of the phase side by
+// side so the shift is visible as area, not just as a signed number.
+function renderCompositionBar(split){
+  if (!split) return '';
+  const rowFor = (label, weightVal, bfPct) => {
+    const fat = weightVal * bfPct / 100, lean = weightVal - fat;
+    const fatPct = (fat / weightVal) * 100;
+    return `<div style="margin-bottom:10px;">
+      <div style="display:flex; justify-content:space-between; font-family:'JetBrains Mono',monospace; font-size:9.5px; color:var(--slate); margin-bottom:4px;">
+        <span>${label}</span><span>${fmtNum(weightVal)}${split.unit} · ${bfPct}% BF</span>
+      </div>
+      <div style="display:flex; height:22px; border-radius:6px; overflow:hidden; background:var(--ink);">
+        <div style="width:${(100-fatPct).toFixed(1)}%; background:linear-gradient(90deg,#8FBF7A,#A8D492); display:flex; align-items:center; padding-left:7px;">
+          <span style="font-family:'JetBrains Mono',monospace; font-size:9px; color:#17181A; font-weight:700;">${fmtNum(lean)}</span>
+        </div>
+        <div style="width:${fatPct.toFixed(1)}%; background:linear-gradient(90deg,#E8A33D,#E8C06B); display:flex; align-items:center; justify-content:flex-end; padding-right:7px;">
+          <span style="font-family:'JetBrains Mono',monospace; font-size:9px; color:#17181A; font-weight:700;">${fmtNum(fat)}</span>
+        </div>
+      </div>
+    </div>`;
+  };
+  const wStart = split.startWeight, wEnd = split.endWeight;
+  return `<div class="stat-card">
+    <div style="font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--slate); margin-bottom:9px;">Composition shift</div>
+    ${rowFor('Phase start', wStart, split.bfStart)}
+    ${rowFor('Now', wEnd, split.bfEnd)}
+    <div style="display:flex; gap:8px; margin-top:4px;">
+      <div style="flex:1; background:var(--ink); border-radius:9px; padding:9px 11px;">
+        <div style="font-size:9.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px;">Fat</div>
+        <div style="font-family:'JetBrains Mono',monospace; font-size:15px; font-weight:600; color:${split.fatChange<=0?'#8FBF7A':'#E8A33D'};">${split.fatChange>=0?'+':''}${split.fatChange}${split.unit}</div>
+      </div>
+      <div style="flex:1; background:var(--ink); border-radius:9px; padding:9px 11px;">
+        <div style="font-size:9.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px;">Lean</div>
+        <div style="font-family:'JetBrains Mono',monospace; font-size:15px; font-weight:600; color:${split.leanChange>=0?'#8FBF7A':'#E8A33D'};">${split.leanChange>=0?'+':''}${split.leanChange}${split.unit}</div>
+      </div>
+    </div>
+    <div style="display:flex; gap:12px; justify-content:center; padding-top:9px;">
+      <span style="font-size:9.5px; color:var(--slate);"><span style="color:#8FBF7A;">■</span> lean mass</span>
+      <span style="font-size:9.5px; color:var(--slate);"><span style="color:#E8A33D;">■</span> fat mass</span>
+    </div>
+  </div>`;
+}
+
+// Diverging bar chart ranking every measurement by how much it moved.
+// Sorted by magnitude so the biggest movers surface first.
+function renderMeasurementDeltaChart(measuredEntries){
+  if (!measuredEntries || measuredEntries.length < 2) return '';
+  const a = measuredEntries[0], b = measuredEntries[measuredEntries.length-1];
+  const u = b.measurement_unit || 'cm';
+  const rows = MEASUREMENT_FIELDS
+    .filter(f => a[f.key] != null && b[f.key] != null)
+    .map(f => ({ label: f.label, key: f.key, d: +(b[f.key] - a[f.key]).toFixed(1) }))
+    .filter(r => Math.abs(r.d) >= 0.05)
+    .sort((x,y) => Math.abs(y.d) - Math.abs(x.d));
+  if (rows.length < 2) return '';
+  const maxAbs = Math.max(...rows.map(r => Math.abs(r.d)));
+  const favourableDown = new Set(['waist','hips']);
+  return `<div class="stat-card">
+    <div style="font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--slate); margin-bottom:10px;">Measurement change (${u})</div>
+    ${rows.map(r => {
+      const good = favourableDown.has(r.key) ? r.d < 0 : r.d > 0;
+      const c = Math.abs(r.d) < 0.2 ? '#8C8E94' : (good ? '#8FBF7A' : '#E8A33D');
+      const w = (Math.abs(r.d) / maxAbs) * 50;
+      return `<div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+        <div style="width:58px; font-size:10.5px; color:var(--slate); text-align:right; flex-shrink:0;">${r.label}</div>
+        <div style="flex:1; display:flex; align-items:center; height:16px; position:relative;">
+          <div style="position:absolute; left:50%; top:0; bottom:0; width:1px; background:#2B2C2E;"></div>
+          <div style="position:absolute; ${r.d < 0 ? `right:50%;` : `left:50%;`} width:${w.toFixed(1)}%; height:11px; background:${c}; border-radius:3px;"></div>
+        </div>
+        <div style="width:44px; font-family:'JetBrains Mono',monospace; font-size:10px; color:${c}; flex-shrink:0;">${r.d>=0?'+':''}${r.d.toFixed(1)}</div>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
 // ---------- Body analytics primitives ----------
 
 // Exponentially-weighted moving average of bodyweight. Daily scale readings
@@ -8575,6 +8825,8 @@ function partitionWeightChange(startEntry, endEntry, heightCm, formula){
   const leanStart = wStart - fatStart, leanEnd = wEnd - fatEnd;
   return {
     unit,
+    startWeight: Math.round(wStart * 10) / 10,
+    endWeight: Math.round(wEnd * 10) / 10,
     bfStart, bfEnd, bfChange: Math.round((bfEnd - bfStart) * 10) / 10,
     fatChange: Math.round((fatEnd - fatStart) * 10) / 10,
     leanChange: Math.round((leanEnd - leanStart) * 10) / 10,
