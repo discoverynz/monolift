@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.190';
+const APP_VERSION = 'Beta 5.191';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -8122,7 +8122,15 @@ async function renderScale(){
     project: '<path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/>',
     strength: '<path d="M6 7v10M18 7v10M3 10v4M21 10v4M6 12h12"/>',
     tape: '<rect x="2" y="8" width="20" height="8" rx="2"/><path d="M6 12v2M10 12v2M14 12v2M18 12v2"/>',
-    cadence: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/>'
+    cadence: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/>',
+    body: '<circle cx="12" cy="5" r="3"/><path d="M12 8v8M8 21l4-5 4 5M7 12h10"/>',
+    trend: '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
+    plateau: '<path d="M3 12h6l3-6 3 6h6"/><path d="M3 18h18"/>',
+    whoosh: '<path d="M12 3v14"/><path d="M6 13l6 6 6-6"/>',
+    energy: '<path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"/>',
+    calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
+    compare: '<path d="M4 20V8M12 20V4M20 20v-7"/>',
+    consistency: '<path d="M20 6L9 17l-5-5"/>'
   };
   const insightsHtml = (insights.length || tip) ? `
     <div class="section-label" style="padding-top:22px;">Insights</div>
@@ -8134,6 +8142,7 @@ async function renderScale(){
           ${c.stat ? `<div class="insight-stat">${c.stat}</div>` : ''}
         </div>
         <div class="insight-body">${c.body}</div>
+        ${c.action ? `<button class="insight-action" data-action="${c.action}">${c.actionLabel}</button>` : ''}
       </div>`).join('')}
     ${tip ? `<div class="tip-card">
         <div class="tip-eyebrow">Worth knowing</div>
@@ -8180,6 +8189,11 @@ async function renderScale(){
       renderScale();
     });
   };
+  document.querySelectorAll('.insight-action').forEach(btn => {
+    btn.onclick = () => {
+      if (btn.dataset.action === 'setupBodyProfile') openBodyProfileForm(phase);
+    };
+  });
   document.querySelectorAll('.scroll-area .log-row[data-id]').forEach(row => {
     let pressTimer = null;
     const start = () => { pressTimer = setTimeout(() => confirmDeleteBodyWeight(row.dataset.id), 550); };
@@ -8446,9 +8460,126 @@ async function buildPhaseHeroHtml(phase, weightEntries){
   </div>` + renderCycleTimeline();
 }
 
+function openBodyProfileForm(existing){
+  let formula = (existing && existing.bf_formula) || 'male';
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeBP">✕</button><h1>Body Profile</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll">
+      <div class="form-sub" style="margin-top:0;">Used to estimate body composition from your tape measurements. The estimate has a few points of error either way, but that error stays consistent — so the change over time is what's genuinely reliable.</div>
+      <div class="field-label">Height</div>
+      <div class="field-card">
+        <input class="field-input" id="heightInput" type="number" inputmode="decimal" placeholder="0" value="${existing && existing.height_cm ? existing.height_cm : ''}">
+        <div style="font-size:13px; color:var(--slate);">cm</div>
+      </div>
+      <div class="field-label">Formula Variant</div>
+      <div class="form-sub" style="padding-top:0;">The US Navy method has two forms with different inputs — the second additionally uses your hip measurement.</div>
+      <div style="display:flex; gap:8px; margin:0 18px 14px;">
+        <button class="bf-formula-btn ${formula==='male'?'active':''}" data-f="male" style="flex:1; border-radius:12px; padding:12px; font-family:'Oswald',sans-serif; font-weight:600; font-size:13px; border:1px solid var(--line);">Waist &amp; Neck</button>
+        <button class="bf-formula-btn ${formula==='female'?'active':''}" data-f="female" style="flex:1; border-radius:12px; padding:12px; font-family:'Oswald',sans-serif; font-weight:600; font-size:13px; border:1px solid var(--line);">Waist, Neck &amp; Hip</button>
+      </div>
+      <button class="save-btn" id="saveBPBtn">Save</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeBP').onclick = () => overlay.remove();
+  overlay.querySelectorAll('.bf-formula-btn').forEach(b => {
+    b.onclick = () => {
+      formula = b.dataset.f;
+      overlay.querySelectorAll('.bf-formula-btn').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+    };
+  });
+  overlay.querySelector('#saveBPBtn').onclick = async () => { await withButtonLoading(overlay.querySelector('#saveBPBtn'), 'Saving…', async () => {
+    const h = parseFloat(document.getElementById('heightInput').value);
+    if (!h || h < 100 || h > 250){ alert('Enter a height in centimetres.'); return; }
+    const { data: userData } = await supabaseClient.auth.getUser();
+    const { error } = await supabaseClient.from('phase_settings')
+      .upsert({ user_id: userData.user.id, height_cm: h, bf_formula: formula }, { onConflict: 'user_id' });
+    if (error){ alert(error.message); return; }
+    overlay.remove();
+    renderScale();
+  }); };
+}
+
+function openBodyProfileFormFromPhase(phase){ openBodyProfileForm(phase); }
+
 function fmtNum(n){
   const rounded = Math.round(n * 10) / 10;
   return rounded.toString();
+}
+
+// ---------- Body analytics primitives ----------
+
+// Exponentially-weighted moving average of bodyweight. Daily scale readings
+// swing 1-2kg on water, sodium and gut content alone, which is often larger
+// than a whole week of real change - so the raw number is close to useless
+// day to day. The EMA is the standard fix: it weights recent readings more
+// heavily than a flat average while still smoothing the noise, giving a
+// "trend weight" that moves only when something real is happening.
+function computeTrendWeight(entries, halfLifeDays){
+  if (!entries || !entries.length) return null;
+  const sorted = [...entries].sort((a,b) => a.logged_at.localeCompare(b.logged_at));
+  const unit = sorted[sorted.length - 1].unit;
+  const alphaFor = (gapDays) => 1 - Math.pow(0.5, gapDays / (halfLifeDays || 10));
+  let trend = convertWeight(sorted[0].weight, sorted[0].unit, unit);
+  let prevDate = sorted[0].logged_at;
+  const series = [{ logged_at: prevDate, trend }];
+  for (let i = 1; i < sorted.length; i++){
+    const w = convertWeight(sorted[i].weight, sorted[i].unit, unit);
+    const gap = Math.max(1, Math.round((new Date(sorted[i].logged_at) - new Date(prevDate)) / 86400000));
+    const a = alphaFor(gap);
+    trend = trend + a * (w - trend);
+    prevDate = sorted[i].logged_at;
+    series.push({ logged_at: prevDate, trend });
+  }
+  return { current: trend, unit, series, latestScale: convertWeight(sorted[sorted.length-1].weight, sorted[sorted.length-1].unit, unit) };
+}
+
+// US Navy circumference method. Returns an estimated body-fat percentage
+// from tape measurements plus height. It's an estimate with a few points of
+// error either way, but its VALUE is that the error is consistent - so the
+// change over time is far more trustworthy than any single reading, which
+// is exactly what matters when tracking a phase.
+function estimateBodyFatPct(entry, heightCm, formula){
+  if (!entry || !heightCm || !formula) return null;
+  const u = entry.measurement_unit;
+  if (!u) return null;
+  const toCm = (v) => v == null ? null : (u === 'in' ? v * 2.54 : v);
+  const waist = toCm(entry.waist), neck = toCm(entry.neck), hip = toCm(entry.hips);
+  if (!waist || !neck) return null;
+  let bf;
+  if (formula === 'female'){
+    if (!hip) return null;
+    bf = 495 / (1.29579 - 0.35004 * Math.log10(waist + hip - neck) + 0.22100 * Math.log10(heightCm)) - 450;
+  } else {
+    if (waist - neck <= 0) return null;
+    bf = 495 / (1.0324 - 0.19077 * Math.log10(waist - neck) + 0.15456 * Math.log10(heightCm)) - 450;
+  }
+  if (!isFinite(bf) || bf <= 0 || bf > 70) return null;
+  return Math.round(bf * 10) / 10;
+}
+
+// Splits a weight change into estimated fat and lean components using
+// body-fat estimates at each end. This is the number people actually care
+// about and almost never get: losing 3kg means something completely
+// different if it was 3kg of fat versus 1.5kg fat and 1.5kg muscle.
+function partitionWeightChange(startEntry, endEntry, heightCm, formula){
+  const bfStart = estimateBodyFatPct(startEntry, heightCm, formula);
+  const bfEnd = estimateBodyFatPct(endEntry, heightCm, formula);
+  if (bfStart == null || bfEnd == null) return null;
+  const unit = endEntry.unit;
+  const wStart = convertWeight(startEntry.weight, startEntry.unit, unit);
+  const wEnd = convertWeight(endEntry.weight, endEntry.unit, unit);
+  const fatStart = wStart * bfStart / 100, fatEnd = wEnd * bfEnd / 100;
+  const leanStart = wStart - fatStart, leanEnd = wEnd - fatEnd;
+  return {
+    unit,
+    bfStart, bfEnd, bfChange: Math.round((bfEnd - bfStart) * 10) / 10,
+    fatChange: Math.round((fatEnd - fatStart) * 10) / 10,
+    leanChange: Math.round((leanEnd - leanStart) * 10) / 10,
+    totalChange: Math.round((wEnd - wStart) * 10) / 10
+  };
 }
 
 // ---------- Phase Insights ----------
@@ -8599,6 +8730,165 @@ function buildPhaseInsights(phase, weightEntries, sets){
         body: `You've logged ${phaseWeights.length} weigh-in${phaseWeights.length===1?'':'s'} in ${Math.round(weeksElapsed)} weeks. Daily bodyweight swings of 1–2kg from water and food are normal, so with sparse entries a single reading can look like real progress when it isn't. Two or three a week makes the trend readable.`,
         stat: `${perWeek.toFixed(1)}/week` });
     }
+  }
+
+  // --- 6. Body composition split: fat vs lean ---
+  // The single most valuable thing here. A scale cannot tell you whether
+  // 3kg lost was fat or muscle, and that distinction is the entire point
+  // of a well-run cut. Requires height + formula + tape measurements at
+  // both ends of the window.
+  const measuredEntries = phaseWeights.filter(e => e.measurement_unit && e.waist && e.neck);
+  if (measuredEntries.length >= 2 && phase.height_cm && phase.bf_formula){
+    const split = partitionWeightChange(measuredEntries[0], measuredEntries[measuredEntries.length-1], phase.height_cm, phase.bf_formula);
+    if (split){
+      const u = split.unit;
+      const goodCut = kind === 'cut' && split.fatChange < 0 && split.leanChange >= -0.5;
+      const goodBulk = kind === 'bulk' && split.leanChange > 0 && split.leanChange >= Math.abs(split.fatChange) * 0.5;
+      let body;
+      if (goodCut){
+        body = `Of the ${fmtNum(Math.abs(split.totalChange))}${u} you've lost, an estimated <b>${fmtNum(Math.abs(split.fatChange))}${u} was fat</b> and lean mass held roughly steady. That's a well-run cut — most of what left was what you wanted gone.`;
+      } else if (kind === 'cut' && split.leanChange < -0.5){
+        body = `Of the ${fmtNum(Math.abs(split.totalChange))}${u} lost, an estimated ${fmtNum(Math.abs(split.fatChange))}${u} was fat and <b>${fmtNum(Math.abs(split.leanChange))}${u} was lean mass</b>. Losing lean during a cut usually points at too steep a deficit, not enough protein, or training volume having dropped off.`;
+      } else if (goodBulk){
+        body = `Of the ${fmtNum(split.totalChange)}${u} gained, an estimated <b>${fmtNum(split.leanChange)}${u} was lean mass</b> and ${fmtNum(split.fatChange)}${u} fat. A favourable ratio for a bulk.`;
+      } else if (kind === 'bulk'){
+        body = `Of the ${fmtNum(split.totalChange)}${u} gained, an estimated ${fmtNum(split.fatChange)}${u} was fat versus ${fmtNum(split.leanChange)}${u} lean. Fat outpacing lean usually means the surplus is larger than it needs to be.`;
+      } else {
+        body = `Estimated ${fmtNum(split.fatChange)}${u} fat and ${fmtNum(split.leanChange)}${u} lean change so far.`;
+      }
+      cards.push({ icon: 'body', title: 'Fat vs lean', tone: (goodCut || goodBulk) ? 'good' : 'warn',
+        body: body + ` Body fat estimate moved ${split.bfStart}% → ${split.bfEnd}%.`,
+        stat: `${split.bfChange >= 0 ? '+' : ''}${split.bfChange}% BF` });
+    }
+  } else if (measuredEntries.length >= 2 && (!phase.height_cm || !phase.bf_formula)){
+    cards.push({ icon: 'body', title: 'Unlock body composition', tone: 'neutral',
+      body: `You're already logging waist and neck measurements — add your height and we can estimate what portion of your weight change is fat versus lean mass, which the scale alone can never tell you.`,
+      action: 'setupBodyProfile', actionLabel: 'Add height' });
+  }
+
+  // --- 7. Trend weight vs scale weight ---
+  const trend = computeTrendWeight(phaseWeights, 10);
+  if (trend && phaseWeights.length >= 4){
+    const gap = trend.latestScale - trend.current;
+    if (Math.abs(gap) >= 0.4){
+      cards.push({ icon: 'trend', title: gap > 0 ? 'Scale is above your trend' : 'Scale is below your trend',
+        tone: 'neutral',
+        body: `Your last weigh-in read ${fmtNum(trend.latestScale)}${trend.unit}, but your smoothed trend weight is <b>${fmtNum(trend.current)}${trend.unit}</b>. Day-to-day readings swing on water, salt and food volume — the trend is what's actually moving. ${gap > 0 ? 'Today reading high is almost always fluid, not fat.' : 'Today reading low is a fluid dip, not a sudden loss.'}`,
+        stat: `Trend ${fmtNum(trend.current)}${trend.unit}` });
+    }
+  }
+
+  // --- 8. Plateau / whoosh detection ---
+  if (trend && trend.series.length >= 6 && daysElapsed >= 21){
+    const recent = trend.series.filter(p => p.logged_at >= addDaysToDate(today, -14));
+    if (recent.length >= 3){
+      const drift = recent[recent.length-1].trend - recent[0].trend;
+      // Signed by phase direction: a cut is expected to trend down, a bulk
+      // up. Without the sign, the "big drop" comparison below was true for
+      // any loss whatsoever during a cut rather than only unusually large ones.
+      const startWeightForRate = phaseWeights[0] ? convertWeight(phaseWeights[0].weight, phaseWeights[0].unit, trend.unit) : 0;
+      const expectedPerFortnight = startWeightForRate * PHASE_RATE_PER_WEEK[kind] * 2 * (kind === 'bulk' ? 1 : -1);
+      const stalled = Math.abs(drift) < Math.abs(expectedPerFortnight) * 0.3;
+      if (stalled){
+        cards.push({ icon: 'plateau', title: 'Trend has flattened', tone: 'warn',
+          body: kind === 'cut'
+            ? `Your trend weight has barely moved in two weeks. Genuine stalls happen — but fat loss is also famously non-linear, and a flat stretch often breaks with a sudden drop once retained water releases. Before changing anything, check that the last fortnight's intake and step count actually matched the fortnight before it.`
+            : `Your trend weight has been flat for two weeks. In a bulk that usually just means the surplus has quietly shrunk as bodyweight and activity rose — what worked at the start needs topping up as you get bigger.`,
+          stat: `${drift >= 0 ? '+' : ''}${fmtNum(drift)}${trend.unit} / 14d` });
+      } else if (kind === 'cut' && drift < expectedPerFortnight * 1.8){
+        cards.push({ icon: 'whoosh', title: 'Big drop this fortnight', tone: 'neutral',
+          body: `Your trend weight fell ${fmtNum(Math.abs(drift))}${trend.unit} in two weeks — well above your usual pace. Sharp drops after a flat stretch are typically retained water finally releasing rather than a sudden burst of fat loss, so expect it to level off rather than continue at this rate.`,
+          stat: `${fmtNum(drift)}${trend.unit} / 14d` });
+      }
+    }
+  }
+
+  // --- 9. Implied daily energy balance ---
+  // Descriptive, not prescriptive - derived purely from observed rate of
+  // change using the standard ~7700 kcal per kg of bodyweight figure.
+  if (phaseWeights.length >= 4 && weeksElapsed >= 2){
+    const first = phaseWeights[0], last = phaseWeights[phaseWeights.length - 1];
+    const unit = last.unit;
+    const changeKg = convertWeight(last.weight, last.unit, 'kg') - convertWeight(first.weight, first.unit, 'kg');
+    const kcalPerDay = Math.round((changeKg * 7700) / daysElapsed / 10) * 10;
+    if (Math.abs(kcalPerDay) >= 80){
+      cards.push({ icon: 'energy', title: kcalPerDay < 0 ? 'Implied daily deficit' : 'Implied daily surplus', tone: 'neutral',
+        body: `Your rate of change over ${Math.round(weeksElapsed)} weeks works out to roughly <b>${Math.abs(kcalPerDay)} kcal/day</b> ${kcalPerDay < 0 ? 'below' : 'above'} maintenance. This is read backwards from what your body actually did, so unlike a calculator estimate it already accounts for your real metabolism, NEAT and how accurately you've been tracking.`,
+        stat: `${kcalPerDay > 0 ? '+' : ''}${kcalPerDay} kcal/day` });
+    }
+  }
+
+  // --- 10. Day-of-week weight pattern ---
+  if (phaseWeights.length >= 10){
+    const byDay = {};
+    phaseWeights.forEach(e => {
+      const jsDay = new Date(e.logged_at + 'T00:00:00').getDay();
+      const wd = jsDay === 0 ? 6 : jsDay - 1;
+      const w = convertWeight(e.weight, e.unit, phaseWeights[phaseWeights.length-1].unit);
+      (byDay[wd] = byDay[wd] || []).push(w);
+    });
+    const avgs = Object.entries(byDay).filter(([,arr]) => arr.length >= 2)
+      .map(([wd, arr]) => ({ wd: +wd, avg: arr.reduce((a,b)=>a+b,0)/arr.length }));
+    if (avgs.length >= 4){
+      const overall = avgs.reduce((s,a)=>s+a.avg,0) / avgs.length;
+      const high = avgs.reduce((m,a) => a.avg > m.avg ? a : m);
+      const low = avgs.reduce((m,a) => a.avg < m.avg ? a : m);
+      const spread = high.avg - low.avg;
+      if (spread >= 0.4){
+        cards.push({ icon: 'calendar', title: 'Your weekly rhythm', tone: 'neutral',
+          body: `You consistently weigh most on <b>${DAY_NAMES[high.wd]}</b> and least on <b>${DAY_NAMES[low.wd]}</b> — a spread of ${fmtNum(spread)}${trend ? trend.unit : 'kg'}. That's almost always food volume and sodium from the days before, not real change. Worth comparing like-for-like days rather than reading a Monday against a Friday.`,
+          stat: `${fmtNum(spread)}${trend ? trend.unit : 'kg'} swing` });
+      }
+    }
+  }
+
+  // --- 11. Comparison against the same point in the previous cycle ---
+  const prevKindStart = phase[`${kind}_start`];
+  const priorEntries = (weightEntries || []).filter(e => e.logged_at < prevKindStart);
+  if (priorEntries.length >= 4 && weeksElapsed >= 2){
+    // Find weigh-ins from the equivalent stretch one full cycle back.
+    const cycleLenDays = (phase.bulk_weeks && phase.cut_weeks) ? (phase.bulk_weeks + phase.cut_weeks) * 7 : null;
+    if (cycleLenDays){
+      const refStart = addDaysToDate(start, -cycleLenDays);
+      const refPoint = addDaysToDate(today, -cycleLenDays);
+      const window = priorEntries.filter(e => e.logged_at >= refStart && e.logged_at <= refPoint);
+      if (window.length >= 2){
+        const unit = phaseWeights.length ? phaseWeights[phaseWeights.length-1].unit : window[0].unit;
+        const prevChange = convertWeight(window[window.length-1].weight, window[window.length-1].unit, unit)
+          - convertWeight(window[0].weight, window[0].unit, unit);
+        const nowChange = convertWeight(phaseWeights[phaseWeights.length-1].weight, phaseWeights[phaseWeights.length-1].unit, unit)
+          - convertWeight(phaseWeights[0].weight, phaseWeights[0].unit, unit);
+        const better = kind === 'cut' ? nowChange < prevChange : nowChange > prevChange;
+        cards.push({ icon: 'compare', title: better ? 'Ahead of last cycle' : 'Behind last cycle', tone: better ? 'good' : 'neutral',
+          body: `At this same point one cycle ago you were ${fmtNum(prevChange)}${unit} into that phase. You're currently ${fmtNum(nowChange)}${unit} — ${better ? 'a better result at the same stage' : 'slightly behind that pace'}. Same-stage comparisons are far more useful than comparing against your all-time best.`,
+          stat: `${fmtNum(nowChange)}${unit} vs ${fmtNum(prevChange)}${unit}` });
+      }
+    }
+  }
+
+  // --- 12. Fastest-moving measurement ---
+  if (measured.length >= 2){
+    const a = measured[0], b = measured[measured.length - 1];
+    const u = b.measurement_unit;
+    const deltas = MEASUREMENT_FIELDS
+      .filter(f => a[f.key] != null && b[f.key] != null)
+      .map(f => ({ label: f.label, delta: b[f.key] - a[f.key] }))
+      .filter(d => Math.abs(d.delta) >= 0.2);
+    if (deltas.length >= 2){
+      const biggest = deltas.reduce((m,d) => Math.abs(d.delta) > Math.abs(m.delta) ? d : m);
+      cards.push({ icon: 'tape', title: 'Biggest tape change', tone: 'neutral',
+        body: `<b>${biggest.label}</b> has moved the most this phase at ${biggest.delta >= 0 ? '+' : ''}${biggest.delta.toFixed(1)}${u}. Tape measurements catch shape changes that bodyweight completely misses — particularly during a recomp where the scale can sit still for weeks.`,
+        stat: `${biggest.label} ${biggest.delta >= 0 ? '+' : ''}${biggest.delta.toFixed(1)}${u}` });
+    }
+  }
+
+  // --- 13. Training consistency inside this phase ---
+  if (phaseSets.length >= 5 && weeksElapsed >= 2){
+    const trainingDays = new Set(phaseSets.map(s => s.logged_at)).size;
+    const perWeek = trainingDays / weeksElapsed;
+    cards.push({ icon: 'consistency', title: 'Training consistency', tone: perWeek >= 3 ? 'good' : 'neutral',
+      body: `You've trained on ${trainingDays} separate days this phase — averaging <b>${perWeek.toFixed(1)} sessions a week</b>. ${perWeek >= 4 ? 'That frequency is doing more for your result than any dietary fine-tuning will.' : perWeek >= 3 ? 'A solid, sustainable rhythm.' : 'Frequency is the cheapest lever available if progress stalls.'}`,
+      stat: `${perWeek.toFixed(1)}/week` });
   }
 
   return cards;

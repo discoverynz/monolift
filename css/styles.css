@@ -297,3 +297,6 @@ input:focus, button:focus{ outline:none; }
 .insight-footnote{ padding:10px 18px 4px 18px; font-size:10.5px; color:#5d5f64; line-height:1.5; }
 .phase-mini.projected{ border:1px dashed var(--line); background:transparent; opacity:0.75; }
 .phase-mini.projected .status-tag{ background:transparent; border:1px dashed var(--line); }
+.insight-action{ margin-top:11px; background:var(--flame); color:var(--ink); font-family:'Oswald', sans-serif; font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; padding:9px 16px; border-radius:9px; border:none; }
+.bf-formula-btn{ background:var(--panel); color:var(--slate); }
+.bf-formula-btn.active{ background:var(--flame); color:var(--ink); border-color:var(--flame) !important; }
