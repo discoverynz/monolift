@@ -302,3 +302,13 @@ input:focus, button:focus{ outline:none; }
 .bf-formula-btn.active{ background:var(--flame); color:var(--ink); border-color:var(--flame) !important; }
 .metric-chip{ font-family:'JetBrains Mono', monospace; font-size:10.5px; padding:6px 10px; border-radius:20px; background:var(--ink); color:var(--slate); border:1px solid var(--line); }
 .metric-chip.active{ background:var(--flame); color:var(--ink); border-color:var(--flame); font-weight:600; }
+
+/* ---------- Knowledge cards ---------- */
+.concept-card{ margin:10px 18px 6px 18px; background:var(--panel); border:1px solid var(--line); border-left:3px solid #6C8FBF; border-radius:14px; padding:15px 16px; }
+.concept-eyebrow{ font-family:'JetBrains Mono', monospace; font-size:9.5px; color:#6C8FBF; letter-spacing:1.2px; text-transform:uppercase; margin-bottom:6px; }
+.concept-title{ font-family:'Oswald', sans-serif; font-size:15px; margin-bottom:6px; }
+.concept-body{ font-size:12.5px; color:var(--slate); line-height:1.65; }
+.quote-card{ margin:10px 18px 6px 18px; padding:16px 18px 15px 18px; position:relative; }
+.quote-mark{ font-family:Georgia, serif; font-size:44px; color:var(--line); line-height:0.6; margin-bottom:2px; }
+.quote-text{ font-size:14px; color:var(--chalk); line-height:1.55; font-style:italic; }
+.quote-who{ font-family:'JetBrains Mono', monospace; font-size:10.5px; color:var(--slate); margin-top:8px; }

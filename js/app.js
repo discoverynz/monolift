@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.192';
+const APP_VERSION = 'Beta 5.193';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -7985,18 +7985,34 @@ function openTimer(){
 }
 
 // ---------- SCALE ----------
+// goodDirection declares which way each site should move to count as
+// progress: waist and hips are fat-storage sites where shrinking is the
+// goal, everything else is muscle girth where growing is. Declared once
+// here so the body map, trend chart, delta chart and log form all label it
+// consistently, rather than each inferring it from its own hardcoded list.
 const MEASUREMENT_FIELDS = [
-  { key: 'neck', label: 'Neck', group: 'Upper Body' },
-  { key: 'chest', label: 'Chest', group: 'Upper Body' },
-  { key: 'left_arm', label: 'Left Arm', group: 'Upper Body' },
-  { key: 'right_arm', label: 'Right Arm', group: 'Upper Body' },
-  { key: 'waist', label: 'Waist', group: 'Core' },
-  { key: 'hips', label: 'Hips', group: 'Core' },
-  { key: 'left_thigh', label: 'Left Thigh', group: 'Lower Body' },
-  { key: 'right_thigh', label: 'Right Thigh', group: 'Lower Body' },
-  { key: 'left_calf', label: 'Left Calf', group: 'Lower Body' },
-  { key: 'right_calf', label: 'Right Calf', group: 'Lower Body' },
+  { key: 'neck', label: 'Neck', group: 'Upper Body', goodDirection: 'up' },
+  { key: 'chest', label: 'Chest', group: 'Upper Body', goodDirection: 'up' },
+  { key: 'left_arm', label: 'Left Arm', group: 'Upper Body', goodDirection: 'up' },
+  { key: 'right_arm', label: 'Right Arm', group: 'Upper Body', goodDirection: 'up' },
+  { key: 'waist', label: 'Waist', group: 'Core', goodDirection: 'down' },
+  { key: 'hips', label: 'Hips', group: 'Core', goodDirection: 'down' },
+  { key: 'left_thigh', label: 'Left Thigh', group: 'Lower Body', goodDirection: 'up' },
+  { key: 'right_thigh', label: 'Right Thigh', group: 'Lower Body', goodDirection: 'up' },
+  { key: 'left_calf', label: 'Left Calf', group: 'Lower Body', goodDirection: 'up' },
+  { key: 'right_calf', label: 'Right Calf', group: 'Lower Body', goodDirection: 'up' },
 ];
+function goodDirectionFor(key){
+  const f = MEASUREMENT_FIELDS.find(x => x.key === key);
+  return f ? f.goodDirection : 'up';
+}
+function directionLabel(key){
+  return goodDirectionFor(key) === 'down' ? '↓ lower is better' : '↑ higher is better';
+}
+function isFavourableChange(key, delta){
+  if (Math.abs(delta) < 0.2) return null; // effectively unchanged
+  return goodDirectionFor(key) === 'down' ? delta < 0 : delta > 0;
+}
 const MEASUREMENT_GROUPS = ['Upper Body', 'Core', 'Lower Body'];
 // Short labels for the history-row pills, so "Left Arm" -> "L Arm" etc. and
 // the pill row doesn't wrap onto four lines for someone who fills in all 10.
@@ -8117,6 +8133,7 @@ async function renderScale(){
   }
   const insights = buildPhaseInsights(phase, entries, phaseSets);
   const tip = buildPhaseTip(phase);
+  const knowledge = buildKnowledgeCards(phase);
 
   // ---- Measurements visual section ----
   // Chronological entries that actually carry tape data. Everything in this
@@ -8140,14 +8157,13 @@ async function renderScale(){
       const unit = measuredChrono[measuredChrono.length-1].measurement_unit;
       const first = pts[0].value, last = pts[pts.length-1].value;
       const change = +(last - first).toFixed(1);
-      const favourableDown = new Set(['waist','hips']);
-      const good = Math.abs(change) < 0.2 ? null : (favourableDown.has(sel.key) ? change < 0 : change > 0);
+      const good = isFavourableChange(sel.key, change);
       const accent = good === null ? '#8C8E94' : (good ? '#8FBF7A' : '#E8A33D');
       measurementsHtml = `
         <div class="section-label" style="padding-top:20px;">Measurements</div>
         <div class="stat-card">
           <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px;">
-            <span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--slate);">${sel.label.toUpperCase()} · ${unit.toUpperCase()}</span>
+            <span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--slate);">${sel.label.toUpperCase()} · ${unit.toUpperCase()} <span style="color:#5d5f64;">· ${directionLabel(sel.key)}</span></span>
             <span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:${accent};">${change>=0?'+':''}${change}${unit} overall</span>
           </div>
           ${renderMetricChart(pts, unit, accent)}
@@ -8180,7 +8196,7 @@ async function renderScale(){
     compare: '<path d="M4 20V8M12 20V4M20 20v-7"/>',
     consistency: '<path d="M20 6L9 17l-5-5"/>'
   };
-  const insightsHtml = (insights.length || tip) ? `
+  const insightsHtml = (insights.length || tip || knowledge.concept) ? `
     <div class="section-label" style="padding-top:22px;">Insights</div>
     ${insights.map(c => `
       <div class="insight-card ${c.tone}">
@@ -8196,6 +8212,16 @@ async function renderScale(){
         <div class="tip-eyebrow">Worth knowing</div>
         <div class="tip-title">${tip.title}</div>
         <div class="tip-body">${tip.body}</div>
+      </div>` : ''}
+    ${knowledge.concept ? `<div class="concept-card">
+        <div class="concept-eyebrow">The idea · changes daily</div>
+        <div class="concept-title">${knowledge.concept.title}</div>
+        <div class="concept-body">${knowledge.concept.body}</div>
+      </div>` : ''}
+    ${knowledge.line ? `<div class="quote-card">
+        <div class="quote-mark">&ldquo;</div>
+        <div class="quote-text">${knowledge.line.text}</div>
+        <div class="quote-who">— ${knowledge.line.who}</div>
       </div>` : ''}
     ${insights.length ? `<div class="insight-footnote">Worked out from your own weigh-ins and logged sets in this phase. General training guidance — not medical advice.</div>` : ''}
   ` : '';
@@ -8571,6 +8597,70 @@ function fmtNum(n){
   return rounded.toString();
 }
 
+// ---------- Rotating knowledge library ----------
+// Concepts are tagged by which phase they're relevant to, so what surfaces
+// matches what the user is actually doing. Rotation is deterministic on
+// day-of-year rather than random, so the card changes daily but stays
+// stable across re-renders within a day instead of flickering on every tap.
+const PHASE_CONCEPTS = [
+  { tags:['cut'], title:`Adaptive thermogenesis`,
+    body:`Your body defends against a deficit by quietly reducing energy spend — less fidgeting, less spontaneous movement, slightly cheaper muscle contractions. This is why a deficit that worked in week two stops working by week eight without you eating a single calorie more. It's not a metabolism "breaking"; it's a moving target.` },
+  { tags:['cut'], title:`Why the scale lies after hard training`,
+    body:`A demanding session causes muscle damage, and repair pulls water into the tissue. You can finish a heavy week visibly leaner and still weigh more, purely from inflammation and glycogen. This is the single most common reason people abandon a diet that was actually working.` },
+  { tags:['cut'], title:`Diet breaks`,
+    body:`Planned stretches at maintenance — one to two weeks — partially restore the hormonal and behavioural drift that builds during a long deficit. Total fat loss usually ends up similar or better than an uninterrupted cut, because adherence over the whole period is higher.` },
+  { tags:['cut','bulk'], title:`Protein is the one you don't cut`,
+    body:`In a deficit, protein is what tells your body to burn fat rather than break down muscle for fuel. In a surplus, it's the raw material for new tissue. It's the one macro worth being stubborn about in either direction.` },
+  { tags:['bulk'], title:`Your rate of gain has a ceiling`,
+    body:`A beginner might add a kilo of muscle a month. Someone five years in might manage that in six months. Eating past that ceiling doesn't accelerate muscle — the excess simply goes to fat. This is why experienced lifters bulk slower, not faster.` },
+  { tags:['bulk'], title:`A surplus is permission, not instruction`,
+    body:`Extra calories don't build muscle. Training builds muscle; the surplus just makes it possible. A bulk without progressive overload in the log is, mechanically, just a slow fat gain with extra steps.` },
+  { tags:['any'], title:`Progressive overload is the whole game`,
+    body:`Nearly every effective programme is a different wrapper around one idea: do slightly more over time. More weight, more reps, more sets, better range, less rest. If nothing in your log is trending up across months, no amount of exercise selection will fix it.` },
+  { tags:['any'], title:`Junk volume`,
+    body:`Sets taken far from failure with light loads add fatigue without much stimulus. Ten hard sets often beat twenty soft ones — and cost half the recovery. If you're always sore but never stronger, this is usually why.` },
+  { tags:['any'], title:`Muscle memory is real`,
+    body:`Training adds permanent nuclei to muscle fibres. They survive detraining, so regaining lost size after a layoff is dramatically faster than building it the first time. Time off is far less catastrophic than it feels.` },
+  { tags:['any'], title:`Sleep is a training variable`,
+    body:`Restricting sleep to around five hours has been shown to shift the composition of weight lost toward lean mass and away from fat — same diet, worse outcome. It's the highest-leverage thing most people ignore entirely.` },
+  { tags:['any'], title:`Weekly averages beat daily readings`,
+    body:`Bodyweight swings 1–2kg on water, sodium, and gut contents alone — often more than a whole week of real change. A single reading is noise. The average of seven is signal.` },
+  { tags:['any'], title:`The minimum effective dose`,
+    body:`Meaningful muscle can be maintained on a fraction of the volume it took to build. During busy periods or a hard cut, cutting sets while keeping loads heavy preserves far more than the reverse.` },
+  { tags:['any'], title:`Specificity cuts both ways`,
+    body:`You adapt to what you actually do. That's why the lift you avoid stays weak, and why "I'll fix my squat with more leg press" rarely works. The fastest route to being better at something is usually doing that thing.` },
+  { tags:['cut'], title:`The last few kilos are different`,
+    body:`Fat loss gets harder as you get leaner, not easier — hunger signalling rises, energy falls, and the deficit as a share of a now-smaller body gets steeper. Expecting the final stretch to feel like the first is why people quit at 80% done.` },
+  { tags:['bulk'], title:`Creatine and the scale jump`,
+    body:`Starting creatine typically adds 1–2kg of intramuscular water within a fortnight. It's not fat and it isn't muscle — but it will look like a sudden gain, so it's worth knowing before you blame your diet.` }
+];
+
+// Kept deliberately short and attributed. The aim is a line that reframes
+// something, not motivational-poster filler.
+const TRAINING_LINES = [
+  { text:`Everybody wants to be a bodybuilder, but nobody wants to lift heavy weights.`, who:'Ronnie Coleman' },
+  { text:`Strength is a skill.`, who:'Pavel Tsatsouline' },
+  { text:`The bar doesn't care how you feel.`, who:`Gym adage` },
+  { text:`Discipline equals freedom.`, who:'Jocko Willink' },
+  { text:`You can't rush a harvest.`, who:'Proverb' },
+  { text:`Consistency beats intensity.`, who:'Training adage' }
+];
+
+function pickRotating(list){
+  if (!list.length) return null;
+  const now = new Date();
+  const dayOfYear = Math.floor((now - new Date(now.getFullYear(), 0, 0)) / 86400000);
+  return list[dayOfYear % list.length];
+}
+
+function buildKnowledgeCards(phase){
+  const kind = phase ? determineActivePhase(phase) : null;
+  const relevant = PHASE_CONCEPTS.filter(c => c.tags.includes('any') || (kind && c.tags.includes(kind)));
+  const concept = pickRotating(relevant.length ? relevant : PHASE_CONCEPTS);
+  const line = pickRotating(TRAINING_LINES);
+  return { concept, line };
+}
+
 // ---------- Measurement visualisations ----------
 
 // Generic line chart used by the per-measurement trend view. Mirrors the
@@ -8644,10 +8734,9 @@ function renderBodyMap(measuredEntries){
   // Waist/hips shrinking is favourable; limb and chest girth growing is
   // favourable. Colour encodes that rather than raw direction, so green
   // always means "the way you'd want it to go".
-  const favourableDown = new Set(['waist','hips']);
   const colourFor = (r) => {
-    if (Math.abs(r.d) < 0.2) return '#8C8E94';
-    const good = favourableDown.has(r.key) ? r.d < 0 : r.d > 0;
+    const good = isFavourableChange(r.key, r.d);
+    if (good === null) return '#8C8E94';
     return good ? '#8FBF7A' : '#E8A33D';
   };
   const markers = regions.map(r => {
@@ -8676,10 +8765,15 @@ function renderBodyMap(measuredEntries){
       </g>
       ${markers}
     </svg>
-    <div style="display:flex; gap:12px; justify-content:center; padding-top:4px;">
-      <span style="font-size:9.5px; color:var(--slate);"><span style="color:#8FBF7A;">●</span> favourable</span>
-      <span style="font-size:9.5px; color:var(--slate);"><span style="color:#E8A33D;">●</span> against goal</span>
-      <span style="font-size:9.5px; color:var(--slate);"><span style="color:#8C8E94;">●</span> unchanged</span>
+    <div style="border-top:1px solid var(--line); margin-top:4px; padding-top:9px;">
+      <div style="display:flex; gap:14px; justify-content:center; margin-bottom:7px;">
+        <span style="font-size:9.5px; color:var(--slate);"><span style="color:#8FBF7A;">●</span> moving the right way</span>
+        <span style="font-size:9.5px; color:var(--slate);"><span style="color:#E8A33D;">●</span> moving the wrong way</span>
+      </div>
+      <div style="display:flex; gap:14px; justify-content:center;">
+        <span style="font-size:9.5px; color:var(--slate);">Waist &amp; hips: <span style="color:var(--chalk);">↓ lower is better</span></span>
+        <span style="font-size:9.5px; color:var(--slate);">Everywhere else: <span style="color:var(--chalk);">↑ higher is better</span></span>
+      </div>
     </div>
   </div>`;
 }
@@ -8740,15 +8834,18 @@ function renderMeasurementDeltaChart(measuredEntries){
     .sort((x,y) => Math.abs(y.d) - Math.abs(x.d));
   if (rows.length < 2) return '';
   const maxAbs = Math.max(...rows.map(r => Math.abs(r.d)));
-  const favourableDown = new Set(['waist','hips']);
   return `<div class="stat-card">
-    <div style="font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--slate); margin-bottom:10px;">Measurement change (${u})</div>
+    <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:10px;">
+      <span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--slate);">Measurement change (${u})</span>
+      <span style="font-size:9px; color:#5d5f64;">arrow = better direction</span>
+    </div>
     ${rows.map(r => {
-      const good = favourableDown.has(r.key) ? r.d < 0 : r.d > 0;
-      const c = Math.abs(r.d) < 0.2 ? '#8C8E94' : (good ? '#8FBF7A' : '#E8A33D');
+      const good = isFavourableChange(r.key, r.d);
+      const c = good === null ? '#8C8E94' : (good ? '#8FBF7A' : '#E8A33D');
+      const arrow = goodDirectionFor(r.key) === 'down' ? '↓' : '↑';
       const w = (Math.abs(r.d) / maxAbs) * 50;
       return `<div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
-        <div style="width:58px; font-size:10.5px; color:var(--slate); text-align:right; flex-shrink:0;">${r.label}</div>
+        <div style="width:70px; font-size:10.5px; color:var(--slate); text-align:right; flex-shrink:0;">${r.label} <span style="color:#5d5f64; font-size:9px;" title="${goodDirectionFor(r.key)==='down'?'lower is better':'higher is better'}">${arrow}</span></div>
         <div style="flex:1; display:flex; align-items:center; height:16px; position:relative;">
           <div style="position:absolute; left:50%; top:0; bottom:0; width:1px; background:#2B2C2E;"></div>
           <div style="position:absolute; ${r.d < 0 ? `right:50%;` : `left:50%;`} width:${w.toFixed(1)}%; height:11px; background:${c}; border-radius:3px;"></div>
@@ -9201,7 +9298,7 @@ function openLogWeightForm(lastMeasurementUnit){
 
   const measureFieldHtml = (f) => `
         <div class="measure-field">
-          <div class="mlabel">${f.label} <span class="opt-tag">opt</span></div>
+          <div class="mlabel">${f.label} <span class="opt-tag" title="${f.goodDirection === 'down' ? 'lower is better' : 'higher is better'}">${f.goodDirection === 'down' ? '↓' : '↑'}</span></div>
           <div class="minput-row"><input class="mf-input" data-key="${f.key}" type="number" inputmode="decimal" placeholder="—"><span class="unit-suffix mf-unit-label">${measurementUnit}</span></div>
         </div>`;
   const measureGroupHtml = (group) => `
@@ -9235,6 +9332,7 @@ function openLogWeightForm(lastMeasurementUnit){
           <span class="lbl">MEASUREMENT UNIT</span>
           <div class="unit-toggle" id="measureUnitToggle"><button class="${measurementUnit==='cm'?'active':''}" data-mu="cm">cm</button><button class="${measurementUnit==='in'?'active':''}" data-mu="in">in</button></div>
         </div>
+        <div style="font-size:11px; color:var(--slate); line-height:1.5; padding:0 0 10px 0;">Every field is optional — fill in what you measure. <span style="color:var(--chalk);">↓</span> marks sites where shrinking is progress (waist, hips); <span style="color:var(--chalk);">↑</span> marks muscle girth where growing is.</div>
         ${MEASUREMENT_GROUPS.map(measureGroupHtml).join('')}
       </div>
 
