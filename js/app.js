@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.193';
+const APP_VERSION = 'Beta 5.194';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -678,24 +678,34 @@ let state = { selectedDay: todayWeekday(), exercises: [], session: null, current
 
 const ICON_TRACK = `<svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="4" width="4" height="16" rx="1.2"/><rect x="17" y="4" width="4" height="16" rx="1.2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>`;
 const ICON_SCALE = `<svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="4" width="18" height="17" rx="3"/><circle cx="12" cy="12.5" r="5"/><line x1="12" y1="12.5" x2="15" y2="10"/></svg>`;
-const ICON_PHASE = `<svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 3h16 M4 21h16 M5 3c0 6 7 7 7 9s-7 3-7 9 M19 3c0 6-7 7-7 9s7 3 7 9"/></svg>`;
 const ICON_BALANCE = `<svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18"/></svg>`;
+const ICON_PHASE = `<svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l5-5 4 3 8-8"/><path d="M20 7v5h-5"/></svg>`;
+
+// Shared brandbar. Me lives here as an icon on every screen rather than
+// occupying a tab slot - it's an occasional settings destination, not a peer
+// of the daily workflow. `extras` lets a screen inject its own controls
+// (the Lift screen's location chip) to the left of the Me button.
+function renderBrandbar(extras){
+  return `<div class="brandbar"><img src="icons/logo.svg" alt=""><div class="name">MONOLIFT</div>
+    <div class="bb-right">${extras || ''}
+      <button class="icon-btn me" id="brandMeBtn" aria-label="Me">${ICON_ME}</button>
+    </div></div>`;
+}
 const ICON_ME = `<svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="7.5" r="4"/><path d="M3 21c0-5 4-8 9-8s9 3 9 8"/></svg>`;
 const ICON_CHECK = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8FBF7A" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
 
 function renderTabbar(){
-  // NAMING NOTE: display labels were renamed (exercise logging is now "Lift",
-  // body tracking is now "Track") but the internal tab id strings and
-  // function names (renderTrack/renderScale, currentTab values 'track'/
-  // 'scale') were intentionally left as-is to avoid a large, error-prone
-  // rename across the whole file. renderTrack() = exercise logging = "Lift"
-  // tab. renderScale() = weight/measurements/phase = "Track" tab.
+  // NAMING NOTE: display labels differ from internal tab ids, which were
+  // left unchanged to avoid a large error-prone rename across the file.
+  // renderTrack() = exercise logging = "Lift" tab (id 'track').
+  // renderScale() = bodyweight + measurements = "Track" tab (id 'scale').
+  // renderPhaseTab() = bulk/cut + insights = "Phase" tab (id 'phase').
   return `<div class="tabbar">
     <button class="tab-item ${state.currentTab==='track'?'active':''}" data-tab="track">${ICON_TRACK}<span>Lift</span></button>
-    <button class="tab-item ${state.currentTab==='scale'?'active':''}" data-tab="scale">${ICON_SCALE}<span>Track</span></button>
-    <div class="fab-wrap"><button class="fab" id="fabBtn">${`<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#17181A" stroke-width="2.4" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`}</button></div>
     <button class="tab-item ${state.currentTab==='balance'?'active':''}" data-tab="balance">${ICON_BALANCE}<span>Balance</span></button>
-    <button class="tab-item ${state.currentTab==='me'?'active':''}" data-tab="me">${ICON_ME}<span>Me</span></button>
+    <div class="fab-wrap"><button class="fab" id="fabBtn">${`<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#17181A" stroke-width="2.4" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`}</button></div>
+    <button class="tab-item ${state.currentTab==='scale'?'active':''}" data-tab="scale">${ICON_SCALE}<span>Track</span></button>
+    <button class="tab-item ${state.currentTab==='phase'?'active':''}" data-tab="phase">${ICON_PHASE}<span>Phase</span></button>
   </div>`;
 }
 
@@ -708,13 +718,19 @@ function attachShellHandlers(){
       if (tab === 'track') renderTrack();
       else if (tab === 'scale') renderScale();
       else if (tab === 'balance') renderBalance();
+      else if (tab === 'phase') renderPhaseTab();
       else if (tab === 'me') renderMe();
     };
   });
+  const brandMe = document.getElementById('brandMeBtn');
+  if (brandMe) brandMe.onclick = () => { state.currentTab = 'me'; removeSideIndex(); renderMe(); };
   const fab = document.getElementById('fabBtn');
   if (fab) fab.onclick = () => {
-    if (state.currentTab === 'scale') openLogWeightForm(state.lastMeasurementUnit);
-    else openPicker(); // track, balance, me all default to the set-logging picker
+    // Weigh-in from both body screens - on Phase, weight is the input that
+    // drives every insight on that page, so logging it there is the natural
+    // action rather than an arbitrary one.
+    if (state.currentTab === 'scale' || state.currentTab === 'phase') openLogWeightForm(state.lastMeasurementUnit);
+    else openPicker(); // lift, balance default to the set-logging picker
   };
 }
 
@@ -3916,12 +3932,10 @@ async function renderTrack(){
   app.innerHTML = `
     <div class="app-shell">
       <div class="scroll-area">
-        <div class="brandbar"><img src="icons/logo.svg" alt=""><div class="name">MONOLIFT</div>
-          ${allLocations.length > 0 ? `<div id="locSwitcher" style="margin-left:auto; display:flex; align-items:center; gap:5px; background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:5px 10px 5px 8px; cursor:pointer;">
+        ${renderBrandbar(allLocations.length > 0 ? `<div id="locSwitcher" style="display:flex; align-items:center; gap:5px; background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:5px 10px 5px 8px; cursor:pointer;">
             <span style="font-size:10px;">📍</span>
             <span style="font-family:'Bebas Neue',sans-serif; font-size:10px; color:var(--flame); letter-spacing:0.5px;">${currentLocationName ? currentLocationName.toUpperCase() : 'ANYWHERE'}</span>
-          </div>` : ''}
-        </div>
+          </div>` : '')}
         <div class="day-strip">${dayChips}</div>
         <div class="header">
           <div class="eyebrow">${DAY_LABELS[state.selectedDay].toUpperCase()}</div>
@@ -3945,7 +3959,8 @@ async function renderTrack(){
           </div>
         </div>
         <div style="padding:8px 18px 0 18px; display:flex; gap:8px; flex-wrap:wrap;">
-          <button id="toolbarTimerBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:var(--panel); border:1px solid var(--line); color:var(--slate);">
+          <button id="toolbarTimerBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:rgba(255,107,26,0.10); border:1px solid rgba(255,107,26,0.45); color:var(--flame);">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg>
             <span style="font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px;">TIMER</span>
           </button>
           ${workingExercises.some(ex => !ex.alt_group_id) ? `<button id="toolbarAutoGroupBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:var(--panel); border:1px solid var(--line); color:var(--slate);">
@@ -8110,30 +8125,10 @@ async function renderScale(){
     </div>`;
   }
 
+  // Body profile (height/formula) is stored on phase_settings and is the
+  // only thing Track needs from it - for the composition bar. Everything
+  // else phase-related now lives on the Phase tab.
   const phase = await loadPhase();
-  const phaseHtml = await buildPhaseHeroHtml(phase, entries);
-
-  // Sets are needed for the strength-retention insight. Only fetch from the
-  // active phase's start onward - keeps this a small bounded query instead
-  // of pulling the user's entire training history every time Track opens.
-  let phaseSets = [];
-  const activeKindForSets = phase ? determineActivePhase(phase) : null;
-  if (activeKindForSets && phase[`${activeKindForSets}_start`]){
-    const { data: userDataForSets } = await supabaseClient.auth.getUser();
-    if (userDataForSets && userDataForSets.user){
-      const setsResult = await withTimeout(
-        supabaseClient.from('sets')
-          .select('weight, weight_unit, weight_type, reps, num_sets, logged_at')
-          .eq('user_id', userDataForSets.user.id)
-          .gte('logged_at', phase[`${activeKindForSets}_start`]),
-        15000
-      );
-      if (!setsResult.__timeout && !setsResult.error) phaseSets = setsResult.data || [];
-    }
-  }
-  const insights = buildPhaseInsights(phase, entries, phaseSets);
-  const tip = buildPhaseTip(phase);
-  const knowledge = buildKnowledgeCards(phase);
 
   // ---- Measurements visual section ----
   // Chronological entries that actually carry tape data. Everything in this
@@ -8178,9 +8173,96 @@ async function renderScale(){
               measuredChrono.filter(e => e.waist && e.neck)[0],
               measuredChrono.filter(e => e.waist && e.neck).slice(-1)[0],
               phase.height_cm, phase.bf_formula))
-          : ''}`;
+          : previewWrap(
+              renderCompositionBar(partitionWeightChange(sampleMeasurementEntries()[0], sampleMeasurementEntries().slice(-1)[0], 180, 'male')),
+              'See fat vs lean',
+              'Add your height and we can estimate how much of your weight change is fat versus muscle — the thing the scale can never tell you.',
+              'Add height')}`;
     }
   }
+  // Not enough measurement history yet - show what the section becomes once
+  // it is populated, using clearly-labelled sample data. A blank section
+  // teaches nothing; seeing the body map and charts you unlock is both more
+  // informative and more motivating than an empty state ever is.
+  if (!measurementsHtml){
+    const sample = sampleMeasurementEntries();
+    const samplePts = sample.map(e => ({ date: e.logged_at, value: e.waist }));
+    const loggedCount = measuredChrono.length;
+    const need = loggedCount === 0
+      ? 'Log your measurements twice — a couple of weeks apart — to see your own.'
+      : 'One more measurement entry and these switch to your own data.';
+    measurementsHtml = `
+      <div class="section-label" style="padding-top:20px;">Measurements</div>
+      ${previewWrap(`<div class="stat-card">
+          <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px;">
+            <span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--slate);">WAIST · CM <span style="color:#5d5f64;">· ↓ lower is better</span></span>
+            <span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:#8FBF7A;">-4.0cm overall</span>
+          </div>
+          ${renderMetricChart(samplePts, 'cm', '#8FBF7A')}
+        </div>`,
+        'Track every measurement over time',
+        need + ' Tap any body part to chart it.',
+        'Log measurements')}
+      ${previewWrap(renderBodyMap(sample), 'Your whole body at a glance',
+        'Every site you measure gets mapped and colour-coded by whether it moved the way you want.', null)}
+      ${previewWrap(renderMeasurementDeltaChart(sample), 'See what moved most',
+        'Ranks every measurement by how much it changed, so the biggest wins surface first.', null)}
+      ${previewWrap(renderCompositionBar(partitionWeightChange(sample[0], sample[sample.length-1], 180, 'male')),
+        'Fat vs lean, estimated',
+        'With your height added, waist and neck measurements estimate how much of your change was fat versus muscle.',
+        'Add height')}`;
+  }
+
+
+  app.innerHTML = `
+    <div class="app-shell">
+      <div class="scroll-area">
+        ${renderBrandbar()}
+        <div class="header"><div class="eyebrow">BODY</div><h1>Track</h1></div>
+        <div class="stat-card">
+          ${latest ? `<div class="big">${latest.weight}${latest.unit}</div><div class="small">${latest.logged_at}</div>${deltaHtml}` : `<div class="small">No entries yet — tap + to log your weight.</div>`}
+        </div>
+        ${chartHtml}
+        ${measurementsHtml}
+        <div class="section-label">Recent Entries</div>
+        ${rows || '<div class="empty-state">Nothing logged yet.</div>'}
+      </div>
+      ${renderTabbar()}
+    </div>`;
+  attachShellHandlers();
+  document.querySelectorAll('.preview-cta').forEach(btn => {
+    btn.onclick = () => {
+      // 'Add height' opens the body profile; anything else prompts a weigh-in
+      // with the measurements section pre-expanded.
+      if (btn.textContent.trim() === 'Add height') openBodyProfileForm(phase);
+      else openLogWeightForm(state.lastMeasurementUnit, true);
+    };
+  });
+  document.querySelectorAll('.metric-chip').forEach(chip => {
+    chip.onclick = () => {
+      state.selectedMetric = chip.dataset.metric;
+      const scrollEl = document.querySelector('.scroll-area');
+      const y = scrollEl ? scrollEl.scrollTop : 0;
+      renderScale().then(() => {
+        // Restore scroll so switching metrics doesn't yank the user back to
+        // the top of the page on every tap.
+        const el = document.querySelector('.scroll-area');
+        if (el) el.scrollTop = y;
+      });
+    };
+  });
+  document.querySelectorAll('.scroll-area .log-row[data-id]').forEach(row => {
+    let pressTimer = null;
+    const start = () => { pressTimer = setTimeout(() => confirmDeleteBodyWeight(row.dataset.id), 550); };
+    const cancel = () => clearTimeout(pressTimer);
+    row.addEventListener('pointerdown', start);
+    row.addEventListener('pointerup', cancel);
+    row.addEventListener('pointerleave', cancel);
+    row.addEventListener('pointercancel', cancel);
+  });
+}
+
+function buildInsightsSectionHtml(insights, tip, knowledge){
   const INSIGHT_ICONS = {
     rate: '<path d="M3 17l6-6 4 4 8-8"/><path d="M21 7v6h-6"/>',
     project: '<path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/>',
@@ -8196,7 +8278,7 @@ async function renderScale(){
     compare: '<path d="M4 20V8M12 20V4M20 20v-7"/>',
     consistency: '<path d="M20 6L9 17l-5-5"/>'
   };
-  const insightsHtml = (insights.length || tip || knowledge.concept) ? `
+  return (insights.length || tip || knowledge.concept) ? `
     <div class="section-label" style="padding-top:22px;">Insights</div>
     ${insights.map(c => `
       <div class="insight-card ${c.tone}">
@@ -8225,20 +8307,79 @@ async function renderScale(){
       </div>` : ''}
     ${insights.length ? `<div class="insight-footnote">Worked out from your own weigh-ins and logged sets in this phase. General training guidance — not medical advice.</div>` : ''}
   ` : '';
+}
+
+// Sample data used only for the locked previews below. Clearly labelled as
+// an example wherever it renders - the point is to show what the feature
+// looks like once populated, never to imply it's the user's own data.
+function sampleMeasurementEntries(){
+  const mk = (daysAgo, waist, arm, chest, thigh, calf, neck, hips, w) => ({
+    logged_at: addDaysToDate(todayStr(), daysAgo), weight: w, unit: 'kg', measurement_unit: 'cm',
+    waist, left_arm: arm, right_arm: arm, chest, left_thigh: thigh, right_thigh: thigh,
+    left_calf: calf, right_calf: calf, neck, hips
+  });
+  return [
+    mk(-56, 95.0, 37.8, 105.0, 62.0, 39.0, 40.0, 103.0, 101.3),
+    mk(-42, 94.1, 37.9, 104.7, 61.7, 39.1, 39.9, 102.3, 100.5),
+    mk(-28, 92.9, 38.1, 104.5, 61.4, 39.2, 39.8, 101.5, 99.6),
+    mk(-14, 91.7, 38.3, 104.2, 61.1, 39.2, 39.7, 100.7, 98.7),
+    mk(0,   91.0, 38.5, 104.1, 60.9, 39.3, 39.7, 100.2, 98.2)
+  ];
+}
+
+function previewWrap(inner, headline, sub, ctaLabel){
+  return `<div class="preview-block">
+    <div class="preview-art">${inner}</div>
+    <div class="preview-overlay">
+      <div class="preview-badge">Example</div>
+      <div class="preview-headline">${headline}</div>
+      <div class="preview-sub">${sub}</div>
+      ${ctaLabel ? `<button class="preview-cta" id="previewLogBtn">${ctaLabel}</button>` : ''}
+    </div>
+  </div>`;
+}
+
+// ---------- PHASE TAB ----------
+// Promoted out of Track into its own screen. Track had grown to weight +
+// chart + measurements + body map + delta chart + composition + phase +
+// thirteen insights + knowledge in a single scroll; splitting gives two
+// focused screens instead of one unfocused one.
+async function renderPhaseTab(){
+  app.innerHTML = `<div class="app-shell"><div class="login-wrap"><div class="login-sub">Loading your phase…</div></div></div>`;
+  const entries = await loadBodyWeight();
+  const lastWithMeasurements = entries.find(e => e.measurement_unit);
+  state.lastMeasurementUnit = lastWithMeasurements ? lastWithMeasurements.measurement_unit : null;
+  const phase = await loadPhase();
+  const phaseHtml = await buildPhaseHeroHtml(phase, entries);
+
+  // Sets power the strength-retention insight. Only fetched from the active
+  // phase's start onward so this stays a small bounded query.
+  let phaseSets = [];
+  const activeKindForSets = phase ? determineActivePhase(phase) : null;
+  if (activeKindForSets && phase[`${activeKindForSets}_start`]){
+    const { data: ud } = await supabaseClient.auth.getUser();
+    if (ud && ud.user){
+      const r = await withTimeout(
+        supabaseClient.from('sets')
+          .select('weight, weight_unit, weight_type, reps, num_sets, logged_at')
+          .eq('user_id', ud.user.id)
+          .gte('logged_at', phase[`${activeKindForSets}_start`]),
+        15000
+      );
+      if (!r.__timeout && !r.error) phaseSets = r.data || [];
+    }
+  }
+
+  const insights = buildPhaseInsights(phase, entries, phaseSets);
+  const tip = buildPhaseTip(phase);
+  const knowledge = buildKnowledgeCards(phase);
+  const insightsHtml = buildInsightsSectionHtml(insights, tip, knowledge);
 
   app.innerHTML = `
     <div class="app-shell">
       <div class="scroll-area">
-        <div class="brandbar"><img src="icons/logo.svg" alt=""><div class="name">MONOLIFT</div><button class="brandbar-timer" onclick="openTimer()" aria-label="Timer" style="margin-left:auto; background:none; color:var(--slate); padding:6px; display:flex; align-items:center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg></button></div>
-        <div class="header"><div class="eyebrow">BODY</div><h1>Track</h1></div>
-        <div class="stat-card">
-          ${latest ? `<div class="big">${latest.weight}${latest.unit}</div><div class="small">${latest.logged_at}</div>${deltaHtml}` : `<div class="small">No entries yet — tap + to log your weight.</div>`}
-        </div>
-        ${chartHtml}
-        ${measurementsHtml}
-        <div class="section-label">Recent Entries</div>
-        ${rows || '<div class="empty-state">Nothing logged yet.</div>'}
-        <div class="section-label" style="padding-top:20px;">Phase</div>
+        ${renderBrandbar()}
+        <div class="header"><div class="eyebrow">BULK / CUT</div><h1>Phase</h1></div>
         ${phaseHtml}
         ${insightsHtml}
       </div>
@@ -8253,7 +8394,7 @@ async function renderScale(){
   if (pausePhaseBtn) pausePhaseBtn.onclick = () => {
     showConfirmDialog(
       'Your phase dates freeze while paused - nothing counts against them. When you resume, every date shifts forward by however long you were paused, so you pick up exactly where you left off.',
-      async () => { await setPhasePaused(phase, true); renderScale(); },
+      async () => { await setPhasePaused(phase, true); renderPhaseTab(); },
       { title: 'Pause Bulk/Cut Cycle?', confirmLabel: 'Pause' }
     );
   };
@@ -8261,35 +8402,13 @@ async function renderScale(){
   if (resumePhaseBtn) resumePhaseBtn.onclick = async () => {
     await withButtonLoading(resumePhaseBtn, 'Resuming…', async () => {
       await setPhasePaused(phase, false);
-      renderScale();
+      renderPhaseTab();
     });
   };
-  document.querySelectorAll('.metric-chip').forEach(chip => {
-    chip.onclick = () => {
-      state.selectedMetric = chip.dataset.metric;
-      const scrollEl = document.querySelector('.scroll-area');
-      const y = scrollEl ? scrollEl.scrollTop : 0;
-      renderScale().then(() => {
-        // Restore scroll so switching metrics doesn't yank the user back to
-        // the top of the page on every tap.
-        const el = document.querySelector('.scroll-area');
-        if (el) el.scrollTop = y;
-      });
-    };
-  });
   document.querySelectorAll('.insight-action').forEach(btn => {
     btn.onclick = () => {
       if (btn.dataset.action === 'setupBodyProfile') openBodyProfileForm(phase);
     };
-  });
-  document.querySelectorAll('.scroll-area .log-row[data-id]').forEach(row => {
-    let pressTimer = null;
-    const start = () => { pressTimer = setTimeout(() => confirmDeleteBodyWeight(row.dataset.id), 550); };
-    const cancel = () => clearTimeout(pressTimer);
-    row.addEventListener('pointerdown', start);
-    row.addEventListener('pointerup', cancel);
-    row.addEventListener('pointerleave', cancel);
-    row.addEventListener('pointercancel', cancel);
   });
 }
 
@@ -9289,10 +9408,12 @@ function confirmDeleteBodyWeight(entryId){
   };
 }
 
-function openLogWeightForm(lastMeasurementUnit){
+function openLogWeightForm(lastMeasurementUnit, expandMeasurements){
   let unit = 'kg';
   let measurementUnit = lastMeasurementUnit || 'cm';
-  let measurementsExpanded = false;
+  // Opened from a measurements preview - land with the section already open
+  // rather than making the user find and tap the disclosure row again.
+  let measurementsExpanded = !!expandMeasurements;
   const overlay = document.createElement('div');
   overlay.className = 'overlay-screen';
 
@@ -9324,10 +9445,10 @@ function openLogWeightForm(lastMeasurementUnit){
             <div class="sub" id="measureSub">Optional — track arms, waist &amp; more</div>
           </div>
         </div>
-        <div class="chev" id="measureChev">›</div>
+        <div class="chev${measurementsExpanded ? ' open' : ''}" id="measureChev">›</div>
       </div>
 
-      <div class="measure-section" id="measureSection" style="display:none;">
+      <div class="measure-section" id="measureSection" style="display:${measurementsExpanded ? 'block' : 'none'};">
         <div class="measure-unit-row">
           <span class="lbl">MEASUREMENT UNIT</span>
           <div class="unit-toggle" id="measureUnitToggle"><button class="${measurementUnit==='cm'?'active':''}" data-mu="cm">cm</button><button class="${measurementUnit==='in'?'active':''}" data-mu="in">in</button></div>
@@ -11209,7 +11330,7 @@ async function renderBalance(mode, view){
   app.innerHTML = `
     <div class="app-shell">
       <div class="scroll-area">
-        <div class="brandbar"><img src="icons/logo.svg" alt=""><div class="name">MONOLIFT</div></div>
+        ${renderBrandbar()}
         <div class="header"><div class="eyebrow">${mode === 'logged' ? 'LAST 7 DAYS' : 'WHOLE WEEKLY PLAN'}</div><h1>Balance</h1></div>
         <div class="seg" style="margin:10px 18px; display:flex; border:1px solid var(--line);">
           <div class="bal-seg-chip ${mode==='logged'?'active':''}" data-mode="logged" style="flex:1; text-align:center; padding:7px 0; font-family:'Bebas Neue',sans-serif; font-size:11.5px; letter-spacing:0.5px; color:${mode==='logged'?'var(--ink)':'var(--slate)'}; background:${mode==='logged'?'var(--flame)':'transparent'};">LOGGED THIS WEEK</div>
@@ -11459,7 +11580,7 @@ async function renderMe(){
   app.innerHTML = `
     <div class="app-shell">
       <div class="scroll-area">
-        <div class="brandbar"><img src="icons/logo.svg" alt=""><div class="name">MONOLIFT</div><button class="brandbar-timer" onclick="openTimer()" aria-label="Timer" style="margin-left:auto; background:none; color:var(--slate); padding:6px; display:flex; align-items:center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg></button></div>
+        ${renderBrandbar()}
         <div class="header"><div class="eyebrow">ACCOUNT</div><h1>Me</h1></div>
         <div class="account-card">
           <div class="avatar">${initial}</div>

@@ -312,3 +312,20 @@ input:focus, button:focus{ outline:none; }
 .quote-mark{ font-family:Georgia, serif; font-size:44px; color:var(--line); line-height:0.6; margin-bottom:2px; }
 .quote-text{ font-size:14px; color:var(--chalk); line-height:1.55; font-style:italic; }
 .quote-who{ font-family:'JetBrains Mono', monospace; font-size:10.5px; color:var(--slate); margin-top:8px; }
+
+/* ---------- Navigation reshuffle ---------- */
+.bb-right{ margin-left:auto; display:flex; align-items:center; gap:8px; }
+.icon-btn{ width:32px; height:32px; border-radius:10px; background:var(--panel); border:1px solid var(--line); display:flex; align-items:center; justify-content:center; color:var(--slate); padding:0; }
+.icon-btn.me{ border-color:rgba(255,107,26,0.35); color:var(--flame); }
+.icon-btn .tab-icon{ width:17px; height:17px; }
+
+/* ---------- Locked preview blocks ---------- */
+.preview-block{ position:relative; margin-bottom:12px; }
+.preview-art{ opacity:0.32; filter:saturate(0.75); pointer-events:none; }
+.preview-art .stat-card{ margin-bottom:0; }
+.preview-overlay{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:18px 26px; gap:5px;
+  background:radial-gradient(ellipse at center, rgba(23,24,26,0.86) 45%, rgba(23,24,26,0.55) 100%); border-radius:14px; }
+.preview-badge{ font-family:'JetBrains Mono', monospace; font-size:8.5px; letter-spacing:1.2px; text-transform:uppercase; color:var(--slate); background:rgba(255,255,255,0.06); border-radius:20px; padding:3px 9px; margin-bottom:3px; }
+.preview-headline{ font-family:'Oswald', sans-serif; font-size:15px; color:var(--chalk); }
+.preview-sub{ font-size:11.5px; color:var(--slate); line-height:1.5; max-width:270px; }
+.preview-cta{ margin-top:9px; background:var(--flame); color:var(--ink); font-family:'Oswald', sans-serif; font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; padding:9px 18px; border-radius:9px; border:none; }
