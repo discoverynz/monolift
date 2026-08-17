@@ -331,3 +331,5 @@ input:focus, button:focus{ outline:none; }
 .preview-cta{ margin-top:9px; background:var(--flame); color:var(--ink); font-family:'Oswald', sans-serif; font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; padding:9px 18px; border-radius:9px; border:none; }
 .measure-pill.bf{ background:rgba(255,107,26,0.14); color:var(--flame); }
 .measure-pill.bf b{ color:var(--flame); }
+.bf-view-chip{ font-family:'JetBrains Mono', monospace; font-size:10.5px; padding:6px 12px; border-radius:20px; background:var(--ink); color:var(--slate); border:1px solid var(--line); }
+.bf-view-chip.active{ background:var(--flame); color:var(--ink); border-color:var(--flame); font-weight:600; }

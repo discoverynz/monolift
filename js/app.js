@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.195';
+const APP_VERSION = 'Beta 5.196';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -8217,48 +8217,94 @@ async function renderScale(){
 
 
   // ---- Body fat section ----
-  // Prefers directly-measured readings; falls back to tape-derived estimates
-  // when height is configured. Always labels which source is on screen, since
-  // a circumference estimate and a DEXA reading are not the same kind of number.
+  // Measured readings and tape-derived estimates are kept as separate series
+  // rather than one silently overriding the other. Seeing both is the
+  // interesting part: once you know your estimate runs consistently high or
+  // low against a real scan, you can trust it between scans.
   let bodyFatHtml = '';
   const bfChrono = [...entries].sort((a,b) => a.logged_at.localeCompare(b.logged_at));
-  const bfPoints = bfChrono.map(e => {
-    const r = resolveBodyFat(e, phase && phase.height_cm, phase && phase.bf_formula);
-    return r ? { date: e.logged_at, value: r.pct, source: r.source } : null;
-  }).filter(Boolean);
-  if (bfPoints.length >= 1){
-    const latestBf = bfPoints[bfPoints.length - 1];
-    const anyMeasured = bfPoints.some(p => p.source === 'measured');
-    const allMeasured = bfPoints.every(p => p.source === 'measured');
-    const sourceLabel = allMeasured ? 'Measured' : (anyMeasured ? 'Measured + estimated' : 'Estimated from measurements');
-    const bfChange = bfPoints.length >= 2 ? +(latestBf.value - bfPoints[0].value).toFixed(1) : null;
-    const bfAccent = bfChange == null ? '#8C8E94' : (bfChange < 0 ? '#8FBF7A' : (bfChange > 0 ? '#E8A33D' : '#8C8E94'));
+  const measuredPts = bfChrono.filter(e => e.body_fat_pct != null)
+    .map(e => ({ date: e.logged_at, value: Math.round(e.body_fat_pct * 10) / 10 }));
+  const estimatedPts = (phase && phase.height_cm && phase.bf_formula)
+    ? bfChrono.map(e => {
+        const est = estimateBodyFatPct(e, phase.height_cm, phase.bf_formula);
+        return est == null ? null : { date: e.logged_at, value: est };
+      }).filter(Boolean)
+    : [];
+  const hasBoth = measuredPts.length >= 1 && estimatedPts.length >= 1;
+
+  if (measuredPts.length || estimatedPts.length){
+    // Default view: measured when available, since it's the better number.
+    const validViews = hasBoth ? ['both','measured','estimated']
+      : (measuredPts.length ? ['measured'] : ['estimated']);
+    if (!state.bfView || !validViews.includes(state.bfView)) state.bfView = validViews[0];
+    const view = state.bfView;
+
+    const primary = measuredPts.length ? measuredPts : estimatedPts;
+    const latest = primary[primary.length - 1];
+    const overall = primary.length >= 2 ? +(latest.value - primary[0].value).toFixed(1) : null;
+    const accent = overall == null ? '#8C8E94' : (overall < 0 ? '#8FBF7A' : (overall > 0 ? '#E8A33D' : '#8C8E94'));
+
+    // Where a date has both a scan and an estimate, the gap between them is
+    // the calibration figure - how far off the tape method runs for this
+    // specific body. Averaged across every overlapping date.
+    let biasNote = '';
+    if (hasBoth){
+      const estByDate = Object.fromEntries(estimatedPts.map(p => [p.date, p.value]));
+      const gaps = measuredPts.filter(p => estByDate[p.date] != null)
+        .map(p => estByDate[p.date] - p.value);
+      if (gaps.length){
+        const avgGap = gaps.reduce((a,b)=>a+b,0) / gaps.length;
+        const rounded = Math.round(Math.abs(avgGap) * 10) / 10;
+        biasNote = rounded < 0.4
+          ? `Your tape estimate tracks your scans closely (within ${rounded}%). You can trust it between scans.`
+          : `Your tape estimate reads about <b>${rounded}% ${avgGap > 0 ? 'higher' : 'lower'}</b> than your scans. Knowing that offset makes the estimate useful between scans.`;
+      }
+    }
+
+    const seriesFor = () => {
+      const m = { label:'Measured', color:'#FF6B1A', points: measuredPts, dashed:false };
+      const e = { label:'Estimated', color:'#6C8FBF', points: estimatedPts, dashed:true };
+      if (view === 'measured') return [m];
+      if (view === 'estimated') return [e];
+      return [m, e];
+    };
+
     bodyFatHtml = `
       <div class="section-label" style="padding-top:20px;">Body Fat</div>
       <div class="stat-card">
         <div style="display:flex; align-items:baseline; justify-content:space-between;">
           <div>
-            <div class="big">${latestBf.value}%</div>
-            <div class="small">${formatLoggedDate(latestBf.date)} · ${latestBf.source === 'measured' ? 'measured' : 'estimated'}</div>
+            <div class="big">${latest.value}%</div>
+            <div class="small">${formatLoggedDate(latest.date)} · ${measuredPts.length ? 'measured' : 'estimated from tape'}</div>
           </div>
-          ${bfChange != null ? `<div style="font-family:'JetBrains Mono',monospace; font-size:13px; color:${bfAccent};">${bfChange>=0?'+':''}${bfChange}% overall</div>` : ''}
+          ${overall != null ? `<div style="font-family:'JetBrains Mono',monospace; font-size:13px; color:${accent};">${overall>=0?'+':''}${overall}% overall</div>` : ''}
         </div>
-        ${bfPoints.length >= 2 ? `<div style="margin-top:10px;">
-          <div style="font-family:'JetBrains Mono',monospace; font-size:9.5px; color:var(--slate); margin-bottom:4px;">${sourceLabel.toUpperCase()}</div>
-          ${renderMetricChart(bfPoints.map(p => ({ date: p.date, value: p.value })), '%', bfAccent)}
-        </div>` : `<div style="font-size:11.5px; color:var(--slate); line-height:1.5; margin-top:8px;">Log body fat on another weigh-in to start a trend.</div>`}
-        ${!anyMeasured ? `<div style="font-size:10.5px; color:#5d5f64; line-height:1.5; margin-top:9px; padding-top:9px; border-top:1px solid var(--line);">Estimated from your waist and neck. If you have access to a DEXA scan, InBody or smart scale, a measured reading will be used instead.</div>` : ''}
+        ${hasBoth ? `<div style="display:flex; gap:6px; margin-top:12px;">
+          ${validViews.map(v => `<button class="bf-view-chip ${v===view?'active':''}" data-bfview="${v}">${v === 'both' ? 'Both' : v === 'measured' ? 'Measured' : 'Estimated'}</button>`).join('')}
+        </div>` : ''}
+        <div style="margin-top:10px;">
+          ${(view === 'both' ? renderMultiSeriesChart(seriesFor(), '%')
+             : (seriesFor()[0].points.length >= 2
+                ? renderMetricChart(seriesFor()[0].points, '%', seriesFor()[0].color)
+                : `<div style="font-size:11.5px; color:var(--slate); line-height:1.5;">Log body fat on another weigh-in to start a trend.</div>`))}
+        </div>
+        ${biasNote ? `<div style="font-size:11px; color:var(--slate); line-height:1.55; margin-top:11px; padding-top:11px; border-top:1px solid var(--line);">${biasNote}</div>` : ''}
+        ${(!measuredPts.length) ? `<div style="font-size:10.5px; color:#5d5f64; line-height:1.5; margin-top:9px; padding-top:9px; border-top:1px solid var(--line);">Estimated from your waist and neck. A reading from a DEXA scan, InBody or smart scale will be shown alongside it.</div>` : ''}
+        ${(measuredPts.length && !estimatedPts.length && !(phase && phase.height_cm)) ? `<div style="font-size:10.5px; color:#5d5f64; line-height:1.5; margin-top:9px; padding-top:9px; border-top:1px solid var(--line);">Add your height and we can also estimate body fat from your tape measurements between scans.</div>` : ''}
       </div>`;
   } else {
     bodyFatHtml = `
       <div class="section-label" style="padding-top:20px;">Body Fat</div>
       ${previewWrap(`<div class="stat-card">
           <div class="big">21.9%</div><div class="small">measured</div>
-          <div style="margin-top:10px;">${renderMetricChart(
-            sampleMeasurementEntries().map((e,i) => ({ date: e.logged_at, value: [24.1,23.4,22.8,22.2,21.9][i] })), '%', '#8FBF7A')}</div>
+          <div style="margin-top:10px;">${renderMultiSeriesChart([
+            { label:'Measured', color:'#FF6B1A', dashed:false, points: sampleMeasurementEntries().map((e,i) => ({ date:e.logged_at, value:[24.1,23.4,22.8,22.2,21.9][i] })) },
+            { label:'Estimated', color:'#6C8FBF', dashed:true, points: sampleMeasurementEntries().map((e,i) => ({ date:e.logged_at, value:[26.0,25.2,24.5,24.0,23.7][i] })) }
+          ], '%')}</div>
         </div>`,
         'Track body fat percentage',
-        'Got a DEXA scan, InBody or smart scale? Log the reading with your weigh-in. No machine? Add your height and we estimate it from your waist and neck.',
+        'Log readings from a DEXA scan, InBody or smart scale — and add your height to also estimate it from your tape measurements, so you can compare the two.',
         'Log a reading')}`;
   }
 
@@ -8279,6 +8325,18 @@ async function renderScale(){
       ${renderTabbar()}
     </div>`;
   attachShellHandlers();
+  document.querySelectorAll('.bf-view-chip').forEach(chip => {
+    chip.onclick = () => {
+      state.bfView = chip.dataset.bfview;
+      const scrollEl = document.querySelector('.scroll-area');
+      const y = scrollEl ? scrollEl.scrollTop : 0;
+      renderScale().then(() => {
+        // Preserve scroll so switching source doesn't jump the page.
+        const el = document.querySelector('.scroll-area');
+        if (el) el.scrollTop = y;
+      });
+    };
+  });
   document.querySelectorAll('.preview-cta').forEach(btn => {
     btn.onclick = () => {
       // 'Add height' opens the body profile; anything else prompts a weigh-in
@@ -8718,17 +8776,49 @@ async function buildPhaseHeroHtml(phase, weightEntries){
 
 function openBodyProfileForm(existing){
   let formula = (existing && existing.bf_formula) || 'male';
+  // Height is always STORED as cm so every downstream calculation works in
+  // one unit; this toggle only affects entry and display.
+  let heightUnit = localStorage.getItem('zealift_height_unit') || 'cm';
+  const existingCm = existing && existing.height_cm ? Number(existing.height_cm) : null;
+  const cmToFtIn = (cm) => {
+    const totalIn = cm / 2.54;
+    let ft = Math.floor(totalIn / 12);
+    let inch = Math.round(totalIn - ft * 12);
+    if (inch === 12){ ft += 1; inch = 0; } // rounding can tip 11.6" up to a full foot
+    return { ft, inch };
+  };
+  const startFtIn = existingCm ? cmToFtIn(existingCm) : { ft: '', inch: '' };
+
+  const heightFieldHtml = () => heightUnit === 'cm'
+    ? `<div class="field-card">
+        <input class="field-input" id="heightCm" type="number" inputmode="decimal" placeholder="0" value="${existingCm ? Math.round(existingCm) : ''}">
+        <div style="font-size:13px; color:var(--slate);">cm</div>
+      </div>`
+    : `<div style="display:flex; gap:8px; margin:0 18px 12px;">
+        <div class="field-card" style="flex:1; margin:0;">
+          <input class="field-input" id="heightFt" type="number" inputmode="numeric" placeholder="0" value="${startFtIn.ft}">
+          <div style="font-size:13px; color:var(--slate);">ft</div>
+        </div>
+        <div class="field-card" style="flex:1; margin:0;">
+          <input class="field-input" id="heightIn" type="number" inputmode="numeric" placeholder="0" value="${startFtIn.inch}">
+          <div style="font-size:13px; color:var(--slate);">in</div>
+        </div>
+      </div>`;
+
   const overlay = document.createElement('div');
   overlay.className = 'overlay-screen';
   overlay.innerHTML = `
     <div class="form-header"><button id="closeBP">✕</button><h1>Body Profile</h1><div style="width:18px;"></div></div>
     <div class="overlay-scroll">
       <div class="form-sub" style="margin-top:0;">Used to estimate body composition from your tape measurements. The estimate has a few points of error either way, but that error stays consistent — so the change over time is what's genuinely reliable.</div>
-      <div class="field-label">Height</div>
-      <div class="field-card">
-        <input class="field-input" id="heightInput" type="number" inputmode="decimal" placeholder="0" value="${existing && existing.height_cm ? existing.height_cm : ''}">
-        <div style="font-size:13px; color:var(--slate);">cm</div>
+      <div class="field-label" style="display:flex; align-items:center; justify-content:space-between; padding-right:18px;">
+        <span>Height</span>
+        <div class="unit-toggle" id="heightUnitToggle">
+          <button class="${heightUnit==='cm'?'active':''}" data-hu="cm">cm</button>
+          <button class="${heightUnit==='ftin'?'active':''}" data-hu="ftin">ft/in</button>
+        </div>
       </div>
+      <div id="heightFieldWrap">${heightFieldHtml()}</div>
       <div class="field-label">Formula Variant</div>
       <div class="form-sub" style="padding-top:0;">The US Navy method has two forms with different inputs — the second additionally uses your hip measurement.</div>
       <div style="display:flex; gap:8px; margin:0 18px 14px;">
@@ -8739,6 +8829,37 @@ function openBodyProfileForm(existing){
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#closeBP').onclick = () => overlay.remove();
+
+  // Carry whatever is already typed across a unit switch, so toggling
+  // doesn't silently wipe a half-entered value.
+  const readHeightCm = () => {
+    if (heightUnit === 'cm'){
+      const v = parseFloat((document.getElementById('heightCm') || {}).value);
+      return isNaN(v) ? null : v;
+    }
+    const ft = parseFloat((document.getElementById('heightFt') || {}).value) || 0;
+    const inch = parseFloat((document.getElementById('heightIn') || {}).value) || 0;
+    if (!ft && !inch) return null;
+    return (ft * 12 + inch) * 2.54;
+  };
+  overlay.querySelector('#heightUnitToggle').querySelectorAll('button').forEach(b => {
+    b.onclick = () => {
+      const carried = readHeightCm();
+      heightUnit = b.dataset.hu;
+      localStorage.setItem('zealift_height_unit', heightUnit);
+      overlay.querySelectorAll('#heightUnitToggle button').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      document.getElementById('heightFieldWrap').innerHTML = heightFieldHtml();
+      if (carried){
+        if (heightUnit === 'cm') document.getElementById('heightCm').value = Math.round(carried);
+        else {
+          const { ft, inch } = cmToFtIn(carried);
+          document.getElementById('heightFt').value = ft;
+          document.getElementById('heightIn').value = inch;
+        }
+      }
+    };
+  });
   overlay.querySelectorAll('.bf-formula-btn').forEach(b => {
     b.onclick = () => {
       formula = b.dataset.f;
@@ -8747,11 +8868,14 @@ function openBodyProfileForm(existing){
     };
   });
   overlay.querySelector('#saveBPBtn').onclick = async () => { await withButtonLoading(overlay.querySelector('#saveBPBtn'), 'Saving…', async () => {
-    const h = parseFloat(document.getElementById('heightInput').value);
-    if (!h || h < 100 || h > 250){ alert('Enter a height in centimetres.'); return; }
+    const h = readHeightCm();
+    if (!h || h < 100 || h > 250){
+      alert(heightUnit === 'cm' ? 'Enter a height in centimetres.' : 'Enter a height in feet and inches.');
+      return;
+    }
     const { data: userData } = await supabaseClient.auth.getUser();
     const { error } = await supabaseClient.from('phase_settings')
-      .upsert({ user_id: userData.user.id, height_cm: h, bf_formula: formula }, { onConflict: 'user_id' });
+      .upsert({ user_id: userData.user.id, height_cm: Math.round(h * 10) / 10, bf_formula: formula }, { onConflict: 'user_id' });
     if (error){ alert(error.message); return; }
     overlay.remove();
     renderScale();
@@ -8871,6 +8995,44 @@ function renderMetricChart(points, unit, accent){
     <polyline points="${linePts}" fill="none" stroke="${accent}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
     ${dots}${xLabels}
   </svg>`;
+}
+
+// Multi-series line chart. Used to plot measured and estimated body fat on
+// one set of axes: the y-scale spans every series so the offset between them
+// is visible, which independently-scaled charts would hide entirely.
+function renderMultiSeriesChart(series, unit){
+  const withData = series.filter(s => s.points && s.points.length);
+  if (!withData.length) return '';
+  const allVals = withData.flatMap(s => s.points.map(p => p.value));
+  const allDates = [...new Set(withData.flatMap(s => s.points.map(p => p.date)))].sort();
+  if (allDates.length < 2) return '';
+  const dataMin = Math.min(...allVals), dataMax = Math.max(...allVals);
+  const span = (dataMax - dataMin) || 1;
+  const yMin = dataMin - span * 0.2, yMax = dataMax + span * 0.2;
+  const yRange = (yMax - yMin) || 1;
+  const W = 320, H = 140, mL = 34, mR = 10, mT = 12, mB = 22;
+  const plotW = W - mL - mR, plotH = H - mT - mB;
+  const fmt = v => (Math.round(v * 10) / 10).toString();
+  const xAt = d => mL + (allDates.indexOf(d) / (allDates.length - 1)) * plotW;
+  const yAt = v => mT + plotH - ((v - yMin) / yRange) * plotH;
+  const gridLines = [yMin, (yMin + yMax) / 2, yMax].map(t => {
+    const y = yAt(t);
+    return `<line x1="${mL}" y1="${y.toFixed(1)}" x2="${W-mR}" y2="${y.toFixed(1)}" stroke="#2B2C2E" stroke-width="1"/>
+      <text x="${mL-5}" y="${(y+3).toFixed(1)}" text-anchor="end" font-family="monospace" font-size="9" fill="#8C8E94">${fmt(t)}</text>`;
+  }).join('');
+  const shortDate = d => { const p = d.split('-'); return `${p[2]}/${p[1]}`; };
+  const xIdx = [0, Math.floor((allDates.length-1)/2), allDates.length-1];
+  const xLabels = [...new Set(xIdx)].map(i => `<text x="${xAt(allDates[i]).toFixed(1)}" y="${H-6}" text-anchor="middle" font-family="monospace" font-size="9" fill="#8C8E94">${shortDate(allDates[i])}</text>`).join('');
+  const paths = withData.map(s => {
+    const pts = s.points.map(p => `${xAt(p.date).toFixed(1)},${yAt(p.value).toFixed(1)}`).join(' ');
+    const dots = s.points.map(p => `<circle cx="${xAt(p.date).toFixed(1)}" cy="${yAt(p.value).toFixed(1)}" r="3" fill="${s.color}" stroke="#1C1D1F" stroke-width="1.4"/>`).join('');
+    return `<polyline points="${pts}" fill="none" stroke="${s.color}" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"${s.dashed ? ' stroke-dasharray="5 4"' : ''}/>${dots}`;
+  }).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="auto">${gridLines}${paths}${xLabels}</svg>
+    <div style="display:flex; gap:14px; justify-content:center; margin-top:7px;">
+      ${withData.map(s => `<span style="font-size:9.5px; color:var(--slate); display:flex; align-items:center; gap:5px;">
+        <svg width="16" height="4"><line x1="0" y1="2" x2="16" y2="2" stroke="${s.color}" stroke-width="2.4"${s.dashed ? ' stroke-dasharray="4 3"' : ''}/></svg>${s.label}</span>`).join('')}
+    </div>`;
 }
 
 // Anatomical body map. Each measured region gets a marker coloured by
