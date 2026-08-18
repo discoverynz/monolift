@@ -22,14 +22,34 @@
 <link rel="icon" type="image/png" sizes="64x64" href="icons/icon-64-v5.png">
 <link rel="icon" type="image/png" sizes="96x96" href="icons/icon-96-v5.png">
 <link rel="icon" type="image/png" sizes="128x128" href="icons/icon-128-v5.png">
+<!-- Warm up the TLS connections we know we'll need, in parallel with parsing
+     rather than serially when each is first requested. Supabase in particular
+     is hit within milliseconds of app.js running. -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&family=Bebas+Neue&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/styles.css?v=249">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="preconnect" href="https://oqajekhazitovcjlosxj.supabase.co" crossorigin>
+
+<!-- Our own stylesheet first and blocking - it owns the layout, so rendering
+     before it lands would just flash unstyled content. -->
+<link rel="stylesheet" href="css/styles.css?v=250">
+
+<!-- Webfonts loaded non-blocking. Previously this stylesheet sat in the
+     critical path, so first paint waited on a round trip to a third-party
+     domain purely for typography. The media=print trick makes the browser
+     fetch it at low priority without blocking render, then applies it on
+     load. font-display=swap already meant text would swap in anyway, so
+     blocking bought nothing. -->
+<link rel="stylesheet" media="print" onload="this.media='all';this.onload=null"
+      href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&family=Bebas+Neue&display=swap">
+<noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&family=Bebas+Neue&display=swap"></noscript>
 </head>
 <body>
 <div id="app"></div>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="js/supabase-client.js?v=249"></script>
-<script src="js/app.js?v=249"></script>
+<!-- defer keeps HTML parsing going while these download, and guarantees they
+     still execute in order once it completes. -->
+<script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script defer src="js/supabase-client.js?v=250"></script>
+<script defer src="js/app.js?v=250"></script>
 </body>
 </html>
