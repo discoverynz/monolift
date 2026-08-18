@@ -333,3 +333,13 @@ input:focus, button:focus{ outline:none; }
 .measure-pill.bf b{ color:var(--flame); }
 .bf-view-chip{ font-family:'JetBrains Mono', monospace; font-size:10.5px; padding:6px 12px; border-radius:20px; background:var(--ink); color:var(--slate); border:1px solid var(--line); }
 .bf-view-chip.active{ background:var(--flame); color:var(--ink); border-color:var(--flame); font-weight:600; }
+
+/* Update-available toast (service worker serves cached HTML for speed and
+   revalidates behind it, so this is how a new version announces itself). */
+#updateToast{ position:fixed; left:14px; right:14px; bottom:calc(84px + env(safe-area-inset-bottom, 0px)); z-index:60;
+  background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px 14px;
+  display:flex; align-items:center; justify-content:space-between; gap:12px;
+  box-shadow:0 8px 28px rgba(0,0,0,0.5); font-size:13px; color:var(--chalk); }
+#updateToast button{ background:var(--flame); color:var(--ink); border:none; border-radius:9px;
+  padding:8px 14px; font-family:'Oswald',sans-serif; font-weight:600; font-size:12px;
+  text-transform:uppercase; letter-spacing:0.5px; }

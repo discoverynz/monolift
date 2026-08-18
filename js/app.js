@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.199';
+const APP_VERSION = 'Beta 5.200';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1296,6 +1296,7 @@ async function fetchAllExercisesCompat(uid){
 // lives on exercise_days while alt_group_id lives on exercise_master, so
 // these need to be two separate calls against two different tables.
 async function moveExerciseToDay(item, newWeekday, clearAlt){
+  invalidateTrackSnapshots(); // day contents change - stale snapshot must not survive
   const results = [];
   if (!getUseExerciseMasterFlag()){
     for (const id of item.ids){
@@ -1341,6 +1342,7 @@ async function moveExerciseToDay(item, newWeekday, clearAlt){
 // structure deletes just that day's link, since the exercise_master record
 // itself may still be legitimately placed on other days.
 async function removeExerciseFromDay(exerciseRow){
+  invalidateTrackSnapshots(); // day contents change - stale snapshot must not survive
   if (!getUseExerciseMasterFlag()){
     const { data, error } = await supabaseClient.from('exercises').update({ active: false }).eq('id', exerciseRow.id).select();
     return { ok: !error && data && data.length > 0, error: error ? error.message : (!data || !data.length ? 'update matched zero rows' : null) };
@@ -1350,6 +1352,7 @@ async function removeExerciseFromDay(exerciseRow){
 }
 
 async function createExerciseForToday(payload){
+  invalidateTrackSnapshots(); // day contents change - stale snapshot must not survive
   // Wait for the master-flag heal to complete before deciding which schema
   // to write to. Without this, a save during app boot could route to the
   // old exercises table while the app has healed to reading from the master
@@ -1735,7 +1738,8 @@ async function quickSaveSet(exerciseId, exerciseName, best){
     location_id: effectiveLocationId()
   };
   insertPayload[idField] = exerciseId;
-  const { data, error } = await supabaseClient.from('sets').insert(insertPayload).select();
+  invalidateTrackSnapshots(); // logged set changes done-flags and header stats
+    const { data, error } = await supabaseClient.from('sets').insert(insertPayload).select();
   if (error || !data || !data.length){ alert(error ? error.message : 'Could not save that set.'); return false; }
   if (priorBest !== null && weight !== null && weight > priorBest + 0.01){
     celebratePR(exerciseName, weight, unit, priorBest);
@@ -3239,6 +3243,7 @@ function openEditDayTypeForm(weekday, currentLabel){
     if (!label) return;
     await withButtonLoading(overlay.querySelector('#saveDTBtn'), 'Saving…', async () => {
       const userData = { user: await getCurrentUser() };
+      invalidateTrackSnapshots();
       await supabaseClient.from('day_types').upsert({ user_id: userData.user.id, weekday, label }, { onConflict: 'user_id,weekday' });
       overlay.remove();
       if (state.currentTab === 'track') renderTrack();
@@ -3820,6 +3825,67 @@ async function fetchTrackHeaderStats(){
 
 // Suggestions markup, shared by the inline (cached) render and the
 // deferred injection so the two can never drift apart.
+// ---------- Instant-render snapshot cache ----------
+//
+// The Track screen needs a Supabase round trip before it can show anything,
+// so every open displayed "Loading your exercises…" for the length of a
+// network request - even though the answer is almost always byte-identical
+// to the previous open. This caches the resolved exercise list locally so
+// the next open paints instantly from it, then refreshes in the background
+// and re-renders only if something actually changed.
+//
+// Safety properties this deliberately maintains:
+// - Keyed by user id, so switching accounts can never surface another
+//   account's plan.
+// - Keyed by weekday and location, since those change what's shown.
+// - Carries a schema version, so if the exercise shape changes in future the
+//   old snapshots are ignored rather than fed to a renderer expecting new
+//   fields.
+// - Only ever holds REAL user data that came back from a successful query -
+//   never defaults, never a guess - so it cannot reintroduce the "my plan
+//   reset to exercises I never picked" class of bug.
+const SNAPSHOT_SCHEMA = 3;
+const SNAPSHOT_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 14;
+
+function snapshotKey(uid, weekday, locationId){
+  return `ml_snap_${SNAPSHOT_SCHEMA}_${uid}_${weekday}_${locationId || 'any'}`;
+}
+function readTrackSnapshot(uid, weekday, locationId){
+  if (!uid) return null;
+  try {
+    const raw = localStorage.getItem(snapshotKey(uid, weekday, locationId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || parsed.schema !== SNAPSHOT_SCHEMA) return null;
+    if (!Array.isArray(parsed.exercises)) return null;
+    if (Date.now() - (parsed.at || 0) > SNAPSHOT_MAX_AGE_MS) return null;
+    return parsed;
+  } catch(e){ return null; }
+}
+function writeTrackSnapshot(uid, weekday, locationId, exercises, dayTypeLabel, headerStats, locations){
+  if (!uid || !Array.isArray(exercises)) return;
+  try {
+    localStorage.setItem(snapshotKey(uid, weekday, locationId), JSON.stringify({
+      schema: SNAPSHOT_SCHEMA, at: Date.now(), exercises, dayTypeLabel, headerStats,
+      locations: (locations || []).map(l => ({ id: l.id, name: l.name, is_default: l.is_default }))
+    }));
+  } catch(e){ /* quota or private mode - the app works fine without it */ }
+}
+// Any write that changes what a day contains invalidates every snapshot for
+// this user, since a single change can affect multiple days (moves, alt
+// groups, renames). Cheap to rebuild, and far safer than trying to surgically
+// patch individual keys.
+function invalidateTrackSnapshots(){
+  try {
+    const doomed = [];
+    for (let i = 0; i < localStorage.length; i++){
+      const k = localStorage.key(i);
+      if (k && k.startsWith('ml_snap_')) doomed.push(k);
+    }
+    doomed.forEach(k => localStorage.removeItem(k));
+  } catch(e){}
+}
+
 function buildSuggestionsHtml(suggestions, effectiveDayTypeLabel){
   if (!suggestions || !suggestions.length) return '';
   const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
@@ -3855,7 +3921,37 @@ async function renderTrack(){
   // and returns without touching UI or state.
   const myGeneration = ++state.renderGeneration;
   const isStale = () => state.renderGeneration !== myGeneration;
-  app.innerHTML = `<div class="app-shell"><div class="login-wrap"><div class="login-sub">Loading your exercises…</div></div></div>`;
+
+  // FAST PATH. Everything below the network fetch is pure computation over
+  // data we very likely already have from last time. Painting a snapshot
+  // first turns the open from "spinner for a network round trip" into
+  // "content immediately, quietly corrected a moment later" - which is the
+  // difference between the app feeling slow and feeling instant, without
+  // showing anything that isn't real logged data.
+  const snapUid = (state.session && state.session.user) ? state.session.user.id : null;
+  const snapLoc = effectiveLocationId();
+  const snap = readTrackSnapshot(snapUid, state.selectedDay, snapLoc);
+  let paintedFromSnapshot = false;
+  if (snap){
+    const exdbCached = _exdbCache; // only if already in memory - never block
+    if (exdbCached){
+      state.exercises = snap.exercises;
+      state.exercisesError = null;
+      try {
+        await renderTrackFromData(snap.dayTypeLabel, snap.headerStats, exdbCached, snap.locations || [], myGeneration, isStale, true);
+        paintedFromSnapshot = true;
+      } catch(e){
+        // A snapshot that can't render is not worth debugging at the user's
+        // expense - fall through to the normal path and let it repaint.
+        console.error('Snapshot render failed, falling back:', e);
+      }
+    }
+  }
+  if (isStale()) return;
+  if (!paintedFromSnapshot){
+    app.innerHTML = `<div class="app-shell"><div class="login-wrap"><div class="login-sub">Loading your exercises…</div></div></div>`;
+  }
+
   // Everything the first paint needs, started at once. loadExerciseDB and
   // loadLocations don't depend on any of the other results, so awaiting them
   // in a second batch just stacked another full round-trip latency onto the
@@ -3868,6 +3964,17 @@ async function renderTrack(){
     loadLocations()
   ]);
   if (isStale()) return;
+
+  // Store the fresh result for the next open. Only ever real data from a
+  // successful load - a failed load leaves state.exercises null and is
+  // skipped here, so a snapshot can never preserve an error state.
+  if (Array.isArray(state.exercises) && snapUid){
+    writeTrackSnapshot(snapUid, state.selectedDay, snapLoc, state.exercises, dayTypeLabel, headerStats, allLocations);
+  }
+  return renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations, myGeneration, isStale, false);
+}
+
+async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations, myGeneration, isStale, fromSnapshot){
   // dayTypeLabel can be: a string (real label from DB), null (no row - user
   // never set one), or an { __unavailable } marker (transient fetch failure).
   // Only the first is a real label; the other two must not silently fall
@@ -4052,7 +4159,7 @@ async function renderTrack(){
   // the page is interactive and inject into the reserved slot. Guarded by the
   // same generation token as the render, so a stale computation from a
   // superseded render can never overwrite the current day's suggestions.
-  if (suggestionsPending && !suppressSuggestionsForLocation && !loadFailed){
+  if (suggestionsPending && !suppressSuggestionsForLocation && !loadFailed && !fromSnapshot){
     (async () => {
       try {
         const u = await getCurrentUser();
@@ -4559,6 +4666,7 @@ function openEditLocationForm(exerciseId, exerciseName){
 }
 
 async function deleteExerciseEntirelyNow(exerciseName){
+  invalidateTrackSnapshots(); // day contents change - stale snapshot must not survive
   const userData = { user: await getCurrentUser() };
   const uid = userData.user.id;
   if (getUseExerciseMasterFlag()){
@@ -4697,6 +4805,7 @@ function confirmDeleteLog(setId, onDeleted){
     if (deleting) return;
     deleting = true;
     overlay.remove();
+    invalidateTrackSnapshots();
     await supabaseClient.from('sets').delete().eq('id', setId);
     onDeleted();
   };
@@ -4710,6 +4819,7 @@ function showUndoLastLogToast(setId){
   const timer = setTimeout(() => toast.remove(), 5000);
   toast.querySelector('#undoLogBtn').onclick = async () => {
     clearTimeout(timer); toast.remove();
+    invalidateTrackSnapshots();
     await supabaseClient.from('sets').delete().eq('id', setId);
     if (state.currentTab === 'track') renderTrack();
   };
@@ -7617,6 +7727,7 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
       location_id: selectedLocationId
     };
     insertPayload[idField] = exerciseId;
+    invalidateTrackSnapshots(); // logged set changes done-flags and header stats
     const { data, error } = await supabaseClient.from('sets').insert(insertPayload).select();
     if (error){ alert(error.message); return null; }
     // Celebrate a new PR: strictly greater than the prior best, and there must be a prior best.
@@ -12018,6 +12129,7 @@ async function renderMe(){
     location.reload();
   };
   document.getElementById('signOutBtn').onclick = async () => {
+    invalidateTrackSnapshots(); // never leave one account's plan cached for the next
     await supabaseClient.auth.signOut();
   };
 }
@@ -12072,4 +12184,19 @@ supabaseClient.auth.getSession().then(({ data: { session } }) => {
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('service-worker.js'));
+  // The service worker now serves the HTML from cache for an instant open and
+  // revalidates in the background. That trade only holds if the user still
+  // finds out about new versions, so the worker messages us when the freshly
+  // fetched HTML differs from what it served, and we offer a reload rather
+  // than forcing one mid-workout.
+  navigator.serviceWorker.addEventListener('message', (event) => {
+    if (!event.data || event.data.type !== 'APP_UPDATE_AVAILABLE') return;
+    if (document.getElementById('updateToast')) return;
+    const toast = document.createElement('div');
+    toast.id = 'updateToast';
+    toast.innerHTML = `<span>Update available</span><button id="updateReloadBtn">Reload</button>`;
+    document.body.appendChild(toast);
+    document.getElementById('updateReloadBtn').onclick = () => location.reload();
+    setTimeout(() => { if (toast.parentNode) toast.remove(); }, 12000);
+  });
 }

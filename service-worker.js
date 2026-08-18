@@ -1,5 +1,5 @@
-const CACHE_NAME = 'monolift-v250';
-const SHELL = ['./', './index.html', './css/styles.css?v=250', './js/app.js?v=250', './js/supabase-client.js?v=250', './manifest.json'];
+const CACHE_NAME = 'monolift-v251';
+const SHELL = ['./', './index.html', './css/styles.css?v=251', './js/app.js?v=251', './js/supabase-client.js?v=251', './manifest.json'];
 
 self.addEventListener('install', (event) => {
   self.skipWaiting(); // don't wait for old tabs to close — take over immediately
@@ -46,14 +46,35 @@ self.addEventListener('fetch', (event) => {
   const isVersioned = url.searchParams.has('v');
 
   if (isNavigation){
+    // STALE-WHILE-REVALIDATE, not network-first. Network-first meant every
+    // single app open paid a full round trip for the HTML before a single
+    // script could even begin downloading - the whole app sat behind it.
+    //
+    // We serve the cached HTML instantly and revalidate in the background.
+    // The update path is preserved rather than sacrificed: if the freshly
+    // fetched HTML differs from what we served, we message the page so it
+    // can offer a reload. The user gets an instant open AND still learns
+    // about new versions, just one open later instead of blocking every open
+    // forever to catch the rare deploy.
     event.respondWith(
-      fetch(req)
-        .then((response) => {
+      caches.match(req).then((cached) => {
+        const networkPromise = fetch(req).then((response) => {
           const copy = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(req, copy));
+          if (cached){
+            // Compare bodies to see whether a deploy actually happened.
+            Promise.all([cached.clone().text(), response.clone().text()]).then(([oldText, newText]) => {
+              if (oldText !== newText){
+                self.clients.matchAll().then((clients) => {
+                  clients.forEach((c) => c.postMessage({ type: 'APP_UPDATE_AVAILABLE' }));
+                });
+              }
+            }).catch(() => {});
+          }
           return response;
-        })
-        .catch(() => caches.match(req).then((hit) => hit || caches.match('./index.html')))
+        }).catch(() => cached);
+        return cached || networkPromise;
+      })
     );
     return;
   }
