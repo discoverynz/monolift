@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.200';
+const APP_VERSION = 'Beta 5.201';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -3876,6 +3876,10 @@ function writeTrackSnapshot(uid, weekday, locationId, exercises, dayTypeLabel, h
 // groups, renames). Cheap to rebuild, and far safer than trying to surgically
 // patch individual keys.
 function invalidateTrackSnapshots(){
+  // The warm in-memory cache reflects the same underlying data, so anything
+  // that invalidates a snapshot must invalidate it too - otherwise a tab
+  // switch could show a value the user just changed.
+  warmInvalidate();
   try {
     const doomed = [];
     for (let i = 0; i < localStorage.length; i++){
@@ -3884,6 +3888,67 @@ function invalidateTrackSnapshots(){
     }
     doomed.forEach(k => localStorage.removeItem(k));
   } catch(e){}
+}
+
+// ---------- Warm data cache ----------
+//
+// Tab switches were re-fetching data that is virtually always unchanged, so
+// every tap cost a network round trip and a "Loading…" screen. This holds the
+// last resolved value per key in memory and hands it back synchronously when
+// warm, which lets a screen render with no await at all, while a refresh runs
+// behind the paint and repaints only if something actually changed.
+//
+// In-memory rather than localStorage on purpose: the complaint is about
+// switching tabs within a session, and keeping it in memory means it cannot
+// outlive a sign-out or go stale across days.
+const _warm = new Map();
+const WARM_TTL_MS = 60 * 1000;
+
+function warmPeek(key){
+  const hit = _warm.get(key);
+  return hit ? hit.value : undefined;
+}
+// Returns { value, fresh } - value may be a cached result. When not fresh the
+// caller should also await refresh() and repaint if the result differs.
+function warmGet(key, loader){
+  const hit = _warm.get(key);
+  const isFresh = hit && (Date.now() - hit.at) < WARM_TTL_MS;
+  if (isFresh){
+    return { value: hit.value, fresh: true, refresh: null };
+  }
+  const refresh = (async () => {
+    try {
+      const value = await loader();
+      _warm.set(key, { value, at: Date.now() });
+      return value;
+    } catch(e){
+      // Keep whatever we had rather than blanking the screen on a hiccup.
+      return hit ? hit.value : null;
+    }
+  })();
+  return { value: hit ? hit.value : undefined, fresh: false, refresh };
+}
+function warmInvalidate(prefix){
+  if (!prefix){ _warm.clear(); return; }
+  [..._warm.keys()].filter(k => k.startsWith(prefix)).forEach(k => _warm.delete(k));
+}
+
+// Warms the data behind the tabs the user hasn't opened yet, once the first
+// screen is painted and the main thread is free. By the time they tap Track,
+// Phase or Balance the answer is usually already in memory, so the switch is
+// instant instead of paying a round trip on first visit.
+let _prefetchDone = false;
+function prefetchOtherTabs(){
+  if (_prefetchDone) return;
+  _prefetchDone = true;
+  const run = () => {
+    // Body weight and phase are shared by both Track and Phase, so warming
+    // them covers two tabs for the price of one.
+    warmGet('bodyWeight', loadBodyWeight).refresh;
+    warmGet('phase', loadPhase).refresh;
+  };
+  if (typeof requestIdleCallback === 'function') requestIdleCallback(run, { timeout: 3000 });
+  else setTimeout(run, 1200);
 }
 
 function buildSuggestionsHtml(suggestions, effectiveDayTypeLabel){
@@ -4155,6 +4220,7 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
     </div>`;
 
   attachShellHandlers();
+  prefetchOtherTabs(); // warm the other tabs while the main thread is idle
   // Suggestions were deferred off the critical path - compute them now that
   // the page is interactive and inject into the reserved slot. Guarded by the
   // same generation token as the render, so a stale computation from a
@@ -8258,8 +8324,25 @@ async function loadBodyWeight(){
 }
 
 async function renderScale(){
-  app.innerHTML = `<div class="app-shell"><div class="login-wrap"><div class="login-sub">Loading your weigh-ins…</div></div></div>`;
-  const entries = await loadBodyWeight();
+  // Only show a loading screen when there is genuinely nothing to show. If
+  // the data is already warm we render straight from it and refresh behind
+  // the paint, so switching to this tab is instant rather than costing a
+  // round trip every single time.
+  const wEntries = warmGet('bodyWeight', loadBodyWeight);
+  const wPhase = warmGet('phase', loadPhase);
+  if (wEntries.value === undefined || wPhase.value === undefined){
+    app.innerHTML = `<div class="app-shell"><div class="login-wrap"><div class="login-sub">Loading your weigh-ins…</div></div></div>`;
+  }
+  const entries = wEntries.value !== undefined ? wEntries.value : await wEntries.refresh;
+  // Repaint once the background refresh lands, but only if it actually
+  // changed something - a needless repaint would scroll-jump the page.
+  if (wEntries.refresh || wPhase.refresh){
+    const beforeEntries = JSON.stringify(entries);
+    Promise.all([wEntries.refresh, wPhase.refresh]).then(([freshEntries]) => {
+      if (state.currentTab !== 'scale') return;
+      if (freshEntries && JSON.stringify(freshEntries) !== beforeEntries) renderScale();
+    }).catch(() => {});
+  }
   const latest = entries[0];
   const prev = entries[1];
   // Cache the most recent measurement unit used (if any entry has one) so
@@ -8342,7 +8425,7 @@ async function renderScale(){
   // Body profile (height/formula) is stored on phase_settings and is the
   // only thing Track needs from it - for the composition bar. Everything
   // else phase-related now lives on the Phase tab.
-  const phase = await loadPhase();
+  const phase = wPhase.value !== undefined ? wPhase.value : await wPhase.refresh;
 
   // ---- Measurements visual section ----
   // Chronological entries that actually carry tape data. Everything in this
@@ -8664,11 +8747,24 @@ function previewWrap(inner, headline, sub, ctaLabel){
 // thirteen insights + knowledge in a single scroll; splitting gives two
 // focused screens instead of one unfocused one.
 async function renderPhaseTab(){
-  app.innerHTML = `<div class="app-shell"><div class="login-wrap"><div class="login-sub">Loading your phase…</div></div></div>`;
-  const entries = await loadBodyWeight();
+  // Shares both loaders with Track, so arriving here from that tab (or after
+  // the idle prefetch) needs no network at all and shows no loading screen.
+  const wEntries = warmGet('bodyWeight', loadBodyWeight);
+  const wPhase = warmGet('phase', loadPhase);
+  if (wEntries.value === undefined || wPhase.value === undefined){
+    app.innerHTML = `<div class="app-shell"><div class="login-wrap"><div class="login-sub">Loading your phase…</div></div></div>`;
+  }
+  const entries = wEntries.value !== undefined ? wEntries.value : await wEntries.refresh;
+  if (wEntries.refresh || wPhase.refresh){
+    const beforeEntries = JSON.stringify(entries);
+    Promise.all([wEntries.refresh, wPhase.refresh]).then(([freshEntries]) => {
+      if (state.currentTab !== 'phase') return;
+      if (freshEntries && JSON.stringify(freshEntries) !== beforeEntries) renderPhaseTab();
+    }).catch(() => {});
+  }
   const lastWithMeasurements = entries.find(e => e.measurement_unit);
   state.lastMeasurementUnit = lastWithMeasurements ? lastWithMeasurements.measurement_unit : null;
-  const phase = await loadPhase();
+  const phase = wPhase.value !== undefined ? wPhase.value : await wPhase.refresh;
   const phaseHtml = await buildPhaseHeroHtml(phase, entries);
 
   // Sets power the strength-retention insight. Only fetched from the active
@@ -9857,6 +9953,7 @@ function confirmDeleteBodyWeight(entryId){
   overlay.querySelector('#cancelBW').onclick = () => overlay.remove();
   overlay.querySelector('#confirmBW').onclick = async () => {
     overlay.remove();
+    warmInvalidate('bodyWeight');
     await supabaseClient.from('body_weight').delete().eq('id', entryId);
     renderScale();
   };
@@ -9982,6 +10079,7 @@ function openLogWeightForm(lastMeasurementUnit, expandMeasurements){
           payload[f.key] = val === '' ? null : parseFloat(val);
         });
       }
+      warmInvalidate('bodyWeight');
       const { error } = await supabaseClient.from('body_weight').insert(payload);
       if (error){ alert(error.message); return; }
       overlay.remove();
@@ -10045,6 +10143,7 @@ async function setPhasePaused(phase, paused){
   if (!userData || !userData.user) return null;
   if (paused){
     const payload = { paused_at: todayStr() };
+    warmInvalidate('phase');
     const { error } = await supabaseClient.from('phase_settings').update(payload).eq('user_id', userData.user.id);
     if (error){ alert(error.message); return null; }
     return { ...phase, ...payload };
@@ -10054,7 +10153,8 @@ async function setPhasePaused(phase, paused){
   ['bulk_start','bulk_end','cut_start','cut_end'].forEach(k => {
     if (phase[k]) payload[k] = addDaysToDate(phase[k], shift);
   });
-  const { error } = await supabaseClient.from('phase_settings').update(payload).eq('user_id', userData.user.id);
+  warmInvalidate('phase');
+    const { error } = await supabaseClient.from('phase_settings').update(payload).eq('user_id', userData.user.id);
   if (error){ alert(error.message); return null; }
   return { ...phase, ...payload };
 }
@@ -10478,6 +10578,7 @@ async function openEditPhaseForm(existing){
         cut_end: document.getElementById('cutEnd').value || null
       };
     }
+    warmInvalidate('phase');
     const { error } = await supabaseClient.from('phase_settings').upsert(payload, { onConflict: 'user_id' });
     if (error){ alert(error.message); return; }
     overlay.remove();
@@ -11430,12 +11531,26 @@ async function renderBalance(mode, view){
   view = view || state.balanceView || 'muscle';
   state.balanceMode = mode;
   state.balanceView = view;
-  app.innerHTML = `<div class="app-shell"><div class="login-wrap"><div class="login-sub">Crunching your balance…</div></div></div>`;
-  const [tally, prevTally, extended] = await Promise.all([
+  // Balance is the heaviest screen to compute, so re-crunching it on every
+  // visit was the most noticeable stall. Cached per mode, since the two
+  // modes read different data entirely.
+  const balanceKey = 'balance_' + mode;
+  const wBal = warmGet(balanceKey, () => Promise.all([
     mode === 'logged' ? tallyLoggedThisWeek() : tallyFullPlan(),
     mode === 'logged' ? tallyLoggedPreviousWeek() : Promise.resolve(null),
     mode === 'logged' ? fetchExtendedWorkoutData(8) : Promise.resolve(null)
-  ]);
+  ]));
+  if (wBal.value === undefined){
+    app.innerHTML = `<div class="app-shell"><div class="login-wrap"><div class="login-sub">Crunching your balance…</div></div></div>`;
+  }
+  const [tally, prevTally, extended] = wBal.value !== undefined ? wBal.value : await wBal.refresh;
+  if (wBal.refresh){
+    const before = JSON.stringify(tally);
+    wBal.refresh.then((fresh) => {
+      if (state.currentTab !== 'balance' || !fresh) return;
+      if (JSON.stringify(fresh[0]) !== before) renderBalance(mode, view);
+    }).catch(() => {});
+  }
   const insights = computeBalanceInsights(tally, prevTally, mode);
 
   let weeks = null, lifetimeStats = null, recentPRs = [], repRanges = null;
