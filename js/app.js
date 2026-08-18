@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.197';
+const APP_VERSION = 'Beta 5.198';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -3780,15 +3780,26 @@ async function fetchTrackHeaderStats(){
   // Shared date logic - see targetDateInfo() at the top.
   const { targetWeekday, targetDateStr, targetDateIsToday, targetIsFuture } = targetDateInfo();
   const since = new Date(Date.now() - 60*86400000).toISOString().slice(0,10);
-  const result = await withTimeout(
-    supabaseClient.from('sets').select('weight, weight_unit, weight_type, reps, num_sets, logged_at').eq('user_id', userData.user.id).gte('logged_at', since),
-    15000
-  );
-  const sets = result.__timeout || result.error ? [] : (result.data || []);
-  // If the chip's target date is in the future (nothing logged yet), show 0
-  // rather than falling back to last week's data - that'd be "what's
-  // available from prior weeks" rather than "what was actually done".
-  const targetSets = targetIsFuture ? [] : sets.filter(s => s.logged_at === targetDateStr);
+  // Two narrow queries instead of one wide one. Volume and set count need
+  // full detail but only for a SINGLE date; the streak needs 60 days but
+  // only the dates themselves. Previously this pulled full rows for the
+  // whole 60-day window - six columns of every set the user logged in two
+  // months - to compute a number that only reads logged_at.
+  const [targetResult, streakResult] = await Promise.all([
+    targetIsFuture
+      ? Promise.resolve({ data: [] })
+      : withTimeout(
+          supabaseClient.from('sets')
+            .select('weight, weight_unit, weight_type, reps, num_sets, logged_at')
+            .eq('user_id', userData.user.id).eq('logged_at', targetDateStr),
+          15000),
+    withTimeout(
+      supabaseClient.from('sets').select('logged_at')
+        .eq('user_id', userData.user.id).gte('logged_at', since),
+      15000)
+  ]);
+  const targetSets = (targetResult.__timeout || targetResult.error) ? [] : (targetResult.data || []);
+  const streakSets = (streakResult.__timeout || streakResult.error) ? [] : (streakResult.data || []);
   const setsToday = targetSets.reduce((sum, s) => sum + (Number(s.num_sets) || 1), 0);
   let volumeKg = 0;
   targetSets.forEach(s => {
@@ -3803,8 +3814,37 @@ async function fetchTrackHeaderStats(){
     const repsNum = Number(s.reps) || 1;
     volumeKg += kgWeight * perSideMultiplier * repsNum * (Number(s.num_sets) || 1);
   });
-  const streak = computeConsistencyStreak(sets);
+  const streak = computeConsistencyStreak(streakSets);
   return { volumeKg: Math.round(volumeKg), setsToday, streak: streak.current, targetDateIsToday, targetWeekday, targetIsFuture };
+}
+
+// Suggestions markup, shared by the inline (cached) render and the
+// deferred injection so the two can never drift apart.
+function buildSuggestionsHtml(suggestions, effectiveDayTypeLabel){
+  if (!suggestions || !suggestions.length) return '';
+  const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
+  const libraryItems = suggestions.filter(s => s.source === 'library');
+  const databaseItems = suggestions.filter(s => s.source !== 'library');
+  const renderSuggestionRow = (s) => {
+    const cat = EQUIPMENT_TO_CATEGORY[s.equipment] || 'Other';
+    const muscleLabel = s.primaryMuscles && s.primaryMuscles[0] ? cap(s.primaryMuscles[0]) : '';
+    const star = POPULAR_EXERCISES.has(s.name)
+      ? `<span title="Popular staple" style="color:#F0C542; margin-left:5px;">★</span>` : '';
+    return `<div class="pick-row suggestion-add" data-name="${s.name}" data-cat="${cat}">
+      <div><div class="ex-name">${s.name}${star}</div><div class="small" style="color:var(--slate);">${muscleLabel}</div></div>
+      <div class="chev" style="color:var(--flame); font-size:20px;">+</div>
+    </div>`;
+  };
+  return `<div class="category" style="display:flex; align-items:center; justify-content:space-between;">
+      <div>Try Something New for ${effectiveDayTypeLabel}</div>
+      <div style="display:flex; gap:2px;">
+        <button id="refreshSuggestions" style="background:none; width:38px; height:38px; display:flex; align-items:center; justify-content:center; border-radius:8px;"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="var(--flame)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>
+        <button id="seeAllSuggestions" style="background:none; width:38px; height:38px; display:flex; align-items:center; justify-content:center; border-radius:8px;"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="var(--flame)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
+      </div>
+    </div>
+    ${libraryItems.length ? `<div class="small" style="padding:0 18px 8px 18px; color:var(--slate);">From your own library - used before, just not on ${DAY_LABELS[state.selectedDay]}.</div>${libraryItems.map(renderSuggestionRow).join('')}` : ''}
+    ${databaseItems.length ? `<div class="small" style="padding:${libraryItems.length ? '10px' : '0'} 18px 8px 18px; color:var(--slate);">Not in your library yet — pulled from a public exercise database based on today's focus.</div>${databaseItems.map(renderSuggestionRow).join('')}` : ''}`;
+
 }
 
 async function renderTrack(){
@@ -3816,7 +3856,17 @@ async function renderTrack(){
   const myGeneration = ++state.renderGeneration;
   const isStale = () => state.renderGeneration !== myGeneration;
   app.innerHTML = `<div class="app-shell"><div class="login-wrap"><div class="login-sub">Loading your exercises…</div></div></div>`;
-  const [, dayTypeLabel, headerStats] = await Promise.all([loadExercises(myGeneration), loadDayType(state.selectedDay), fetchTrackHeaderStats()]);
+  // Everything the first paint needs, started at once. loadExerciseDB and
+  // loadLocations don't depend on any of the other results, so awaiting them
+  // in a second batch just stacked another full round-trip latency onto the
+  // load with nothing gained.
+  const [, dayTypeLabel, headerStats, exdb, allLocations] = await Promise.all([
+    loadExercises(myGeneration),
+    loadDayType(state.selectedDay),
+    fetchTrackHeaderStats(),
+    loadExerciseDB(),
+    loadLocations()
+  ]);
   if (isStale()) return;
   // dayTypeLabel can be: a string (real label from DB), null (no row - user
   // never set one), or an { __unavailable } marker (transient fetch failure).
@@ -3849,10 +3899,6 @@ async function renderTrack(){
   const pct = totalSlots > 0 ? Math.round((doneSlots / totalSlots) * 100) : 0;
 
   const groupBy = getGroupByPref();
-  const [exdb, allLocations] = await Promise.all([
-    loadExerciseDB(),
-    loadLocations()
-  ]);
   workingExercises.forEach(ex => { ex.mechanicInfo = classifyMechanic(matchExercise(ex.name, exdb)); });
   const splitModePref = getSplitModePref();
   const isUpperLowerMode = splitModePref === 'upperlower';
@@ -3881,19 +3927,18 @@ async function renderTrack(){
   const { grouped, orderedKeys } = await groupExercisesByChoice(visibleExercises, groupBy);
 
   let suggestions = [];
+  // Only use what's already cached for this render. Computing suggestions
+  // cold requires fetching the user's whole exercise library and running
+  // matching against the exercise database - real work, for a block that
+  // sits at the very bottom of the page. Blocking the exercises the user
+  // actually opened the app for behind it is the wrong trade, so a cold
+  // computation is kicked off after paint and injected when ready.
+  let suggestionsPending = false;
   if (workingExercises.length > 0){
     if (!state.suggestionsCache) state.suggestionsCache = {};
     const cacheKey = state.selectedDay;
-    if (state.suggestionsCache[cacheKey]){
-      suggestions = state.suggestionsCache[cacheKey];
-    } else {
-      const userData = { user: await getCurrentUser() };
-      const compatEx = await fetchAllExercisesCompat(userData.user.id);
-      const fullLibrary = compatEx.length ? compatEx.map(ex => ({ name: ex.name })) : workingExercises;
-      const todayNames = new Set(workingExercises.map(ex => ex.name.toLowerCase()));
-      suggestions = await getSuggestedExercises(effectiveDayTypeLabel, fullLibrary, todayNames);
-      state.suggestionsCache[cacheKey] = suggestions;
-    }
+    if (state.suggestionsCache[cacheKey]) suggestions = state.suggestionsCache[cacheKey];
+    else suggestionsPending = true;
   }
 
   const q = todayQuote();
@@ -3946,33 +3991,10 @@ async function renderTrack(){
       <button class="btn-primary" id="clearLocationBtn" style="max-width:220px; margin:0 auto;">Show exercises from anywhere</button>
     </div>`;
   }
-  let suggestionsHtml = '';
   const suppressSuggestionsForLocation = visibleExercises.length === 0 && workingExercises.length > 0 && currentLocationId;
   const suppressForLoadFailure = loadFailed;
-  if (suggestions.length > 0 && !suppressSuggestionsForLocation && !suppressForLoadFailure){
-    const cap = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
-    const libraryItems = suggestions.filter(s => s.source === 'library');
-    const databaseItems = suggestions.filter(s => s.source !== 'library');
-    const renderSuggestionRow = (s) => {
-      const cat = EQUIPMENT_TO_CATEGORY[s.equipment] || 'Other';
-      const muscleLabel = s.primaryMuscles && s.primaryMuscles[0] ? cap(s.primaryMuscles[0]) : '';
-      const star = POPULAR_EXERCISES.has(s.name)
-        ? `<span title="Popular staple" style="color:#F0C542; margin-left:5px;">★</span>` : '';
-      return `<div class="pick-row suggestion-add" data-name="${s.name}" data-cat="${cat}">
-        <div><div class="ex-name">${s.name}${star}</div><div class="small" style="color:var(--slate);">${muscleLabel}</div></div>
-        <div class="chev" style="color:var(--flame); font-size:20px;">+</div>
-      </div>`;
-    };
-    suggestionsHtml = `<div class="category" style="display:flex; align-items:center; justify-content:space-between;">
-        <div>Try Something New for ${effectiveDayTypeLabel}</div>
-        <div style="display:flex; gap:2px;">
-          <button id="refreshSuggestions" style="background:none; width:38px; height:38px; display:flex; align-items:center; justify-content:center; border-radius:8px;"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="var(--flame)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>
-          <button id="seeAllSuggestions" style="background:none; width:38px; height:38px; display:flex; align-items:center; justify-content:center; border-radius:8px;"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="var(--flame)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
-        </div>
-      </div>
-      ${libraryItems.length ? `<div class="small" style="padding:0 18px 8px 18px; color:var(--slate);">From your own library - used before, just not on ${DAY_LABELS[state.selectedDay]}.</div>${libraryItems.map(renderSuggestionRow).join('')}` : ''}
-      ${databaseItems.length ? `<div class="small" style="padding:${libraryItems.length ? '10px' : '0'} 18px 8px 18px; color:var(--slate);">Not in your library yet — pulled from a public exercise database based on today's focus.</div>${databaseItems.map(renderSuggestionRow).join('')}` : ''}`;
-  }
+  const suggestionsHtml = (suggestions.length > 0 && !suppressSuggestionsForLocation && !suppressForLoadFailure)
+    ? buildSuggestionsHtml(suggestions, effectiveDayTypeLabel) : '';
 
   app.innerHTML = `
     <div class="app-shell">
@@ -4020,12 +4042,40 @@ async function renderTrack(){
         </div>
         ${workingExercises.length > 0 ? groupByToggleHtml(groupBy) : ''}
         ${listHtml}
-        ${suggestionsHtml}
+        <div id="suggestionsSlot">${suggestionsHtml}</div>
       </div>
       ${renderTabbar()}
     </div>`;
 
   attachShellHandlers();
+  // Suggestions were deferred off the critical path - compute them now that
+  // the page is interactive and inject into the reserved slot. Guarded by the
+  // same generation token as the render, so a stale computation from a
+  // superseded render can never overwrite the current day's suggestions.
+  if (suggestionsPending && !suppressSuggestionsForLocation && !loadFailed){
+    (async () => {
+      try {
+        const u = await getCurrentUser();
+        if (!u || isStale()) return;
+        const compatEx = await fetchAllExercisesCompat(u.id);
+        if (isStale()) return;
+        const fullLibrary = compatEx.length ? compatEx.map(ex => ({ name: ex.name })) : workingExercises;
+        const todayNames = new Set(workingExercises.map(ex => ex.name.toLowerCase()));
+        const computed = await getSuggestedExercises(effectiveDayTypeLabel, fullLibrary, todayNames);
+        if (isStale()) return;
+        state.suggestionsCache[state.selectedDay] = computed;
+        const slot = document.getElementById('suggestionsSlot');
+        if (slot && computed.length){
+          slot.innerHTML = buildSuggestionsHtml(computed, effectiveDayTypeLabel);
+          attachSuggestionHandlers();
+        }
+      } catch(e){
+        // Suggestions are a nice-to-have - never let a failure here disturb
+        // the page the user is already using.
+        console.error('Deferred suggestions failed:', e);
+      }
+    })();
+  }
   document.getElementById('dayTypeHeader').onclick = () => openEditDayTypeForm(state.selectedDay, typeof dayTypeLabel === 'string' ? dayTypeLabel : '');
   const locSwitcher = document.getElementById('locSwitcher');
   if (locSwitcher) locSwitcher.onclick = () => openLocationPicker(allLocations, currentLocationId);
@@ -4113,6 +4163,12 @@ async function renderTrack(){
   document.querySelectorAll('.starter-add').forEach(el => {
     el.onclick = () => quickAddStarter(el.dataset.name, el.dataset.cat, state.selectedDay);
   });
+  attachSuggestionHandlers();
+}
+
+// Shared by the inline render and the deferred injection - suggestion rows
+// that appear after paint need the same wiring as ones present at paint.
+function attachSuggestionHandlers(){
   document.querySelectorAll('.suggestion-add').forEach(el => {
     el.onclick = () => openSuggestionPreview(el.dataset.name, el.dataset.cat);
   });
