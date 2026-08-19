@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.202';
+const APP_VERSION = 'Beta 5.203';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1884,31 +1884,117 @@ function showPreCheckPopover(anchorEl, title, description, onConfirm){
   popover.querySelector('.precheck-confirm').onclick = () => { popover.remove(); onConfirm(); };
 }
 
+// Locations and "Environments" were the same locations table behind two
+// separate menu entries and two screens - genuinely duplicated effort that
+// made one concept look like two. Merged into a single Locations page: the
+// list itself (add, rename, delete, equipment tags) plus the default and the
+// bulk assign tool. Equipment you OWN and carry - bands - is a different
+// concept and now lives on its own page.
 function openLocationSubPage(){
   const overlay = document.createElement('div');
   overlay.className = 'overlay-screen';
   overlay.innerHTML = `
-    <div class="form-header"><button id="closeLocSubPage">✕</button><h1>Location</h1><div style="width:18px;"></div></div>
+    <div class="form-header"><button id="closeLocSubPage">✕</button><h1>Locations</h1><div style="width:18px;"></div></div>
     <div class="overlay-scroll">
+      <div class="small" style="padding:6px 18px 10px 18px; color:var(--slate); line-height:1.55;">The places you train. Tag what each one has so suggestions match what's actually available.</div>
+      <div id="locSubList"><div class="small" style="padding:14px 18px; color:var(--slate);">Loading…</div></div>
+      <div style="padding:10px 18px 4px 18px;"><button class="btn-primary" id="addLocationBtn" style="width:100%;">+ Add a location</button></div>
+      <div class="section-label" style="padding-top:18px;">Settings</div>
       <div class="me-item" id="subDefaultLocationBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
-        <div><div>Default Location</div><div class="small" style="color:var(--slate); margin-top:2px;">Used when logging a set if Track isn't set to a specific location</div></div>
+        <div><div>Default Location</div><div class="small" style="color:var(--slate); margin-top:2px;">Used when logging if Track isn't set to a specific place</div></div>
         <div class="chev" style="margin-top:2px;">›</div>
       </div>
       <div class="me-item" id="subBulkLocationBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
-        <div><div>Assign Location</div><div class="small" style="color:var(--slate); margin-top:2px;">Tell the app what's where, gym by gym</div></div>
+        <div><div>Assign Exercises</div><div class="small" style="color:var(--slate); margin-top:2px;">Tell the app which exercises exist where, gym by gym</div></div>
         <div class="chev" style="margin-top:2px;">›</div>
       </div>
-      <div class="me-item" id="subMyBandsBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
-        <div><div>My Bands</div><div class="small" style="color:var(--slate); margin-top:2px;">Resistance bands you own — usable any day, anywhere</div></div>
-        <div class="chev" style="margin-top:2px;">›</div>
-      </div>
-      <div class="small" style="padding:6px 18px 4px 18px; color:var(--slate);">Naming, deleting, or setting equipment for a location now lives under Me → Environments.</div>
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#closeLocSubPage').onclick = () => overlay.remove();
   overlay.querySelector('#subDefaultLocationBtn').onclick = () => openDefaultLocationPicker();
   overlay.querySelector('#subBulkLocationBtn').onclick = () => openBulkLocationAssign();
+
+  async function renderList(){
+    const listArea = overlay.querySelector('#locSubList');
+    const locations = await loadLocations();
+    if (!locations.length){
+      listArea.innerHTML = `<div class="empty-state" style="padding:18px;">No locations yet — add the gyms you train at.</div>`;
+      return;
+    }
+    listArea.innerHTML = locations.map(l => {
+      const tags = l.equipment_tags || [];
+      const tagLabel = tags.length
+        ? tags.map(t => (EQUIPMENT_CATEGORIES.find(e => e.key === t) || {}).label || t).join(' · ')
+        : 'No equipment tagged yet';
+      return `<div class="loc-row" data-id="${l.id}" data-name="${l.name}">
+        <div style="flex:1; min-width:0;">
+          <div class="ex-name" style="font-size:13.5px;">${l.name}${l.is_default ? ' <span class="loc-default-tag">Default</span>' : ''}</div>
+          <div class="small" style="color:var(--slate); margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${tagLabel}</div>
+        </div>
+        <button class="loc-act" data-act="equip" data-id="${l.id}" data-name="${l.name}">Equipment</button>
+        <button class="loc-act" data-act="rename" data-id="${l.id}" data-name="${l.name}">✎</button>
+        <button class="loc-act" data-act="delete" data-id="${l.id}" data-name="${l.name}">🗑</button>
+      </div>`;
+    }).join('');
+    listArea.querySelectorAll('.loc-act').forEach(btn => {
+      btn.onclick = () => {
+        const { act, id, name } = btn.dataset;
+        const loc = locations.find(l => l.id === id);
+        if (act === 'equip'){ openEditLocationEquipmentScreen(id, name, loc ? (loc.equipment_tags || []) : [], renderList); return; }
+        if (act === 'rename'){
+          promptText({ title: 'Rename Location', placeholder: 'Name', initialValue: name,
+            onConfirm: async (newName) => {
+              if (!newName || newName === name) return;
+              await supabaseClient.from('locations').update({ name: newName }).eq('id', id);
+              warmInvalidate();
+              renderList();
+            } });
+          return;
+        }
+        showConfirmDialog(
+          `Delete "${name}"? Sets already logged there keep their record — only the location itself is removed.`,
+          async () => {
+            await supabaseClient.from('locations').delete().eq('id', id);
+            warmInvalidate();
+            renderList();
+          }, { title: 'Delete Location?', danger: true, confirmLabel: 'Delete' });
+      };
+    });
+  }
+  overlay.querySelector('#addLocationBtn').onclick = () => {
+    promptText({ title: 'New Location', placeholder: 'e.g. Bali Apartment',
+      onConfirm: async (name) => {
+        const created = await createLocation(name);
+        if (created) openEditLocationEquipmentScreen(created.id, created.name, [], renderList);
+        else renderList();
+      } });
+  };
+  renderList();
+}
+
+// Equipment you own and carry with you, as opposed to equipment a gym has.
+// Bands live here; this is the natural home for anything else portable.
+function openEquipmentSubPage(){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeEquip">✕</button><h1>Equipment</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll">
+      <div class="small" style="padding:6px 18px 10px 18px; color:var(--slate); line-height:1.55;">Kit you own rather than kit a gym has — so it's available on any day, at any location.</div>
+      <div class="me-item" id="subMyBandsBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+        <div><div>Resistance Bands</div><div class="small" style="color:var(--slate); margin-top:2px;" id="bandCountLabel">—</div></div>
+        <div class="chev" style="margin-top:2px;">›</div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeEquip').onclick = () => overlay.remove();
   overlay.querySelector('#subMyBandsBtn').onclick = () => openMyBandsScreen();
+  loadBands().then(bands => {
+    const el = document.getElementById('bandCountLabel');
+    if (el) el.textContent = bands.length
+      ? `${bands.length} band${bands.length===1?'':'s'} — ${bands.map(b=>b.label).join(', ')}`
+      : 'None set up yet';
+  });
 }
 
 function openRebuildToolsSubPage(){
@@ -2985,92 +3071,6 @@ async function openPublishToMonoLiftScreen(){
 }
 
 
-async function openEnvironmentsScreen(){
-  const overlay = document.createElement('div');
-  overlay.className = 'overlay-screen';
-  overlay.innerHTML = `
-    <div class="form-header"><button id="closeEnvironments">✕</button><h1>Environments</h1><div style="width:18px;"></div></div>
-    <div class="overlay-scroll">
-      <div class="small" style="padding:8px 18px 16px 18px; color:var(--slate);">Tell MonoLift what equipment each gym actually has - a place with only dumbbells and a bench won't get suggested barbell or machine exercises when it's the active location.</div>
-      <div class="action-row" id="newEnvRow"><div class="ex-name" style="color:var(--flame);">+ New Environment</div></div>
-      <div id="envList"><div class="small" style="padding:16px 18px; color:var(--slate);">Loading…</div></div>
-    </div>`;
-  document.body.appendChild(overlay);
-  overlay.querySelector('#closeEnvironments').onclick = () => overlay.remove();
-  overlay.querySelector('#newEnvRow').onclick = () => {
-    promptText({
-      title: 'New Environment Name', placeholder: 'e.g. Home Gym',
-      onConfirm: async (name) => {
-        const created = await createLocation(name);
-        if (created) openEditLocationEquipmentScreen(created.id, created.name, [], render);
-        else render();
-      }
-    });
-  };
-
-  async function render(){
-    const listArea = overlay.querySelector('#envList');
-    listArea.innerHTML = `<div class="small" style="padding:16px 18px; color:var(--slate);">Loading…</div>`;
-    const locations = await loadLocations();
-    if (!locations.length){
-      listArea.innerHTML = `<div class="empty-state" style="padding:20px 18px;">No environments yet - add one to start tagging what equipment it has.</div>`;
-      return;
-    }
-    listArea.innerHTML = locations.map(l => {
-      const tags = l.equipment_tags || [];
-      const summary = tags.length
-        ? tags.map(t => (EQUIPMENT_CATEGORIES.find(c => c.key === t) || {}).label || t).join(', ')
-        : 'Not set up yet - tap to add equipment';
-      return `
-      <div style="margin:0 18px 10px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px;">
-        <div class="env-row" data-id="${l.id}" data-name="${l.name}" style="cursor:pointer;">
-          <div style="display:flex; justify-content:space-between; align-items:center;">
-            <div class="ex-name" style="font-size:13.5px;">${l.name}</div>
-            <div class="chev">›</div>
-          </div>
-          <div class="small" style="color:${tags.length ? 'var(--slate)' : 'var(--flame)'}; margin-top:3px;">${summary}</div>
-        </div>
-        <div style="display:flex; gap:8px; margin-top:10px;">
-          <button class="env-rename" data-id="${l.id}" data-name="${l.name}" style="background:var(--ink); color:var(--slate); padding:7px 12px; border-radius:8px; font-size:11px;">Rename</button>
-          <button class="env-delete" data-id="${l.id}" data-name="${l.name}" style="background:var(--ink); color:#E8492A; padding:7px 12px; border-radius:8px; font-size:11px;">Delete</button>
-        </div>
-      </div>`;
-    }).join('');
-    listArea.querySelectorAll('.env-rename').forEach(btn => {
-      btn.onclick = (e) => {
-        e.stopPropagation();
-        promptText({
-          title: 'Rename Environment', placeholder: 'Name', initialValue: btn.dataset.name,
-          onConfirm: async (newName) => { await supabaseClient.from('locations').update({ name: newName }).eq('id', btn.dataset.id); render(); }
-        });
-      };
-    });
-    listArea.querySelectorAll('.env-delete').forEach(btn => {
-      btn.onclick = (e) => {
-        e.stopPropagation();
-        showConfirmDialog(`Exercises tagged to "${btn.dataset.name}" will just lose that tag - nothing else is affected.`, async () => {
-          const userData = { user: await getCurrentUser() };
-          const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
-          const exResult = await withTimeout(supabaseClient.from(table).select('id, location_ids').eq('user_id', userData.user.id), 15000);
-          const affected = (exResult.data || []).filter(ex => (ex.location_ids || []).includes(btn.dataset.id));
-          for (const ex of affected){
-            await supabaseClient.from(table).update({ location_ids: ex.location_ids.filter(id => id !== btn.dataset.id) }).eq('id', ex.id);
-          }
-          await supabaseClient.from('locations').delete().eq('id', btn.dataset.id);
-          render();
-        }, { title: `Delete "${btn.dataset.name}"?`, danger: true, confirmLabel: 'Delete' });
-      };
-    });
-    listArea.querySelectorAll('.env-row').forEach(row => {
-      row.onclick = async () => {
-        const locations2 = await loadLocations();
-        const loc = locations2.find(l => l.id === row.dataset.id);
-        openEditLocationEquipmentScreen(row.dataset.id, row.dataset.name, (loc && loc.equipment_tags) || [], render);
-      };
-    });
-  }
-  render();
-}
 
 function openEditLocationEquipmentScreen(locationId, locationName, currentTags, onSaved){
   const selected = new Set(currentTags || []);
@@ -3454,7 +3454,7 @@ function showOnboarding(mode){
     const expandedIdx = wiz._locExpandedIdx;
     shell(`
       <div style="font-family:'Oswald', sans-serif; font-size:19px; text-transform:uppercase; margin-bottom:6px;">Where Do You Train?</div>
-      <div style="font-size:11.5px; color:var(--slate); margin-bottom:14px; line-height:1.5;">Optional, but useful - add each gym you use, and what equipment it has, so suggestions match reality. Skip this and add it anytime from Me → Environments.</div>
+      <div style="font-size:11.5px; color:var(--slate); margin-bottom:14px; line-height:1.5;">Optional, but useful - add each gym you use, and what equipment it has, so suggestions match reality. Skip this and add it anytime from Me → Locations.</div>
       <div style="display:flex; gap:8px; margin-bottom:12px;">
         <input id="newLocInput" placeholder="e.g. Home Gym" style="flex:1; background:var(--ink); border:1px solid var(--line); border-radius:10px; padding:11px 12px; color:var(--chalk); font-size:13px;">
         <button id="addLocBtn" style="background:var(--flame); color:var(--ink); border-radius:10px; padding:0 16px; font-weight:600; font-size:13px;">Add</button>
@@ -5154,13 +5154,20 @@ async function openPicker(initialTab, jumpToMuscle){
   // 'offplan' means log against an exercise WITHOUT attaching it to a
   // weekday - used for holiday/random-gym sessions. It's a logging mode,
   // not a separate screen, so the picker itself is unchanged.
-  const offPlanMode = initialTab === 'offplan';
+  let offPlanMode = initialTab === 'offplan';
   if (offPlanMode) initialTab = null;
   if (jumpToMuscle) setPickerGroupByPref('muscle');
   const overlay = document.createElement('div');
   overlay.className = 'overlay-screen';
   overlay.innerHTML = `
-    <div class="form-header"><button id="closePicker">✕</button><h1>Log a Set</h1><div style="width:18px;"></div></div>
+    <div class="form-header"><button id="closePicker">✕</button><h1 id="pickerTitle">${offPlanMode ? 'Log Off-Plan' : 'Log a Set'}</h1><div style="width:18px;"></div></div>
+    <div class="offplan-toggle-row">
+      <div style="flex:1;">
+        <div class="offplan-toggle-title">Log off-plan</div>
+        <div class="offplan-toggle-sub">Log this without adding it to ${DAY_NAMES[state.selectedDay]} — for improvised sessions or a gym you're only at once.</div>
+      </div>
+      <button class="switch ${offPlanMode ? '' : 'off'}" id="offPlanSwitch"></button>
+    </div>
     <div style="display:flex; padding:0 18px; border-bottom:1px solid var(--line);">
       <div class="picker-toptab" data-tab="mine" style="flex:1; text-align:center; padding:10px 0; font-family:'Oswald',sans-serif; font-size:12px; text-transform:uppercase; letter-spacing:0.5px; color:var(--slate); border-bottom:2px solid transparent; cursor:pointer;">Your Exercises</div>
       <div class="picker-toptab" data-tab="database" style="flex:1; text-align:center; padding:10px 0; font-family:'Oswald',sans-serif; font-size:12px; text-transform:uppercase; letter-spacing:0.5px; color:var(--slate); border-bottom:2px solid transparent; cursor:pointer;">Database</div>
@@ -5168,6 +5175,13 @@ async function openPicker(initialTab, jumpToMuscle){
     <div class="overlay-scroll" id="pickerBody"></div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#closePicker').onclick = () => { removeSideIndex(); overlay.remove(); };
+  const offPlanSwitch = overlay.querySelector('#offPlanSwitch');
+  if (offPlanSwitch) offPlanSwitch.onclick = () => {
+    offPlanMode = !offPlanMode;
+    offPlanSwitch.classList.toggle('off', !offPlanMode);
+    const title = overlay.querySelector('#pickerTitle');
+    if (title) title.textContent = offPlanMode ? 'Log Off-Plan' : 'Log a Set';
+  };
 
   const userData = { user: await getCurrentUser() };
   const all = await fetchAllExercisesCompat(userData.user.id);
@@ -12540,11 +12554,11 @@ async function renderMe(){
         </div>
         <div class="section-label">Data</div>
         <div class="me-item" id="locationSubPageBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
-          <div><div>Location</div><div class="small" style="color:var(--slate); margin-top:2px;">Default location, assign gyms, manage the list</div></div>
+          <div><div>Locations</div><div class="small" style="color:var(--slate); margin-top:2px;">Your gyms — what each one has, and which is your default</div></div>
           <div class="chev" style="margin-top:2px;">›</div>
         </div>
-        <div class="me-item" id="environmentsBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
-          <div><div>Environments</div><div class="small" style="color:var(--slate); margin-top:2px;">Set what equipment each gym has, so suggestions match reality</div></div>
+        <div class="me-item" id="equipmentSubPageBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+          <div><div>Equipment</div><div class="small" style="color:var(--slate); margin-top:2px;">Kit you own and take with you — bands, and more later</div></div>
           <div class="chev" style="margin-top:2px;">›</div>
         </div>
         <div class="me-item" id="publishMonoLiftBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
@@ -12572,7 +12586,7 @@ async function renderMe(){
   document.getElementById('replayTourBtn').onclick = () => showOnboarding('teach');
   document.getElementById('backupPlanBtn').onclick = openBackupPlanScreen;
   document.getElementById('locationSubPageBtn').onclick = () => openLocationSubPage();
-  document.getElementById('environmentsBtn').onclick = () => openEnvironmentsScreen();
+  document.getElementById('equipmentSubPageBtn').onclick = () => openEquipmentSubPage();
   document.getElementById('publishMonoLiftBtn').onclick = () => openPublishToMonoLiftScreen();
   if (isOwner) document.getElementById('approveContributorsBtn').onclick = () => openApproveContributorsScreen();
   document.getElementById('planSubPageBtn').onclick = () => openPlanSubPage();

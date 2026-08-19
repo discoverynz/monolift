@@ -367,3 +367,12 @@ input:focus, button:focus{ outline:none; }
 .offplan-banner .t{ font-family:'Oswald', sans-serif; font-size:13px; }
 .offplan-banner .s{ font-size:10.5px; color:var(--slate); margin-top:1px; line-height:1.4; }
 .measure-badge{ font-family:'JetBrains Mono', monospace; font-size:8px; padding:2px 5px; border-radius:8px; background:rgba(201,162,39,0.15); color:var(--brass); margin-left:5px; }
+
+/* ---------- Merged Locations page ---------- */
+.loc-row{ margin:0 18px 8px 18px; background:var(--panel); border-radius:12px; padding:11px 13px; display:flex; align-items:center; gap:8px; }
+.loc-act{ background:var(--ink); border:1px solid var(--line); color:var(--slate); border-radius:8px; padding:6px 9px; font-size:11px; flex-shrink:0; }
+.loc-default-tag{ font-family:'JetBrains Mono', monospace; font-size:8.5px; padding:2px 6px; border-radius:9px; background:rgba(255,107,26,0.15); color:var(--flame); margin-left:5px; vertical-align:middle; }
+/* Off-plan toggle in the picker - available anywhere, not just on holiday */
+.offplan-toggle-row{ display:flex; align-items:center; gap:12px; margin:4px 18px 10px 18px; padding:12px 14px; background:var(--panel); border:1px solid var(--line); border-radius:13px; }
+.offplan-toggle-title{ font-family:'Oswald', sans-serif; font-size:13.5px; }
+.offplan-toggle-sub{ font-size:11px; color:var(--slate); margin-top:2px; line-height:1.45; }
