@@ -3,7 +3,7 @@
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.201';
+const APP_VERSION = 'Beta 5.202';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -880,7 +880,7 @@ async function loadExercises(generation){
   }
   let result = await withTimeout(
     supabaseClient.from('exercises')
-      .select('id, name, category, alt_group_id, alt_groups(name, color), location_ids, muscle_override')
+      .select('id, name, category, alt_group_id, alt_groups(name, color), location_ids, muscle_override, measurement_type')
       .eq('user_id', userData.user.id)
       .eq('weekday', state.selectedDay)
       .eq('active', true)
@@ -945,7 +945,7 @@ async function loadExercises(generation){
     });
 
     let setsResult = await withTimeout(
-      supabaseClient.from('sets').select('exercise_id, weight, weight_unit, weight_type, reps, num_sets, logged_at, location_id')
+      supabaseClient.from('sets').select('exercise_id, weight, weight_unit, weight_type, reps, num_sets, logged_at, location_id, measurement_type, band_snapshot, band_resistance, band_resistance_unit')
         .in('exercise_id', [...prQueryIds]).gte('logged_at', setHistoryCutoff()).order('logged_at', { ascending: false }).limit(4000),
       15000
     );
@@ -1071,7 +1071,7 @@ async function loadExercisesFromMaster(generation){
 
   const result = await withTimeout(
     supabaseClient.from('exercise_days')
-      .select('exercise_master_id, exercise_master(id, name, category, alt_group_id, alt_groups(name, color), location_ids, muscle_override)')
+      .select('exercise_master_id, exercise_master(id, name, category, alt_group_id, alt_groups(name, color), location_ids, muscle_override, measurement_type)')
       .eq('user_id', uid)
       .eq('weekday', state.selectedDay),
     15000
@@ -1099,7 +1099,7 @@ async function loadExercisesFromMaster(generation){
   let loggedOnTargetByExId = new Set();
   if (masterIds.length){
     let setsResult = await withTimeout(
-      supabaseClient.from('sets').select('exercise_master_id, weight, weight_unit, weight_type, reps, num_sets, logged_at, location_id')
+      supabaseClient.from('sets').select('exercise_master_id, weight, weight_unit, weight_type, reps, num_sets, logged_at, location_id, measurement_type, band_snapshot, band_resistance, band_resistance_unit')
         .in('exercise_master_id', masterIds).gte('logged_at', setHistoryCutoff()).order('logged_at', { ascending: false }).limit(4000),
       15000
     );
@@ -1377,7 +1377,8 @@ async function createExerciseForToday(payload){
     const { data: inserted, error } = await supabaseClient.from('exercise_master').insert({
       user_id: payload.user_id, name: payload.name, category: payload.category,
       alt_group_id: payload.alt_group_id || null, push_pull: payload.push_pull || null,
-      upper_lower: payload.upper_lower || null, location_ids: payload.location_ids || null
+      upper_lower: payload.upper_lower || null, location_ids: payload.location_ids || null,
+      measurement_type: payload.measurement_type || null
     }).select();
     if (error || !inserted || !inserted[0]) return { data: null, error: error || { message: 'Could not create exercise' }, wasExisting: false };
     masterId = inserted[0].id;
@@ -1640,6 +1641,11 @@ function convertWeight(value, fromUnit, toUnit){
 }
 
 function formatSetValue(s, withAlt){
+  // Band sets read as their bands, not as a weight - the weight column is
+  // deliberately null for them.
+  if (s && (s.measurement_type === 'band' || s.weight_unit === 'band')){
+    return `${formatBandSet(s)}${formatSetsReps(s)}`;
+  }
   const u = s.weight_unit;
   const perSuffix = (s.weight_type === 'per') ? ' per' : '';
   if (u === 'pin') return `Pin ${s.weight}`;
@@ -1684,7 +1690,7 @@ async function showAltGroupHistory(groupId, groupName){
   const nameById = Object.fromEntries(members.map(m => [m.id, m.name]));
   const idField = getUseExerciseMasterFlag() ? 'exercise_master_id' : 'exercise_id';
   const setsResult = await withTimeout(
-    supabaseClient.from('sets').select('id, exercise_id, exercise_master_id, weight, weight_unit, weight_type, reps, num_sets, notes, logged_at')
+    supabaseClient.from('sets').select('id, exercise_id, exercise_master_id, weight, weight_unit, weight_type, reps, num_sets, notes, logged_at, measurement_type, band_snapshot, band_resistance, band_resistance_unit')
       .in(idField, memberIds).order('logged_at', { ascending: false }).limit(60),
     15000
   );
@@ -1892,12 +1898,17 @@ function openLocationSubPage(){
         <div><div>Assign Location</div><div class="small" style="color:var(--slate); margin-top:2px;">Tell the app what's where, gym by gym</div></div>
         <div class="chev" style="margin-top:2px;">›</div>
       </div>
+      <div class="me-item" id="subMyBandsBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+        <div><div>My Bands</div><div class="small" style="color:var(--slate); margin-top:2px;">Resistance bands you own — usable any day, anywhere</div></div>
+        <div class="chev" style="margin-top:2px;">›</div>
+      </div>
       <div class="small" style="padding:6px 18px 4px 18px; color:var(--slate);">Naming, deleting, or setting equipment for a location now lives under Me → Environments.</div>
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#closeLocSubPage').onclick = () => overlay.remove();
   overlay.querySelector('#subDefaultLocationBtn').onclick = () => openDefaultLocationPicker();
   overlay.querySelector('#subBulkLocationBtn').onclick = () => openBulkLocationAssign();
+  overlay.querySelector('#subMyBandsBtn').onclick = () => openMyBandsScreen();
 }
 
 function openRebuildToolsSubPage(){
@@ -4147,7 +4158,8 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
     listHtml = `<div class="empty-state">No exercises set for ${DAY_LABELS[state.selectedDay]} yet.</div>
       <div class="category">Quick Add — Common for ${effectiveDayTypeLabel}</div>
       ${starters.map(s => `<div class="pick-row starter-add" data-name="${s.name}" data-cat="${s.category}"><div class="ex-name">${s.name}</div><div class="chev" style="color:var(--flame); font-size:20px;">+</div></div>`).join('')}
-      <div style="padding:14px 18px;"><button class="btn-primary" id="emptyAddBtn">+ Add a Different Exercise</button></div>`;
+      <div style="padding:14px 18px;"><button class="btn-primary" id="emptyAddBtn">+ Add a Different Exercise</button></div>
+      <div style="padding:0 18px 14px 18px;"><button class="btn-primary" id="logOffPlanBtn" style="width:100%; background:var(--panel); color:var(--chalk); border:1px solid var(--line);">Log something off-plan</button></div>`;
   } else if (visibleExercises.length === 0 && currentLocationId){
     // The user HAS exercises on this day, but every one of them is tagged
     // for a different location so they all got filtered out. Without this
@@ -4160,7 +4172,8 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
     listHtml = `<div class="empty-state" style="padding:24px 18px; text-align:center;">
       <div style="font-size:14px; color:var(--chalk); margin-bottom:6px;">All ${hiddenCount} of your ${DAY_LABELS[state.selectedDay]} exercises are tagged for another location.</div>
       <div style="font-size:12px; color:var(--slate); margin-bottom:14px;">They're not gone - just filtered out because you're currently at <span style="color:var(--flame);">${currentLocationName || 'a specific location'}</span>.</div>
-      <button class="btn-primary" id="clearLocationBtn" style="max-width:220px; margin:0 auto;">Show exercises from anywhere</button>
+      <button class="btn-primary" id="logOffPlanBtn" style="max-width:240px; margin:0 auto 8px auto;">Log what's here</button>
+      <button class="btn-primary" id="clearLocationBtn" style="max-width:240px; margin:0 auto; background:var(--panel); color:var(--chalk); border:1px solid var(--line);">Show exercises from anywhere</button>
     </div>`;
   }
   const suppressSuggestionsForLocation = visibleExercises.length === 0 && workingExercises.length > 0 && currentLocationId;
@@ -4333,6 +4346,8 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   if (retryBtn) retryBtn.onclick = () => { state.exercises = []; renderTrack(); };
   const clearLocBtn = document.getElementById('clearLocationBtn');
   if (clearLocBtn) clearLocBtn.onclick = () => openLocationPicker(allLocations, currentLocationId);
+  const offPlanBtn = document.getElementById('logOffPlanBtn');
+  if (offPlanBtn) offPlanBtn.onclick = () => openPicker('offplan');
   document.querySelectorAll('.starter-add').forEach(el => {
     el.onclick = () => quickAddStarter(el.dataset.name, el.dataset.cat, state.selectedDay);
   });
@@ -5100,7 +5115,47 @@ function groupDatabaseExercises(list, groupBy, splitMode){
   return { grouped, orderedKeys };
 }
 
+// Ensures an exercise row exists to log against, WITHOUT attaching it to any
+// weekday. This is the whole mechanic behind off-plan logging: a set needs an
+// exercise to belong to, but nothing needs to appear on a day the user didn't
+// choose. Reuses an existing exercise of the same name where there is one, so
+// a hotel-gym Lat Pulldown lands in the same history as the one on your
+// Tuesday rather than starting a parallel record.
+async function ensureExerciseExistsUnattached(uid, name, category){
+  await awaitMasterFlagHealed();
+  const useMaster = getUseExerciseMasterFlag();
+  if (useMaster){
+    const existing = await withTimeout(
+      supabaseClient.from('exercise_master').select('id').eq('user_id', uid).ilike('name', name).limit(1),
+      15000
+    );
+    if (!existing.__timeout && !existing.error && existing.data && existing.data.length){
+      return existing.data[0].id;
+    }
+    const created = await withTimeout(
+      supabaseClient.from('exercise_master')
+        .insert({ user_id: uid, name, category: category || 'Other', location_ids: null })
+        .select(),
+      15000
+    );
+    if (created.__timeout || created.error || !created.data || !created.data.length) return null;
+    return created.data[0].id;
+  }
+  // Legacy schema has no separate master table - an exercise IS a row on a
+  // weekday, so there's no way to represent one without a day. Fall back to
+  // today rather than failing the log outright.
+  const created = await insertExerciseSafely({
+    user_id: uid, name, category: category || 'Other', weekday: state.selectedDay, alt_group_id: null
+  });
+  return (created && created.data && created.data[0]) ? created.data[0].id : null;
+}
+
 async function openPicker(initialTab, jumpToMuscle){
+  // 'offplan' means log against an exercise WITHOUT attaching it to a
+  // weekday - used for holiday/random-gym sessions. It's a logging mode,
+  // not a separate screen, so the picker itself is unchanged.
+  const offPlanMode = initialTab === 'offplan';
+  if (offPlanMode) initialTab = null;
   if (jumpToMuscle) setPickerGroupByPref('muscle');
   const overlay = document.createElement('div');
   overlay.className = 'overlay-screen';
@@ -5322,6 +5377,17 @@ async function openPicker(initialTab, jumpToMuscle){
             return;
           }
           const userData = { user: await getCurrentUser() };
+          if (offPlanMode){
+            // Off-plan: the whole point is NOT to add this to the weekday
+            // plan. The exercise itself must exist to log against, but we
+            // deliberately skip the exercise_days link, so it never appears
+            // on a day the user didn't choose. This is the entire "dayless"
+            // mechanic - one skipped insert.
+            const masterId = await ensureExerciseExistsUnattached(userData.user.id, picked.name, picked.category);
+            if (!masterId){ alert('Could not prepare that exercise.'); return; }
+            openLogForm(masterId, picked.name, true);
+            return;
+          }
           const { data: inserted, error } = await createExerciseForToday({
             user_id: userData.user.id, name: picked.name, category: picked.category,
             weekday: targetDay, alt_group_id: null
@@ -7226,7 +7292,13 @@ async function openNewExerciseForm(){
   let pickedAltGroup = null;
   let selectedPushPull = null;
   let selectedUpperLower = null;
-  let selectedLocationIds = [];
+  let selectedMeasurement = 'weight';
+  // Default to wherever you actually are. Creating an exercise while at a
+  // specific gym almost always means "this exists here", and having to
+  // remember to tick it every time was busywork that led to exercises
+  // silently showing up at gyms that don't have the equipment.
+  const todaysLocation = effectiveLocationId();
+  let selectedLocationIds = todaysLocation ? [todaysLocation] : [];
   const overlay = document.createElement('div');
   overlay.className = 'overlay-screen';
   overlay.innerHTML = `
@@ -7234,6 +7306,11 @@ async function openNewExerciseForm(){
     <div class="overlay-scroll">
       <div class="field-label">Name</div>
       <div class="field-card"><input class="field-input" id="exNameInput" placeholder="e.g. Incline Dumbbell Press" style="font-size:14px; font-weight:400;"></div>
+      <div class="field-label">How is it measured</div>
+      <div class="chip-row" id="measurementRow">
+        ${MEASUREMENT_TYPES.map(m => `<div class="chip ${m.key==='weight'?'active':''}" data-mt="${m.key}">${m.label}</div>`).join('')}
+      </div>
+      <div class="small" id="measurementHint" style="padding:0 18px 8px 18px; color:var(--slate); line-height:1.5;"></div>
       <div class="field-label">Category</div>
       <div class="chip-row" id="categoryChipRow"><div class="small" style="color:var(--slate); padding:8px 0;">Loading…</div></div>
       <div class="field-label">Day</div>
@@ -7250,13 +7327,28 @@ async function openNewExerciseForm(){
       </div>
       <div class="field-label">Locations <span class="opt">(optional, pick any that apply)</span></div>
       <div class="chip-row" id="locationChipRow"><div class="small" style="color:var(--slate); padding:8px 0;">Loading…</div></div>
-      <div class="small" style="padding:0 18px 8px 18px; color:var(--slate);">Leave blank if it's available everywhere (dumbbells, cables, bodyweight). Pick specific locations for gym-specific machines - select more than one if it exists at both.</div>
+      <div class="small" style="padding:0 18px 8px 18px; color:var(--slate);">Defaults to where you are now. Clear it if it's available everywhere (dumbbells, cables, bodyweight), or pick several if it exists at more than one.</div>
       <div class="field-label">Alt Group <span class="opt">(optional)</span></div>
       <div id="altGroupArea" class="field-card" style="display:block;"><div class="ex-name" style="color:var(--slate); font-size:13px;" id="altGroupPickBtn">Tap to choose or create…</div></div>
       <button class="save-btn" id="saveExerciseBtn">Add Exercise</button>
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#closeForm').onclick = () => overlay.remove();
+
+  const measurementHintEl = overlay.querySelector('#measurementHint');
+  const setMeasurementHint = () => {
+    const m = MEASUREMENT_TYPES.find(x => x.key === selectedMeasurement);
+    measurementHintEl.textContent = m ? m.hint : '';
+  };
+  setMeasurementHint();
+  overlay.querySelectorAll('#measurementRow .chip').forEach(el => {
+    el.onclick = () => {
+      selectedMeasurement = el.dataset.mt;
+      overlay.querySelectorAll('#measurementRow .chip').forEach(c=>c.classList.remove('active'));
+      el.classList.add('active');
+      setMeasurementHint();
+    };
+  });
 
   overlay.querySelectorAll('#pushPullRow .chip').forEach(el => {
     el.onclick = () => {
@@ -7349,7 +7441,8 @@ async function openNewExerciseForm(){
       const { error } = await createExerciseForToday({
         user_id: userData.user.id, name, category: selectedCategory, weekday: selectedDay,
         alt_group_id: pickedAltGroup ? pickedAltGroup.id : null,
-        push_pull: selectedPushPull, upper_lower: selectedUpperLower, location_ids: selectedLocationIds
+        push_pull: selectedPushPull, upper_lower: selectedUpperLower, location_ids: selectedLocationIds,
+        measurement_type: selectedMeasurement === 'weight' ? null : selectedMeasurement
       });
       if (error){ alert(error.message); return; }
       overlay.remove();
@@ -7679,6 +7772,12 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
   let unit = 'kg';
   let weightType = 'total';
   let lastEntry = null;
+  // Band exercises swap the weight field for a band picker. Resolved from
+  // the exercise already in state where possible so the form doesn't need
+  // an extra round trip just to know which shape to render.
+  const exInState = (state.exercises || []).find(e => (e.masterId || e.id) === exerciseId);
+  const measurementType = measurementTypeOf(exInState);
+  let selectedBands = [];
   // Defaults to whatever location is currently active on Track, falling back
   // to the designated default location if Track is in Anywhere mode. Only
   // starts genuinely unassigned if neither is set.
@@ -7709,17 +7808,24 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
       <div id="sameAsLastArea" style="margin-bottom:18px;"></div>
       <button class="save-btn" id="saveSetBtn" style="margin-bottom:18px;">Save Set</button>
       <div style="height:1px; background:var(--line); margin:0 18px 18px 18px;"></div>
-      <div class="field-label">Weight or Time <span class="opt">(optional)</span></div>
-      <div class="field-card">
-        <input class="field-input" id="weightInput" type="number" inputmode="decimal" placeholder="0">
-        <div class="unit-toggle">
-          <button class="active" data-u="kg">kg</button><button data-u="lb">lb</button><button data-u="sec">sec</button><button data-u="pin">pin</button>
-        </div>
+      <div id="bandPickerArea" style="display:none;">
+        <div class="field-label">Band <span class="opt">tap two to stack them</span></div>
+        <div class="band-pick-row" id="bandPickRow"><div class="small" style="color:var(--slate); padding:8px 18px;">Loading…</div></div>
+        <div class="small" id="bandPickHint" style="padding:0 18px 8px 18px; color:var(--slate); line-height:1.5;"></div>
       </div>
-      <div class="field-label">Per Side or Total?</div>
-      <div class="chip-row">
-        <div class="chip active" data-wt="total">Total</div>
-        <div class="chip" data-wt="per">Per Side</div>
+      <div id="weightArea">
+        <div class="field-label">Weight or Time <span class="opt">(optional)</span></div>
+        <div class="field-card">
+          <input class="field-input" id="weightInput" type="number" inputmode="decimal" placeholder="0">
+          <div class="unit-toggle">
+            <button class="active" data-u="kg">kg</button><button data-u="lb">lb</button><button data-u="sec">sec</button><button data-u="pin">pin</button>
+          </div>
+        </div>
+        <div class="field-label">Per Side or Total?</div>
+        <div class="chip-row">
+          <div class="chip active" data-wt="total">Total</div>
+          <div class="chip" data-wt="per">Per Side</div>
+        </div>
       </div>
       <div class="field-label">Location <span class="opt">(some machines differ by location)</span></div>
       <div class="chip-row" id="setLocationRow" style="flex-wrap:wrap;"><div class="small" style="color:var(--slate); padding:8px 0;">Loading…</div></div>
@@ -7766,7 +7872,31 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
     // duplicate row (which we know can exist) would hide real historic best
     // weights, causing PR celebrations to fire on non-actual PRs.
     let priorBest = null;
-    if (weight !== null && (unit === 'kg' || unit === 'lb')){
+    if (measurementType === 'band'){
+      // Band progression is resistance first, reps as the tiebreak - which
+      // is why the printed rating matters: without it, band sets can't be
+      // ordered against each other at all.
+      const combinedNow = combinedBandResistance(selectedBands);
+      if (combinedNow){
+        const prev = await withTimeout(
+          supabaseClient.from('sets').select('band_resistance, band_resistance_unit, reps')
+            .eq(idField, exerciseId).not('band_resistance', 'is', null),
+          10000);
+        if (!prev.__timeout && !prev.error && prev.data && prev.data.length){
+          const best = prev.data.reduce((m, r) => {
+            const v = convertWeight(Number(r.band_resistance), r.band_resistance_unit || 'lb', combinedNow.unit);
+            if (!m || v > m.res || (v === m.res && (Number(r.reps)||0) > m.reps)) return { res: v, reps: Number(r.reps)||0 };
+            return m;
+          }, null);
+          if (best){
+            const repsNow = Number(reps) || 0;
+            if (combinedNow.value > best.res || (combinedNow.value === best.res && repsNow > best.reps)){
+              celebratePR(exerciseName, combinedNow.value, combinedNow.unit, best.res);
+            }
+          }
+        }
+      }
+    } else if (weight !== null && (unit === 'kg' || unit === 'lb')){
       const siblingTable = useMaster ? 'exercise_master' : 'exercises';
       const siblingsResult = await withTimeout(
         supabaseClient.from(siblingTable).select('id').eq('user_id', userData.user.id).ilike('name', exerciseName),
@@ -7792,6 +7922,25 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
       logged_at: todayStr(),
       location_id: selectedLocationId
     };
+    // An exercise with no weekday link is being logged off-plan.
+    if (isNewToDay && !(state.exercises || []).some(e => (e.masterId || e.id) === exerciseId)){
+      insertPayload.off_plan = true;
+    }
+    if (measurementType === 'band'){
+      // Copy the bands' details onto the set rather than only referencing
+      // them, so correcting a rating or deleting a band later can never
+      // rewrite what this set says it was.
+      const combined = combinedBandResistance(selectedBands);
+      insertPayload.measurement_type = 'band';
+      insertPayload.band_snapshot = buildBandSnapshot(selectedBands);
+      insertPayload.band_resistance = combined ? combined.value : null;
+      insertPayload.band_resistance_unit = combined ? combined.unit : null;
+      // Weight is meaningless for a band set - leave it null rather than
+      // writing a number that would pollute weight-based PR and volume maths.
+      insertPayload.weight = null;
+      insertPayload.weight_unit = 'band';
+      insertPayload.weight_type = 'total';
+    }
     insertPayload[idField] = exerciseId;
     invalidateTrackSnapshots(); // logged set changes done-flags and header stats
     const { data, error } = await supabaseClient.from('sets').insert(insertPayload).select();
@@ -7840,7 +7989,7 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
     idsToQuery = allIds.length ? allIds : [exerciseId];
 
     let result = await withTimeout(
-      supabaseClient.from('sets').select('id, weight, weight_unit, weight_type, reps, num_sets, notes, logged_at, location_id')
+      supabaseClient.from('sets').select('id, weight, weight_unit, weight_type, reps, num_sets, notes, logged_at, location_id, measurement_type, band_snapshot, band_resistance, band_resistance_unit')
         .in(idField, idsToQuery).order('logged_at', { ascending: false }).limit(30),
       15000
     );
@@ -8275,6 +8424,220 @@ function openTimer(){
   });
   paintSoundBtns();
   paint();
+}
+
+// How an exercise is measured. Null in the database means 'weight', so every
+// exercise that existed before this feature keeps working untouched.
+const MEASUREMENT_TYPES = [
+  { key:'weight',     label:'Weight',     hint:'Weight × reps. Barbell, dumbbell, machine, cable.' },
+  { key:'band',       label:'Band',       hint:'Which band × reps. Resistance is a level, not a fixed number.' },
+  { key:'bodyweight', label:'Bodyweight', hint:'Reps only. Push-ups, pull-ups, dips.' },
+  { key:'time',       label:'Time',       hint:'Seconds held. Planks, dead hangs, carries.' },
+  { key:'distance',   label:'Distance',   hint:'Steps or metres. Walking lunges, sled push, farmer carries.' }
+];
+function measurementTypeOf(ex){ return (ex && ex.measurement_type) || 'weight'; }
+
+// ---------- BANDS ----------
+// Resistance bands are equipment the user owns, not a mode. They live in
+// Me -> Equipment and can be used on any day, at any location, exactly like
+// dumbbells.
+const BAND_COLOURS = [
+  { hex:'#E8C86B', name:'Yellow' }, { hex:'#E8492A', name:'Red' },
+  { hex:'#8FBF7A', name:'Green' },  { hex:'#6C8FBF', name:'Blue' },
+  { hex:'#3A3B3F', name:'Black' },  { hex:'#B060C0', name:'Purple' },
+  { hex:'#E88A3D', name:'Orange' }, { hex:'#A0A4AB', name:'Grey' }
+];
+
+async function loadBands(){
+  const u = await getCurrentUser();
+  if (!u) return [];
+  const r = await withTimeout(
+    supabaseClient.from('bands').select('*').eq('user_id', u.id).order('sort_order', { ascending: true }),
+    15000
+  );
+  if (r.__timeout || r.error) return [];
+  return r.data || [];
+}
+
+// Accepts a single figure or a range like "15-35". A range sorts on its
+// midpoint, which is the only sensible single number to compare bands by.
+function parseResistance(raw){
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  const range = s.match(/^(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)$/);
+  if (range){
+    const lo = parseFloat(range[1]), hi = parseFloat(range[2]);
+    if (isNaN(lo) || isNaN(hi)) return null;
+    return Math.round(((lo + hi) / 2) * 10) / 10;
+  }
+  const n = parseFloat(s);
+  return isNaN(n) ? null : n;
+}
+
+// Copies the bands' details onto the set rather than only referencing them,
+// so correcting a rating or deleting a band later never rewrites history.
+function buildBandSnapshot(bands){
+  return (bands || []).map(b => ({
+    id: b.id, label: b.label, colour: b.colour,
+    resistance: b.resistance == null ? null : Number(b.resistance),
+    resistance_unit: b.resistance_unit || 'lb'
+  }));
+}
+// Combined nominal resistance - summed when bands are stacked, which is how
+// doubling up actually behaves. Returns null when none of the bands carry a
+// printed figure, in which case ordering falls back to band position.
+function combinedBandResistance(bands){
+  const withValues = (bands || []).filter(b => b.resistance != null);
+  if (!withValues.length) return null;
+  const unit = withValues[0].resistance_unit || 'lb';
+  const total = withValues.reduce((sum, b) => {
+    const v = Number(b.resistance);
+    const inUnit = (b.resistance_unit || 'lb') === unit ? v : convertWeight(v, b.resistance_unit || 'lb', unit);
+    return sum + inUnit;
+  }, 0);
+  return { value: Math.round(total * 10) / 10, unit };
+}
+
+function formatBandSet(s){
+  const snap = s.band_snapshot || [];
+  if (!snap.length) return 'Band';
+  const names = snap.map(b => b.label).join(' + ');
+  const res = s.band_resistance != null ? ` ${s.band_resistance}${s.band_resistance_unit || 'lb'}` : '';
+  return `${names}${res}`;
+}
+
+async function openMyBandsScreen(){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeBands">✕</button><h1>My Bands</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll" id="bandsBody"><div class="small" style="padding:20px 18px; color:var(--slate);">Loading…</div></div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeBands').onclick = () => { overlay.remove(); };
+
+  async function render(){
+    const bands = await loadBands();
+    const body = overlay.querySelector('#bandsBody');
+    body.innerHTML = `
+      <div class="small" style="padding:6px 18px 12px 18px; color:var(--slate); line-height:1.55;">
+        Ordered lightest to heaviest — that order is what tells the app which band is a step up. Add the resistance printed on each one if it has it.
+      </div>
+      ${bands.length ? bands.map((b, i) => `
+        <div class="band-row" data-id="${b.id}">
+          <div class="band-swatch" style="background:${b.colour};"></div>
+          <div class="band-label">${b.label}</div>
+          <div class="band-res">${b.resistance != null ? `${b.resistance} ${b.resistance_unit || 'lb'}` : '—'}</div>
+          <button class="band-act" data-act="up" data-id="${b.id}" ${i === 0 ? 'disabled' : ''}>▲</button>
+          <button class="band-act" data-act="down" data-id="${b.id}" ${i === bands.length-1 ? 'disabled' : ''}>▼</button>
+          <button class="band-act" data-act="edit" data-id="${b.id}">✎</button>
+        </div>`).join('')
+        : `<div class="empty-state" style="padding:26px 18px; text-align:center; line-height:1.55;">No bands yet.<br><span class="small" style="color:var(--slate);">Add each band you own so you can log against them.</span></div>`}
+      <div style="padding:14px 18px;"><button class="btn-primary" id="addBandBtn" style="width:100%;">+ Add a band</button></div>`;
+
+    body.querySelector('#addBandBtn').onclick = () => openBandForm(null, bands, render);
+    body.querySelectorAll('.band-act').forEach(btn => {
+      btn.onclick = async () => {
+        const id = btn.dataset.id;
+        const band = bands.find(b => b.id === id);
+        if (btn.dataset.act === 'edit'){ openBandForm(band, bands, render); return; }
+        const idx = bands.findIndex(b => b.id === id);
+        const swapWith = btn.dataset.act === 'up' ? idx - 1 : idx + 1;
+        if (swapWith < 0 || swapWith >= bands.length) return;
+        // Swap sort_order with the neighbour. Writing both explicitly keeps
+        // the ordering stable rather than relying on implicit index maths.
+        const a = bands[idx], b = bands[swapWith];
+        await Promise.all([
+          supabaseClient.from('bands').update({ sort_order: b.sort_order }).eq('id', a.id),
+          supabaseClient.from('bands').update({ sort_order: a.sort_order }).eq('id', b.id)
+        ]);
+        warmInvalidate('bands');
+        render();
+      };
+    });
+  }
+  render();
+}
+
+function openBandForm(existing, allBands, onDone){
+  let colour = existing ? existing.colour : BAND_COLOURS[2].hex;
+  let unit = existing ? (existing.resistance_unit || 'lb') : 'lb';
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header">
+      <button id="closeBF">✕</button><h1>${existing ? 'Edit Band' : 'Add Band'}</h1>
+      ${existing ? `<button id="delBand" style="color:#E8492A; font-size:13px; background:none; border:none;">Delete</button>` : `<div style="width:18px;"></div>`}
+    </div>
+    <div class="overlay-scroll">
+      <div class="field-label">Colour</div>
+      <div class="band-colour-row" id="colourRow">
+        ${BAND_COLOURS.map(c => `<button class="band-colour ${c.hex===colour?'sel':''}" data-hex="${c.hex}" style="background:${c.hex};" aria-label="${c.name}"></button>`).join('')}
+      </div>
+      <div class="field-label">Label</div>
+      <div class="field-card"><input class="field-input" id="bandLabel" type="text" style="font-size:15px;" placeholder="e.g. Green" value="${existing ? existing.label : ''}"></div>
+      <div class="field-label">Resistance <span class="opt">as printed — optional</span></div>
+      <div class="field-card">
+        <input class="field-input" id="bandRes" type="text" inputmode="decimal" placeholder="30 or 15-35" value="${existing && existing.resistance != null ? existing.resistance : ''}">
+        <div class="unit-toggle" id="bandUnit">
+          <button class="${unit==='kg'?'active':''}" data-u="kg">kg</button>
+          <button class="${unit==='lb'?'active':''}" data-u="lb">lb</button>
+        </div>
+      </div>
+      <div class="small" style="padding:0 18px 8px 18px; color:var(--slate); line-height:1.5;">A range like <b style="color:var(--chalk);">15-35</b> works — it sorts on the midpoint. Leave blank if yours are unmarked and it'll order by position alone.</div>
+      <button class="save-btn" id="saveBandBtn">${existing ? 'Save Band' : 'Add Band'}</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeBF').onclick = () => overlay.remove();
+  overlay.querySelectorAll('.band-colour').forEach(b => {
+    b.onclick = () => {
+      colour = b.dataset.hex;
+      overlay.querySelectorAll('.band-colour').forEach(x => x.classList.remove('sel'));
+      b.classList.add('sel');
+    };
+  });
+  overlay.querySelector('#bandUnit').querySelectorAll('button').forEach(b => {
+    b.onclick = () => {
+      unit = b.dataset.u;
+      overlay.querySelectorAll('#bandUnit button').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+    };
+  });
+  const delBtn = overlay.querySelector('#delBand');
+  if (delBtn) delBtn.onclick = () => {
+    showConfirmDialog(
+      `Delete the ${existing.label} band? Sets you've already logged with it keep their recorded details — nothing in your history changes.`,
+      async () => {
+        await supabaseClient.from('bands').delete().eq('id', existing.id);
+        warmInvalidate('bands');
+        overlay.remove();
+        onDone && onDone();
+      }, { title: 'Delete Band?', danger: true, confirmLabel: 'Delete' });
+  };
+  overlay.querySelector('#saveBandBtn').onclick = async () => {
+    await withButtonLoading(overlay.querySelector('#saveBandBtn'), 'Saving…', async () => {
+      const label = document.getElementById('bandLabel').value.trim();
+      if (!label){ alert('Give the band a label.'); return; }
+      const resistance = parseResistance(document.getElementById('bandRes').value);
+      const u = await getCurrentUser();
+      if (!u) return;
+      if (existing){
+        const { error } = await supabaseClient.from('bands')
+          .update({ label, colour, resistance, resistance_unit: unit }).eq('id', existing.id);
+        if (error){ alert(error.message); return; }
+      } else {
+        // New bands go to the end; the user reorders from the list.
+        const maxOrder = (allBands || []).reduce((m, b) => Math.max(m, b.sort_order || 0), 0);
+        const { error } = await supabaseClient.from('bands').insert({
+          user_id: u.id, label, colour, resistance, resistance_unit: unit, sort_order: maxOrder + 1
+        });
+        if (error){ alert(error.message); return; }
+      }
+      warmInvalidate('bands');
+      overlay.remove();
+      onDone && onDone();
+    });
+  };
 }
 
 // ---------- SCALE ----------
