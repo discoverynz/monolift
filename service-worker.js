@@ -1,5 +1,5 @@
-const CACHE_NAME = 'monolift-v257';
-const SHELL = ['./', './index.html', './css/styles.css?v=257', './js/app.js?v=257', './js/supabase-client.js?v=257', './manifest.json'];
+const CACHE_NAME = 'monolift-v258';
+const SHELL = ['./', './index.html', './css/styles.css?v=258', './js/app.js?v=258', './js/supabase-client.js?v=258', './manifest.json'];
 
 self.addEventListener('install', (event) => {
   self.skipWaiting(); // don't wait for old tabs to close — take over immediately

@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.206';
+const APP_VERSION = 'Beta 5.207';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -2526,7 +2526,7 @@ async function openMigrateToMasterScreen(){
         const { error: dayError } = await supabaseClient.from('exercise_days').insert({
           user_id: userData.user.id, exercise_master_id: inserted[0].id, weekday
         });
-        if (dayError) errors.push(`${t.name} (${DAY_NAMES[weekday]}): ${dayError.message}`);
+        if (dayError) errors.push(`${t.name} (${dayNameOf(weekday)}): ${dayError.message}`);
         else dayLinks++;
       }
     }
@@ -2685,7 +2685,7 @@ async function openMergeDuplicateExercisesScreen(){
     body.innerHTML = `
       <div style="margin-bottom:14px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px;">
         <div class="ex-name" style="font-size:13px; margin-bottom:8px;">${dupeGroups.length} case${dupeGroups.length===1?'':'s'} of duplicate records on the same day</div>
-        ${dupeGroups.map(g => `<div class="small" style="color:var(--slate); padding:2px 0;">• ${g[0].name} on ${DAY_NAMES[g[0].weekday]} (${g.length} copies)</div>`).join('')}
+        ${dupeGroups.map(g => `<div class="small" style="color:var(--slate); padding:2px 0;">• ${g[0].name} on ${dayNameOf(g[0].weekday)} (${g.length} copies)</div>`).join('')}
       </div>
       <button class="save-btn" id="confirmMergeDupesBtn" style="margin:0 0 20px 0;">Merge Duplicates</button>
     `;
@@ -2848,7 +2848,7 @@ async function openClearDayScreen(){
     <div class="overlay-scroll">
       <div class="small" style="padding:8px 18px 16px 18px; color:var(--slate);">Removes every exercise from the day you pick. History for those exercises is untouched - this only clears what's showing on that day.</div>
       <div class="chip-row" id="clearDayChips" style="padding:0 18px;">
-        ${DAY_NAMES.map((d, i) => `<div class="chip" data-day="${i}">${d}</div>`).join('')}
+        ${DAY_NAMES.map((d, i) => `<div class="chip" data-day="${i}">${d}</div>`).join('')}<div class="chip chip-any" data-day="${ANY_DAY}">${ANY_DAY_NAME}</div>
       </div>
       <div id="clearDayBody"></div>
     </div>`;
@@ -2861,25 +2861,25 @@ async function openClearDayScreen(){
       chip.classList.add('active');
       const dayIdx = parseInt(chip.dataset.day, 10);
       const body = overlay.querySelector('#clearDayBody');
-      body.innerHTML = `<div class="small" style="padding:16px 18px; color:var(--slate);">Checking ${DAY_NAMES[dayIdx]}…</div>`;
+      body.innerHTML = `<div class="small" style="padding:16px 18px; color:var(--slate);">Checking ${dayNameOf(dayIdx)}…</div>`;
 
       const userData = { user: await getCurrentUser() };
       const allExercises = await fetchAllExercisesCompat(userData.user.id);
       const onThisDay = allExercises.filter(ex => ex.weekday === dayIdx);
 
       if (!onThisDay.length){
-        body.innerHTML = `<div class="empty-state" style="padding:24px 18px;">${DAY_NAMES[dayIdx]} is already empty.</div>`;
+        body.innerHTML = `<div class="empty-state" style="padding:24px 18px;">${dayNameOf(dayIdx)} is already empty.</div>`;
         return;
       }
       body.innerHTML = `
         <div style="margin:12px 18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px;">
-          <div class="ex-name" style="font-size:13px; margin-bottom:8px;">${onThisDay.length} exercise${onThisDay.length===1?'':'s'} on ${DAY_NAMES[dayIdx]}</div>
+          <div class="ex-name" style="font-size:13px; margin-bottom:8px;">${onThisDay.length} exercise${onThisDay.length===1?'':'s'} on ${dayNameOf(dayIdx)}</div>
           ${onThisDay.map(ex => `<div class="small" style="color:var(--slate); padding:2px 0;">• ${ex.name}</div>`).join('')}
         </div>
-        <button class="save-btn" id="confirmClearDayBtn" style="margin:0 18px 20px 18px; background:#E8492A;">Clear ${DAY_NAMES[dayIdx]}</button>
+        <button class="save-btn" id="confirmClearDayBtn" style="margin:0 18px 20px 18px; background:#E8492A;">Clear ${dayNameOf(dayIdx)}</button>
       `;
       body.querySelector('#confirmClearDayBtn').onclick = () => {
-        showConfirmDialog(`Removes ${onThisDay.length} exercises from ${DAY_NAMES[dayIdx]}. Their logged history is kept.`, async () => {
+        showConfirmDialog(`Removes ${onThisDay.length} exercises from ${dayNameOf(dayIdx)}. Their logged history is kept.`, async () => {
           await withButtonLoading(body.querySelector('#confirmClearDayBtn'), 'Clearing…', async () => {
             const failures = [];
             for (const ex of onThisDay){
@@ -2890,11 +2890,11 @@ async function openClearDayScreen(){
             if (failures.length){
               alert(`${onThisDay.length - failures.length} of ${onThisDay.length} cleared. ${failures.length} failed:\n${failures.map(f => `${f.name}: ${f.error}`).join('\n')}`);
             } else {
-              alert(`${DAY_NAMES[dayIdx]} cleared.`);
+              alert(`${dayNameOf(dayIdx)} cleared.`);
             }
             if (state.currentTab === 'track') renderTrack();
           });
-        }, { title: `Clear ${DAY_NAMES[dayIdx]}?`, danger: true, confirmLabel: 'Clear' });
+        }, { title: `Clear ${dayNameOf(dayIdx)}?`, danger: true, confirmLabel: 'Clear' });
       };
     };
   });
@@ -3258,7 +3258,7 @@ function openEditDayTypeForm(weekday, currentLabel){
   overlay.innerHTML = `
     <div class="form-header"><button id="closeDT">✕</button><h1>Edit Day Type</h1><div style="width:18px;"></div></div>
     <div class="overlay-scroll">
-      <div class="field-label">${DAY_LABELS[weekday]}</div>
+      <div class="field-label">${dayLabelOf(weekday)}</div>
       <div class="field-card"><input class="field-input" id="dayTypeInput" type="text" value="${currentLabel}" style="font-size:16px; font-weight:600;"></div>
       <button class="save-btn" id="saveDTBtn">Save</button>
     </div>`;
@@ -7492,7 +7492,7 @@ async function openNewExerciseForm(opts){
       const compatEx = await fetchAllExercisesCompat(userData.user.id);
       const existingMatch = compatEx.find(ex => ex.weekday === selectedDay && ex.name.toLowerCase() === name.toLowerCase());
       if (existingMatch){
-        alert(`"${name}" already exists on ${DAY_NAMES[selectedDay]} - opening it instead of creating a duplicate.`);
+        alert(`"${name}" already exists on ${dayNameOf(selectedDay)} - opening it instead of creating a duplicate.`);
         overlay.remove();
         state.selectedDay = selectedDay;
         state.currentTab = 'track';
@@ -7837,7 +7837,7 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
   // the exercise already in state where possible so the form doesn't need
   // an extra round trip just to know which shape to render.
   const exInState = (state.exercises || []).find(e => (e.masterId || e.id) === exerciseId);
-  const measurementType = measurementTypeOf(exInState);
+  let measurementType = measurementTypeOf(exInState);
   let selectedBands = [];
   // Defaults to whatever location is currently active on Track, falling back
   // to the designated default location if Track is in Anywhere mode. Only
@@ -7910,6 +7910,70 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
   };
   if (navPrev) overlay.querySelector('#prevExerciseBtn').onclick = () => { overlay.remove(); openLogForm(navPrev.id, navPrev.name); };
   if (navNext) overlay.querySelector('#nextExerciseBtn').onclick = () => { overlay.remove(); openLogForm(navNext.id, navNext.name); };
+
+  // Band exercises swap the weight field for a band picker.
+  function applyBandFormShape(){
+    const wArea = overlay.querySelector('#weightArea');
+    const bArea = overlay.querySelector('#bandPickerArea');
+    if (!wArea || !bArea) return;
+    wArea.style.display = 'none';
+    bArea.style.display = 'block';
+    (async () => {
+      const bands = await loadBands();
+      const row = overlay.querySelector('#bandPickRow');
+      const hint = overlay.querySelector('#bandPickHint');
+      if (!row) return;
+      if (!bands.length){
+        row.innerHTML = `<div style="padding:4px 18px 8px 18px; width:100%;"><button class="btn-primary" id="setupBandsBtn" style="width:100%;">Set up your bands first</button></div>`;
+        if (hint) hint.textContent = 'Add the bands you own once, then they appear here every time.';
+        const b = row.querySelector('#setupBandsBtn');
+        if (b) b.onclick = () => { overlay.remove(); openMyBandsScreen(); };
+        return;
+      }
+      const paint = () => {
+        row.innerHTML = bands.map(b => {
+          const on = selectedBands.some(x => x.id === b.id);
+          return `<button class="band-pick ${on?'sel':''}" data-id="${b.id}">
+            <span class="band-pick-swatch" style="background:${b.colour};"></span>
+            <span class="band-pick-name">${b.label}</span>
+            <span class="band-pick-res">${b.resistance != null ? `${b.resistance}${b.resistance_unit||'lb'}` : '—'}</span>
+          </button>`;
+        }).join('');
+        const combined = combinedBandResistance(selectedBands);
+        if (hint) hint.innerHTML = selectedBands.length
+          ? `Logging <b style="color:var(--chalk);">${selectedBands.map(b=>b.label).join(' + ')}</b>${combined ? ` — ${combined.value}${combined.unit} combined` : ''}.`
+          : 'Pick the band you used. Tap two if you doubled up.';
+        row.querySelectorAll('.band-pick').forEach(btn => {
+          btn.onclick = () => {
+            const b = bands.find(x => x.id === btn.dataset.id);
+            if (selectedBands.some(x => x.id === b.id)) selectedBands = selectedBands.filter(x => x.id !== b.id);
+            else selectedBands.push(b);
+            paint();
+          };
+        });
+      };
+      paint();
+    })();
+  }
+  if (measurementType === 'band') applyBandFormShape();
+
+  // state is the fast path, but an exercise created seconds ago - or one on a
+  // different day than the one being viewed - isn't in it yet. Defaulting
+  // those to 'weight' meant a freshly created band exercise opened with a
+  // weight field and no band picker at all, which is exactly the case a user
+  // hits first. So when state doesn't know, ask the database.
+  if (!exInState){
+    (async () => {
+      const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+      const r = await withTimeout(
+        supabaseClient.from(table).select('measurement_type').eq('id', exerciseId).maybeSingle(), 10000);
+      if (r.__timeout || r.error || !r.data) return;
+      const resolved = r.data.measurement_type || 'weight';
+      if (resolved === measurementType) return;
+      measurementType = resolved;
+      if (resolved === 'band') applyBandFormShape();
+    })();
+  }
 
   overlay.querySelectorAll('.unit-toggle button').forEach(b => {
     b.onclick = () => { overlay.querySelectorAll('.unit-toggle button').forEach(x=>x.classList.remove('active')); b.classList.add('active'); unit = b.dataset.u; };
