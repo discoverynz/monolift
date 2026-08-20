@@ -2,8 +2,18 @@
 
 const DAY_NAMES = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
 const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+// The "Anytime" slot - exercises that belong to no particular weekday.
+// Implemented as weekday 7 so it flows through every existing path (loading,
+// adding, logging, history) without special-casing, while rendering as its
+// own chip rather than masquerading as an eighth day of the week.
+const ANY_DAY = 7;
+const ANY_DAY_NAME = "ANY";
+const ANY_DAY_LABEL = "Anytime";
+function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
+function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
+function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.203';
+const APP_VERSION = 'Beta 5.204';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -693,6 +703,10 @@ function todayStr(){
 // week's occurrence, which would misleadingly suggest activity).
 function targetDateInfo(){
   const targetWeekday = state.selectedDay;
+  // Anytime has no place in the calendar, so its stats are simply today's.
+  if (isAnyDay(targetWeekday)){
+    return { targetWeekday, targetDateStr: todayStr(), targetDateIsToday: true, targetIsFuture: false };
+  }
   const nowWd = todayWeekday();
   const daysDiff = targetWeekday - nowWd; // positive = future this week, 0 = today, negative = past this week
   const targetIsFuture = daysDiff > 0;
@@ -3740,7 +3754,7 @@ async function openSuggestionPreview(name, category, navList){
     </div>
     <div class="overlay-scroll">
       <div id="sugPreviewArea" style="padding:0 18px;"><div class="small" style="color:var(--slate);">Loading…</div></div>
-      <button class="save-btn" id="addSuggestionBtn" style="margin-top:6px;">+ Add to ${DAY_LABELS[state.selectedDay]}</button>
+      <button class="save-btn" id="addSuggestionBtn" style="margin-top:6px;">+ Add to ${dayLabelOf(state.selectedDay)}</button>
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#closeSugPreview').onclick = () => { overlay.remove(); restoreSideIndexIfVisible(); };
@@ -3984,7 +3998,7 @@ function buildSuggestionsHtml(suggestions, effectiveDayTypeLabel){
         <button id="seeAllSuggestions" style="background:none; width:38px; height:38px; display:flex; align-items:center; justify-content:center; border-radius:8px;"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="var(--flame)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></button>
       </div>
     </div>
-    ${libraryItems.length ? `<div class="small" style="padding:0 18px 8px 18px; color:var(--slate);">From your own library - used before, just not on ${DAY_LABELS[state.selectedDay]}.</div>${libraryItems.map(renderSuggestionRow).join('')}` : ''}
+    ${libraryItems.length ? `<div class="small" style="padding:0 18px 8px 18px; color:var(--slate);">From your own library - used before, just not on ${dayLabelOf(state.selectedDay)}.</div>${libraryItems.map(renderSuggestionRow).join('')}` : ''}
     ${databaseItems.length ? `<div class="small" style="padding:${libraryItems.length ? '10px' : '0'} 18px 8px 18px; color:var(--slate);">Not in your library yet — pulled from a public exercise database based on today's focus.</div>${databaseItems.map(renderSuggestionRow).join('')}` : ''}`;
 
 }
@@ -4059,7 +4073,7 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   const dayTypeUnavailable = dayTypeLabel && typeof dayTypeLabel === 'object' && dayTypeLabel.__unavailable;
   const effectiveDayTypeLabel = (typeof dayTypeLabel === 'string' && dayTypeLabel)
     ? dayTypeLabel
-    : (dayTypeUnavailable ? '—' : DAY_NAMES[state.selectedDay]);
+    : (dayTypeUnavailable ? '—' : (isAnyDay(state.selectedDay) ? ANY_DAY_LABEL : dayNameOf(state.selectedDay)));
 
   // Coerce a load-failed null into an empty array for the intermediate
   // computations (progress, muscles, sorting) so nothing crashes. The load
@@ -4129,7 +4143,12 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
     const isSelected = i === state.selectedDay;
     const isToday = i === todayWeekday();
     return `<button class="day ${isSelected ? 'active' : ''} ${isToday ? 'today-marker' : ''}" data-day="${i}">${d}</button>`;
-  }).join('');
+  }).join('')
+  // The Anytime slot sits at the end of the row, visually distinct so it
+  // doesn't read as an eighth day of the week. This is where exercises that
+  // belong to no particular day live - band work, travel sessions, anything
+  // improvised.
+  + `<button class="day day-any ${state.selectedDay === ANY_DAY ? 'active' : ''}" data-day="${ANY_DAY}" aria-label="Anytime">⚡</button>`;
 
   let listHtml = '';
   state.trackFlatOrder = [];
@@ -4155,7 +4174,7 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
     </div>`;
   } else if (state.exercises.length === 0){
     const starters = getStarterExercises(effectiveDayTypeLabel);
-    listHtml = `<div class="empty-state">No exercises set for ${DAY_LABELS[state.selectedDay]} yet.</div>
+    listHtml = `<div class="empty-state">No exercises set for ${dayLabelOf(state.selectedDay)} yet.</div>
       <div class="category">Quick Add — Common for ${effectiveDayTypeLabel}</div>
       ${starters.map(s => `<div class="pick-row starter-add" data-name="${s.name}" data-cat="${s.category}"><div class="ex-name">${s.name}</div><div class="chev" style="color:var(--flame); font-size:20px;">+</div></div>`).join('')}
       <div style="padding:14px 18px;"><button class="btn-primary" id="emptyAddBtn">+ Add a Different Exercise</button></div>
@@ -4170,7 +4189,7 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
     // offer a one-tap escape.
     const hiddenCount = state.exercises.length;
     listHtml = `<div class="empty-state" style="padding:24px 18px; text-align:center;">
-      <div style="font-size:14px; color:var(--chalk); margin-bottom:6px;">All ${hiddenCount} of your ${DAY_LABELS[state.selectedDay]} exercises are tagged for another location.</div>
+      <div style="font-size:14px; color:var(--chalk); margin-bottom:6px;">All ${hiddenCount} of your ${dayLabelOf(state.selectedDay)} exercises are tagged for another location.</div>
       <div style="font-size:12px; color:var(--slate); margin-bottom:14px;">They're not gone - just filtered out because you're currently at <span style="color:var(--flame);">${currentLocationName || 'a specific location'}</span>.</div>
       <button class="btn-primary" id="logOffPlanBtn" style="max-width:240px; margin:0 auto 8px auto;">Log what's here</button>
       <button class="btn-primary" id="clearLocationBtn" style="max-width:240px; margin:0 auto; background:var(--panel); color:var(--chalk); border:1px solid var(--line);">Show exercises from anywhere</button>
@@ -4190,7 +4209,7 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
           </div>` : '')}
         <div class="day-strip">${dayChips}</div>
         <div class="header">
-          <div class="eyebrow">${DAY_LABELS[state.selectedDay].toUpperCase()}</div>
+          <div class="eyebrow">${dayLabelOf(state.selectedDay).toUpperCase()}</div>
           <h1 id="dayTypeHeader" style="cursor:pointer;${dayTypeUnavailable ? ' color:#E8A33D;' : ''}">${effectiveDayTypeLabel}</h1>
           <div class="quote">"${q.t}" — ${q.a}</div>
         </div>
@@ -4199,7 +4218,7 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
           box-shadow:0 8px 20px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.03);">
           <div style="flex:1; text-align:center; padding:14px 6px; border-right:1px solid rgba(255,255,255,0.06);">
             <div style="font-family:'JetBrains Mono',monospace; font-size:17px; font-weight:600; color:var(--chalk);">${headerStats.volumeKg.toLocaleString()}kg</div>
-            <div style="font-size:8.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px; margin-top:2px;">Volume ${headerStats.targetDateIsToday ? 'Today' : DAY_LABELS[headerStats.targetWeekday]}</div>
+            <div style="font-size:8.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px; margin-top:2px;">Volume ${headerStats.targetDateIsToday ? 'Today' : dayLabelOf(headerStats.targetWeekday)}</div>
           </div>
           <div style="flex:1; text-align:center; padding:14px 6px; border-right:1px solid rgba(255,255,255,0.06);">
             <div style="font-family:'JetBrains Mono',monospace; font-size:17px; font-weight:600; color:var(--flame);">${headerStats.streak}</div>
@@ -4207,7 +4226,7 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
           </div>
           <div style="flex:1; text-align:center; padding:14px 6px;">
             <div style="font-family:'JetBrains Mono',monospace; font-size:17px; font-weight:600; color:var(--chalk);">${headerStats.setsToday}</div>
-            <div style="font-size:8.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px; margin-top:2px;">Sets ${headerStats.targetDateIsToday ? 'Today' : DAY_LABELS[headerStats.targetWeekday]}</div>
+            <div style="font-size:8.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px; margin-top:2px;">Sets ${headerStats.targetDateIsToday ? 'Today' : dayLabelOf(headerStats.targetWeekday)}</div>
           </div>
         </div>
         <div style="padding:8px 18px 0 18px; display:flex; gap:8px; flex-wrap:wrap;">
@@ -4381,7 +4400,7 @@ function showExerciseActionsMenu(exerciseId, exerciseName){
       <div class="me-item" id="menuEditCategory" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Edit Category</div><div class="chev">›</div></div>
       <div class="me-item" id="menuEditMuscle" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Edit Muscle Group</div><div class="chev">›</div></div>
       <div class="me-item" id="menuEditLoc" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Edit Push/Pull/Upper/Lower/Location</div><div class="chev">›</div></div>
-      <div class="me-item" id="menuRemove" style="border-bottom:none; cursor:pointer;"><div style="color:var(--flame);">Remove from ${DAY_LABELS[state.selectedDay]}</div><div class="chev">›</div></div>
+      <div class="me-item" id="menuRemove" style="border-bottom:none; cursor:pointer;"><div style="color:var(--flame);">Remove from ${dayLabelOf(state.selectedDay)}</div><div class="chev">›</div></div>
       <div style="text-align:center; padding:12px; color:var(--slate); font-size:13px; cursor:pointer;" id="menuCancel">Cancel</div>
     </div>`;
   document.body.appendChild(overlay);
@@ -4470,7 +4489,7 @@ function openEditAltGroupForm(exerciseId, exerciseName){
   overlay.innerHTML = `
     <div class="form-header"><button id="closeAlt">✕</button><h1>Alt Group</h1><div style="width:18px;"></div></div>
     <div class="overlay-scroll">
-      <div class="field-label" style="padding-top:0;">${exerciseName} — ${DAY_LABELS[state.selectedDay]} only</div>
+      <div class="field-label" style="padding-top:0;">${exerciseName} — ${dayLabelOf(state.selectedDay)} only</div>
       <div id="altEditArea"></div>
     </div>`;
   document.body.appendChild(overlay);
@@ -5164,7 +5183,7 @@ async function openPicker(initialTab, jumpToMuscle){
     <div class="offplan-toggle-row">
       <div style="flex:1;">
         <div class="offplan-toggle-title">Log off-plan</div>
-        <div class="offplan-toggle-sub">Log this without adding it to ${DAY_NAMES[state.selectedDay]} — for improvised sessions or a gym you're only at once.</div>
+        <div class="offplan-toggle-sub">Log this without adding it to ${dayNameOf(state.selectedDay)} — for improvised sessions or a gym you're only at once.</div>
       </div>
       <button class="switch ${offPlanMode ? '' : 'off'}" id="offPlanSwitch"></button>
     </div>
@@ -5222,7 +5241,7 @@ async function openPicker(initialTab, jumpToMuscle){
         <button id="selectionCancel" style="padding:11px 16px; border-radius:10px; background:var(--ink); color:var(--chalk); font-size:13px;">Cancel</button>
         ${onRename && count === 1 ? `<button id="selectionRename" style="padding:11px 16px; border-radius:10px; background:var(--ink); color:var(--flame); font-size:13px;">Rename</button>` : ''}
         ${onDelete ? `<button id="selectionDelete" style="padding:11px 16px; border-radius:10px; background:#E8492A; color:white; font-size:13px;">Delete ${count}</button>` : ''}
-        <button id="selectionAdd" class="save-btn" style="flex:1; margin:0; min-width:140px;">Add ${count} to ${DAY_NAMES[state.selectedDay]}</button>
+        <button id="selectionAdd" class="save-btn" style="flex:1; margin:0; min-width:140px;">Add ${count} to ${dayNameOf(state.selectedDay)}</button>
       </div>`;
     if (bar) bar.outerHTML = html; else overlay.insertAdjacentHTML('beforeend', html);
     overlay.querySelector('#selectionCancel').onclick = () => { selection.active = false; selection.items.clear(); renderSelectionBar(); rerenderList(); };
@@ -5300,12 +5319,12 @@ async function openPicker(initialTab, jumpToMuscle){
         const splitInfo = splitLabel ? SPLIT_TAG_STYLE[splitLabel] : null;
         const splitTag = splitInfo ? `<span style="font-size:9px; padding:2px 5px; border-radius:4px; margin-left:5px; background:${splitInfo[0]}26; color:${splitInfo[0]};">${splitInfo[1]}</span>` : '';
         const alreadyToday = todayNames.has(ex.name.toLowerCase())
-          ? `<span style="font-size:9px; padding:2px 6px; border-radius:4px; margin-left:5px; background:rgba(143,191,122,0.15); color:var(--good);">✓ On ${DAY_NAMES[state.selectedDay]}</span>` : '';
+          ? `<span style="font-size:9px; padding:2px 6px; border-radius:4px; margin-left:5px; background:rgba(143,191,122,0.15); color:var(--good);">✓ On ${dayNameOf(state.selectedDay)}</span>` : '';
         const sig = computeAltSignature(ex.name, match && match.primaryMuscles && match.primaryMuscles[0], mech ? mech.value : null);
         const todayHintName = (!alreadyToday && sig && todaySignatures[sig] && todaySignatures[sig] !== ex.name) ? todaySignatures[sig] : null;
         const listHintName = (!todayHintName && sig && listSignatures[sig] && listSignatures[sig] !== ex.name) ? listSignatures[sig] : null;
         const altHint = todayHintName
-          ? `<div class="small" style="color:var(--slate); opacity:0.7; font-style:italic; margin-top:1px;">alt for ${todayHintName} (on ${DAY_NAMES[state.selectedDay]})</div>`
+          ? `<div class="small" style="color:var(--slate); opacity:0.7; font-style:italic; margin-top:1px;">alt for ${todayHintName} (on ${dayNameOf(state.selectedDay)})</div>`
           : listHintName ? `<div class="small" style="color:var(--slate); opacity:0.7; font-style:italic; margin-top:1px;">alt for ${listHintName}</div>` : '';
         return `<div class="pick-row" data-id="${ex.masterId || ex.id}" data-name="${ex.name}" data-category="${ex.category||''}" style="${selection.active ? 'display:flex; align-items:center; gap:10px;' : ''}">${selection.active ? `<div class="check-circle" style="opacity:${selection.items.has(ex.masterId||ex.id)?1:0.3}; flex-shrink:0;">${ICON_CHECK}</div>` : ''}<div style="flex:1;"><div class="ex-name">${ex.name}${splitTag}${mechTag}${alreadyToday}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}${altHint}</div>${selection.active ? '' : '<div class="chev">›</div>'}</div>`;
       }
@@ -5573,7 +5592,7 @@ async function openPicker(initialTab, jumpToMuscle){
         const zealiftBadge = e._source === 'zealift'
           ? `<span title="Contributed to the shared MonoLift database" style="font-size:9px; padding:2px 6px; border-radius:4px; margin-left:5px; background:rgba(232,73,42,0.15); color:var(--flame);">⚡ MonoLift</span>` : '';
         const alreadyToday = todayNames.has(e.name.toLowerCase())
-          ? `<span style="font-size:9px; padding:2px 6px; border-radius:4px; margin-left:5px; background:rgba(143,191,122,0.15); color:var(--good);">✓ On ${DAY_NAMES[state.selectedDay]}</span>` : '';
+          ? `<span style="font-size:9px; padding:2px 6px; border-radius:4px; margin-left:5px; background:rgba(143,191,122,0.15); color:var(--good);">✓ On ${dayNameOf(state.selectedDay)}</span>` : '';
         const muscles = muscleSubtitle(e.primaryMuscles, e.secondaryMuscles);
         const mech = classifyMechanic(e);
         const mechTag = mech ? `<span style="font-size:9px; padding:2px 5px; border-radius:4px; margin-left:5px; background:${mech.value==='compound'?'rgba(255,107,26,0.15)':'rgba(122,150,220,0.15)'}; color:${mech.value==='compound'?'#FF6B1A':'#7BA6C9'}; opacity:${mech.guessed?0.75:1};">${mech.guessed?'~':''}${mech.value==='compound'?'Compound':'Isolation'}</span>` : '';
@@ -5582,7 +5601,7 @@ async function openPicker(initialTab, jumpToMuscle){
         const todayHintName = (!alreadyToday && sig && todaySignatures[sig] && todaySignatures[sig] !== e.name) ? todaySignatures[sig] : null;
         const listHintName = (!todayHintName && sig && listSignatures[sig] && listSignatures[sig] !== e.name) ? listSignatures[sig] : null;
         const altHint = todayHintName
-          ? `<div class="small" style="color:var(--slate); opacity:0.7; font-style:italic; margin-top:1px;">alt for ${todayHintName} (on ${DAY_NAMES[state.selectedDay]})</div>`
+          ? `<div class="small" style="color:var(--slate); opacity:0.7; font-style:italic; margin-top:1px;">alt for ${todayHintName} (on ${dayNameOf(state.selectedDay)})</div>`
           : listHintName ? `<div class="small" style="color:var(--slate); opacity:0.7; font-style:italic; margin-top:1px;">alt for ${listHintName}</div>` : '';
         return `<div class="pick-row db-pick" data-name="${e.name}" data-equip="${e.equipment||''}" style="${selection.active ? 'display:flex; align-items:center; gap:10px;' : ''}">${selection.active ? `<div class="check-circle" style="opacity:${selection.items.has(e.name)?1:0.3}; flex-shrink:0;">${ICON_CHECK}</div>` : ''}<div style="flex:1;"><div class="ex-name">${e.name}${star}${zealiftBadge}${mechTag}${alreadyToday}</div>${muscles ? `<div class="small" style="color:var(--slate);">${muscles}</div>` : ''}${equipLine ? `<div class="small" style="color:var(--slate); opacity:0.7; font-size:10.5px;">${equipLine}</div>` : ''}${altHint}</div>${selection.active ? '' : '<div class="chev">›</div>'}</div>`;
       }
@@ -6874,8 +6893,8 @@ async function openPlanReorganizer(){
         if (!reorganizedDayIdxsPreview.has(ex.weekday)) return;
         const key = ex.weekday + '|' + ex.name.toLowerCase();
         if (plannedNames.has(key)) return;
-        if (protectedDayNames.has(key)) willProtect.push({ name: ex.name, day: DAY_NAMES[ex.weekday] });
-        else willRemove.push({ name: ex.name, day: DAY_NAMES[ex.weekday] });
+        if (protectedDayNames.has(key)) willProtect.push({ name: ex.name, day: dayNameOf(ex.weekday) });
+        else willRemove.push({ name: ex.name, day: dayNameOf(ex.weekday) });
       });
       if (!willRemove.length && !willProtect.length) return;
       const panel = document.createElement('div');
@@ -7059,8 +7078,8 @@ async function openPlanReorganizer(){
         if (protectedDayNames.has(ex.weekday + '|' + ex.name.toLowerCase())) continue;
         try {
           const result = await removeExerciseFromDay(ex);
-          if (result.ok) cleanedUp.push({ name: ex.name, fromDay: DAY_NAMES[ex.weekday] });
-          else silentFailures.push({ name: ex.name, action: 'remove from ' + DAY_NAMES[ex.weekday], error: result.error });
+          if (result.ok) cleanedUp.push({ name: ex.name, fromDay: dayNameOf(ex.weekday) });
+          else silentFailures.push({ name: ex.name, action: 'remove from ' + dayNameOf(ex.weekday), error: result.error });
         } catch (e) {
           cleanupErrors.push({ name: ex.name, error: e.message });
         }
@@ -7300,13 +7319,15 @@ async function createLocation(name){
 }
 
 // ---------- NEW EXERCISE FORM ----------
-async function openNewExerciseForm(){
+async function openNewExerciseForm(opts){
   let selectedCategory = CATEGORIES[0];
   let selectedDay = state.selectedDay;
   let pickedAltGroup = null;
   let selectedPushPull = null;
   let selectedUpperLower = null;
-  let selectedMeasurement = 'weight';
+  // Arriving from My Bands pre-selects Band, so the loop from "I own these
+  // bands" to "I have an exercise I can log against them" is one tap.
+  let selectedMeasurement = (opts && opts.measurement) || 'weight';
   // Default to wherever you actually are. Creating an exercise while at a
   // specific gym almost always means "this exists here", and having to
   // remember to tick it every time was busywork that led to exercises
@@ -7322,13 +7343,14 @@ async function openNewExerciseForm(){
       <div class="field-card"><input class="field-input" id="exNameInput" placeholder="e.g. Incline Dumbbell Press" style="font-size:14px; font-weight:400;"></div>
       <div class="field-label">How is it measured</div>
       <div class="chip-row" id="measurementRow">
-        ${MEASUREMENT_TYPES.map(m => `<div class="chip ${m.key==='weight'?'active':''}" data-mt="${m.key}">${m.label}</div>`).join('')}
+        ${MEASUREMENT_TYPES.map(m => `<div class="chip ${m.key===selectedMeasurement?'active':''}" data-mt="${m.key}">${m.label}</div>`).join('')}
       </div>
       <div class="small" id="measurementHint" style="padding:0 18px 8px 18px; color:var(--slate); line-height:1.5;"></div>
       <div class="field-label">Category</div>
       <div class="chip-row" id="categoryChipRow"><div class="small" style="color:var(--slate); padding:8px 0;">Loading…</div></div>
       <div class="field-label">Day</div>
-      <div class="chip-row">${DAY_NAMES.map((d,i) => `<div class="chip ${i===state.selectedDay?'active':''}" data-day="${i}">${d}</div>`).join('')}</div>
+      <div class="chip-row">${DAY_NAMES.map((d,i) => `<div class="chip ${i===state.selectedDay?'active':''}" data-day="${i}">${d}</div>`).join('')}<div class="chip chip-any ${state.selectedDay===ANY_DAY?'active':''}" data-day="${ANY_DAY}">⚡ ${ANY_DAY_NAME}</div></div>
+      <div class="small" style="padding:0 18px 8px 18px; color:var(--slate); line-height:1.5;">Pick <b style="color:var(--chalk);">⚡ ANY</b> for things that aren't tied to a weekday — band work, travel sessions, anything improvised.</div>
       <div class="field-label">Push / Pull <span class="opt">(optional)</span></div>
       <div class="chip-row" id="pushPullRow">
         <div class="chip" data-pp="push">Push</div>
@@ -8232,7 +8254,7 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
   function updateSaveBtnLabel(){
     const btn = overlay.querySelector('#saveSetBtn');
     const hasValue = document.getElementById('weightInput').value || document.getElementById('setsInput').value || document.getElementById('repsInput').value;
-    btn.textContent = (hasValue || !isNewToDay) ? 'Save Set' : `Add to ${DAY_NAMES[state.selectedDay]}`;
+    btn.textContent = (hasValue || !isNewToDay) ? 'Save Set' : `Add to ${dayNameOf(state.selectedDay)}`;
   }
   ['weightInput', 'setsInput', 'repsInput'].forEach(id => {
     const el = document.getElementById(id);
@@ -8547,9 +8569,15 @@ async function openMyBandsScreen(){
           <button class="band-act" data-act="edit" data-id="${b.id}">✎</button>
         </div>`).join('')
         : `<div class="empty-state" style="padding:26px 18px; text-align:center; line-height:1.55;">No bands yet.<br><span class="small" style="color:var(--slate);">Add each band you own so you can log against them.</span></div>`}
-      <div style="padding:14px 18px;"><button class="btn-primary" id="addBandBtn" style="width:100%;">+ Add a band</button></div>`;
+      <div style="padding:14px 18px 6px 18px;"><button class="btn-primary" id="addBandBtn" style="width:100%;">+ Add a band</button></div>
+      ${bands.length ? `<div style="padding:0 18px 14px 18px;">
+        <button class="btn-primary" id="createBandExBtn" style="width:100%; background:var(--panel); color:var(--chalk); border:1px solid var(--line);">Create a band exercise</button>
+        <div class="small" style="color:var(--slate); line-height:1.5; padding-top:8px;">Bands are equipment — you still need an exercise to log against. This creates one set to Band, ready to put on a day or on ⚡ ANY.</div>
+      </div>` : ''}`;
 
     body.querySelector('#addBandBtn').onclick = () => openBandForm(null, bands, render);
+    const createBandEx = body.querySelector('#createBandExBtn');
+    if (createBandEx) createBandEx.onclick = () => { overlay.remove(); openNewExerciseForm({ measurement: 'band' }); };
     body.querySelectorAll('.band-act').forEach(btn => {
       btn.onclick = async () => {
         const id = btn.dataset.id;
