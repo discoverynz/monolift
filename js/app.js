@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.205';
+const APP_VERSION = 'Beta 5.206';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -705,7 +705,7 @@ function targetDateInfo(){
   const targetWeekday = state.selectedDay;
   // Anytime has no place in the calendar, so its stats are simply today's.
   if (isAnyDay(targetWeekday)){
-    return { targetWeekday, targetDateStr: todayStr(), targetDateIsToday: true, targetIsFuture: false };
+    return { targetWeekday, targetDateStr: todayStr(), doneDateStr: todayStr(), targetDateIsToday: true, targetIsFuture: false };
   }
   const nowWd = todayWeekday();
   const daysDiff = targetWeekday - nowWd; // positive = future this week, 0 = today, negative = past this week
@@ -717,7 +717,12 @@ function targetDateInfo(){
   const mm = String(targetDate.getMonth() + 1).padStart(2, '0');
   const dd = String(targetDate.getDate()).padStart(2, '0');
   const targetDateStr = `${yyyy}-${mm}-${dd}`;
-  return { targetWeekday, targetDateStr, targetDateIsToday, targetIsFuture };
+  // Which date decides whether a card shows as done. Sets are always
+  // recorded with today's date, so when you work from a future day's plan -
+  // doing Friday's session on Thursday - the completion check has to look at
+  // today or nothing you just logged would ever turn green.
+  const doneDateStr = targetIsFuture ? todayStr() : targetDateStr;
+  return { targetWeekday, targetDateStr, doneDateStr, targetDateIsToday, targetIsFuture };
 }
 
 const SHORT_DAY_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -992,9 +997,7 @@ async function loadExercises(generation){
     // loggedToday flag on each card consistent with the header stats -
     // both use the same date reference.
     const targetInfo = targetDateInfo();
-    if (!targetInfo.targetIsFuture){
-      allSets.forEach(s => { if (s.logged_at === targetInfo.targetDateStr) loggedOnTargetByExId.add(s.exercise_id); });
-    }
+    allSets.forEach(s => { if (s.logged_at === targetInfo.doneDateStr) loggedOnTargetByExId.add(s.exercise_id); });
     // Track the all-time best set per exercise NAME (spanning every sibling record
     // across every day), on ANY day - not just today's session. Only weight-based
     // units (kg/lb) are comparable across entries via conversion; other unit types
@@ -1150,9 +1153,7 @@ async function loadExercisesFromMaster(generation){
     // header stats' date reference so loggedToday flags on cards stay
     // consistent with the header numbers.
     const targetInfo = targetDateInfo();
-    if (!targetInfo.targetIsFuture){
-      allSets.forEach(s => { if (s.logged_at === targetInfo.targetDateStr) loggedOnTargetByExId.add(s.exercise_master_id); });
-    }
+    allSets.forEach(s => { if (s.logged_at === targetInfo.doneDateStr) loggedOnTargetByExId.add(s.exercise_master_id); });
   }
 
   const withLogs = exercises.map(ex => {
@@ -3808,7 +3809,12 @@ async function fetchTrackHeaderStats(){
   const userData = { user: await getCurrentUser() };
   if (!userData || !userData.user) return { volumeKg: 0, setsToday: 0, streak: 0, targetDateIsToday: true, targetWeekday: todayWeekday(), targetIsFuture: false };
   // Shared date logic - see targetDateInfo() at the top.
-  const { targetWeekday, targetDateStr, targetDateIsToday, targetIsFuture } = targetDateInfo();
+  // Uses the same done-date as the exercise cards. Without this you could
+  // log Friday's session on Thursday, see every card turn green, and read
+  // "Volume FRI: 0" directly above them - two correct-in-isolation answers
+  // that contradict each other on screen.
+  const { targetWeekday, doneDateStr, targetDateIsToday, targetIsFuture } = targetDateInfo();
+  const targetDateStr = doneDateStr;
   const since = new Date(Date.now() - 60*86400000).toISOString().slice(0,10);
   // Two narrow queries instead of one wide one. Volume and set count need
   // full detail but only for a SINGLE date; the streak needs 60 days but
@@ -3816,9 +3822,7 @@ async function fetchTrackHeaderStats(){
   // whole 60-day window - six columns of every set the user logged in two
   // months - to compute a number that only reads logged_at.
   const [targetResult, streakResult] = await Promise.all([
-    targetIsFuture
-      ? Promise.resolve({ data: [] })
-      : withTimeout(
+    withTimeout(
           supabaseClient.from('sets')
             .select('weight, weight_unit, weight_type, reps, num_sets, logged_at')
             .eq('user_id', userData.user.id).eq('logged_at', targetDateStr),
@@ -4230,6 +4234,9 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
           </div>
         </div>
         <div style="padding:8px 18px 0 18px; display:flex; gap:8px; flex-wrap:wrap;">
+          ${isAnyDay(state.selectedDay) && workingExercises.length > 0 ? `<button id="toolbarClearAnyBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:var(--panel); border:1px solid var(--line); color:var(--slate);">
+            <span style="font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px;">CLEAR</span>
+          </button>` : ''}
           <button id="toolbarTimerBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:rgba(255,107,26,0.10); border:1px solid rgba(255,107,26,0.45); color:var(--flame);">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg>
             <span style="font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px;">TIMER</span>
@@ -4284,6 +4291,24 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   document.getElementById('dayTypeHeader').onclick = () => openEditDayTypeForm(state.selectedDay, typeof dayTypeLabel === 'string' ? dayTypeLabel : '');
   const locSwitcher = document.getElementById('locSwitcher');
   if (locSwitcher) locSwitcher.onclick = () => openLocationPicker(allLocations, currentLocationId);
+  const clearAnyBtn = document.getElementById('toolbarClearAnyBtn');
+  if (clearAnyBtn) clearAnyBtn.onclick = () => {
+    const count = workingExercises.length;
+    showConfirmDialog(
+      `Remove all ${count} exercise${count===1?'':'s'} from Anytime? Every set you've logged against them is kept, and the exercises stay in your library — this only empties the Anytime slot.`,
+      async () => {
+        await withButtonLoading(clearAnyBtn, 'Clearing…', async () => {
+          const failures = [];
+          for (const ex of workingExercises){
+            const result = await removeExerciseFromDay(ex);
+            if (!result.ok) failures.push(ex.name);
+          }
+          invalidateTrackSnapshots();
+          renderTrack();
+          if (failures.length) alert(`Could not remove: ${failures.join(', ')}. Nothing else was affected.`);
+        });
+      }, { title: 'Clear Anytime?', danger: true, confirmLabel: 'Clear' });
+  };
   const timerBtn = document.getElementById('toolbarTimerBtn');
   if (timerBtn) timerBtn.onclick = () => openTimer();
   const autoGroupBtn = document.getElementById('toolbarAutoGroupBtn');
