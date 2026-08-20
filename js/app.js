@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.204';
+const APP_VERSION = 'Beta 5.205';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -4148,7 +4148,7 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   // doesn't read as an eighth day of the week. This is where exercises that
   // belong to no particular day live - band work, travel sessions, anything
   // improvised.
-  + `<button class="day day-any ${state.selectedDay === ANY_DAY ? 'active' : ''}" data-day="${ANY_DAY}" aria-label="Anytime">⚡</button>`;
+  + `<button class="day day-any ${state.selectedDay === ANY_DAY ? 'active' : ''}" data-day="${ANY_DAY}" aria-label="Anytime">${ANY_DAY_NAME}</button>`;
 
   let listHtml = '';
   state.trackFlatOrder = [];
@@ -7349,8 +7349,8 @@ async function openNewExerciseForm(opts){
       <div class="field-label">Category</div>
       <div class="chip-row" id="categoryChipRow"><div class="small" style="color:var(--slate); padding:8px 0;">Loading…</div></div>
       <div class="field-label">Day</div>
-      <div class="chip-row">${DAY_NAMES.map((d,i) => `<div class="chip ${i===state.selectedDay?'active':''}" data-day="${i}">${d}</div>`).join('')}<div class="chip chip-any ${state.selectedDay===ANY_DAY?'active':''}" data-day="${ANY_DAY}">⚡ ${ANY_DAY_NAME}</div></div>
-      <div class="small" style="padding:0 18px 8px 18px; color:var(--slate); line-height:1.5;">Pick <b style="color:var(--chalk);">⚡ ANY</b> for things that aren't tied to a weekday — band work, travel sessions, anything improvised.</div>
+      <div class="chip-row">${DAY_NAMES.map((d,i) => `<div class="chip ${i===state.selectedDay?'active':''}" data-day="${i}">${d}</div>`).join('')}<div class="chip chip-any ${state.selectedDay===ANY_DAY?'active':''}" data-day="${ANY_DAY}">${ANY_DAY_NAME}</div></div>
+      <div class="small" style="padding:0 18px 8px 18px; color:var(--slate); line-height:1.5;">Pick <b style="color:var(--chalk);">ANY</b> for things that aren't tied to a weekday — band work, travel sessions, anything improvised.</div>
       <div class="field-label">Push / Pull <span class="opt">(optional)</span></div>
       <div class="chip-row" id="pushPullRow">
         <div class="chip" data-pp="push">Push</div>
@@ -8572,7 +8572,7 @@ async function openMyBandsScreen(){
       <div style="padding:14px 18px 6px 18px;"><button class="btn-primary" id="addBandBtn" style="width:100%;">+ Add a band</button></div>
       ${bands.length ? `<div style="padding:0 18px 14px 18px;">
         <button class="btn-primary" id="createBandExBtn" style="width:100%; background:var(--panel); color:var(--chalk); border:1px solid var(--line);">Create a band exercise</button>
-        <div class="small" style="color:var(--slate); line-height:1.5; padding-top:8px;">Bands are equipment — you still need an exercise to log against. This creates one set to Band, ready to put on a day or on ⚡ ANY.</div>
+        <div class="small" style="color:var(--slate); line-height:1.5; padding-top:8px;">Bands are equipment — you still need an exercise to log against. This creates one set to Band, ready to put on a day or on ANY.</div>
       </div>` : ''}`;
 
     body.querySelector('#addBandBtn').onclick = () => openBandForm(null, bands, render);

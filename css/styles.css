@@ -378,8 +378,7 @@ input:focus, button:focus{ outline:none; }
 .offplan-toggle-sub{ font-size:11px; color:var(--slate); margin-top:2px; line-height:1.45; }
 
 /* Anytime slot — visually distinct so it doesn't read as an eighth weekday */
-.day.day-any{ flex:0 0 auto; min-width:34px; padding-left:6px; padding-right:6px;
-  border-color:rgba(201,162,39,0.45); color:var(--brass); font-size:13px; }
+.day.day-any{ border-color:rgba(201,162,39,0.45); color:var(--brass); }
 .day.day-any.active{ background:var(--brass); color:var(--ink); border-color:var(--brass); }
 .chip.chip-any{ border-color:rgba(201,162,39,0.45); color:var(--brass); }
 .chip.chip-any.active{ background:var(--brass); color:var(--ink); border-color:var(--brass); }
