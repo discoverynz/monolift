@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.214';
+const APP_VERSION = 'Beta 5.215';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1893,7 +1893,12 @@ async function quickSaveSet(exerciseId, exerciseName, best){
     user_id: userData.user.id,
     weight, weight_unit: weight !== null ? unit : 'bodyweight',
     weight_type: weightType,
-    num_sets: null, reps: best.reps,
+    // Carry the original set count forward too - previously hardcoded to
+    // null, which silently dropped "3 sets" down to just "10 reps" every
+    // time quick-save replayed a set, even though the button's own label
+    // (read straight from history, not from what actually gets written)
+    // correctly showed the full "3 x 10" the whole time.
+    num_sets: best.num_sets || null, reps: best.reps,
     notes: null,
     logged_at: todayStr(),
     location_id: effectiveLocationId()
