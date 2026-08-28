@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.217';
+const APP_VERSION = 'Beta 5.218';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -269,6 +269,24 @@ function getEffectiveMuscleLabel(ex, db){
   return muscle ? fineMuscleCategory(muscle, ex.name) : 'Other';
 }
 
+// Sub-groups the Bands category by physical setup: no anchor at all, then
+// each door-anchor level separately. "Level 3" is parsed back out to a plain
+// number purely for sorting - the label itself stays as the friendly string
+// already shown everywhere else (the exercise row, the log form reminder).
+function bandEquipmentSubKey(ex){
+  if (!ex.uses_door_anchor) return 'Bands — No Anchor';
+  return ex.door_anchor_level ? `Bands — ${ex.door_anchor_level}` : 'Bands — Anchor (Level Not Set)';
+}
+function bandSubKeyCompare(a, b){
+  const rank = (k) => {
+    if (k === 'Bands — No Anchor') return -1;
+    const m = k.match(/Level (\d+)/);
+    if (m) return parseInt(m[1], 10);
+    return 999; // anchor used but no level recorded - sorts last
+  };
+  return rank(a) - rank(b);
+}
+
 async function groupExercisesByChoice(exercises, groupBy, splitMode){
   const grouped = {};
   let orderedKeys;
@@ -299,10 +317,32 @@ async function groupExercisesByChoice(exercises, groupBy, splitMode){
     orderedKeys = order;
   } else {
     CATEGORIES.forEach(c => grouped[c] = []);
-    exercises.forEach(ex => { (grouped[ex.category] || (grouped[ex.category] = [])).push(ex); });
+    exercises.forEach(ex => {
+      // Bands is the one category where the physical setup varies enough
+      // within itself to be worth its own sub-split: a band used standing
+      // on the floor is a completely different exercise shape from one
+      // anchored at Level 3 of a door, even though both are equally
+      // "Bands" equipment-wise. Every other category stays flat.
+      const key = ex.category === 'Bands' ? bandEquipmentSubKey(ex) : ex.category;
+      (grouped[key] || (grouped[key] = [])).push(ex);
+    });
     const knownCats = new Set(CATEGORIES);
-    const extraCats = Object.keys(grouped).filter(c => !knownCats.has(c) && grouped[c].length > 0);
-    orderedKeys = [...CATEGORIES, ...extraCats];
+    const extraCats = Object.keys(grouped).filter(c => !knownCats.has(c) && grouped[c].length > 0 && !c.startsWith('Bands —'));
+    // Expand the single "Bands" slot into however many band sub-groups are
+    // actually in use, in a fixed order (no anchor first, then levels
+    // ascending) rather than alphabetically - "Level 10" sorting before
+    // "Level 2" would be a worse experience than sorting by category name
+    // ever was.
+    const bandSubKeys = Object.keys(grouped)
+      .filter(c => c.startsWith('Bands —') && grouped[c].length > 0)
+      .sort(bandSubKeyCompare);
+    orderedKeys = [];
+    CATEGORIES.forEach(c => {
+      if (c === 'Bands') orderedKeys.push(...bandSubKeys);
+      else orderedKeys.push(c);
+    });
+    orderedKeys.push(...extraCats);
+    delete grouped['Bands']; // was only ever a placeholder bucket, always empty once split
   }
   Object.keys(grouped).forEach(k => { grouped[k] = clusterByAltGroup(grouped[k]); });
   return { grouped, orderedKeys };
@@ -4356,7 +4396,15 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
     const items = grouped[cat] || [];
     if (items.length === 0) return;
     const slug = 'trackcat-' + cat.replace(/[^a-z0-9]/gi,'');
-    const editIcon = groupBy === 'equipment'
+    // Band sub-headers ("Bands - Level 3") are derived from two OTHER
+    // fields, not from a literal stored category string - no exercise
+    // actually has that exact text as its category, so renaming one here
+    // would silently update nothing. The real "Bands" category is still
+    // renameable normally from any of its sub-headers' constituent exercises
+    // via the per-exercise edit screen; this icon specifically means "rename
+    // this literal category value", which a synthetic sub-key isn't.
+    const isBandSubHeader = cat.startsWith('Bands —');
+    const editIcon = (groupBy === 'equipment' && !isBandSubHeader)
       ? `<span class="cat-rename-btn" data-cat="${cat}" style="float:right; color:var(--slate); font-size:12px; cursor:pointer; padding:2px 6px;">✎</span>`
       : '';
     listHtml += `<div class="category" id="${slug}">${cat}${editIcon}</div>` + items.map(exerciseRow).join('');
