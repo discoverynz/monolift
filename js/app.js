@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.218';
+const APP_VERSION = 'Beta 5.219';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -5356,6 +5356,22 @@ function fineMuscleCategory(broadMuscle, exerciseName){
   const n = (exerciseName || '').toLowerCase();
   const m = (broadMuscle || '').toLowerCase();
   if (m === 'chest'){
+    // Push-up incline/decline naming is INVERTED relative to bench press.
+    // For a bench press, "decline" describes the bench sloping down toward
+    // the feet, which targets the lower chest. For a push-up there's no
+    // bench under the torso - "decline" instead means the FEET are elevated
+    // (hands stay on the floor), which increases the shoulder-to-hip angle
+    // and shifts emphasis to the upper/clavicular chest, exactly the
+    // opposite muscle. An "incline" push-up (hands elevated on a box, feet
+    // on the floor) is the easier variant and shifts emphasis toward the
+    // lower chest instead - the reverse pairing from an incline bench press.
+    const isPushup = n.includes('push-up') || n.includes('pushup') || n.includes('push up')
+      || n.includes('press-up') || n.includes('press up');
+    if (isPushup){
+      if (n.includes('decline')) return 'Upper Chest';
+      if (n.includes('incline')) return 'Lower Chest';
+      return 'Mid Chest';
+    }
     if (n.includes('incline')) return 'Upper Chest';
     if (n.includes('decline')) return 'Lower Chest';
     return 'Mid Chest';
