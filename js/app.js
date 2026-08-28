@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.213';
+const APP_VERSION = 'Beta 5.214';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1898,6 +1898,19 @@ async function quickSaveSet(exerciseId, exerciseName, best){
     logged_at: todayStr(),
     location_id: effectiveLocationId()
   };
+  // Replaying a genuine band set (the row-level "best" selection only ever
+  // offers this button a band-typed set for a band exercise, never a stale
+  // pre-band bodyweight/weight entry) needs its band identity carried
+  // forward too - weight/weight_unit alone can't represent which band this was.
+  if (best.measurement_type === 'band' || best.weight_unit === 'band'){
+    insertPayload.measurement_type = 'band';
+    insertPayload.band_snapshot = best.band_snapshot || null;
+    insertPayload.band_resistance = best.band_resistance != null ? best.band_resistance : null;
+    insertPayload.band_resistance_unit = best.band_resistance_unit || null;
+    insertPayload.weight = null;
+    insertPayload.weight_unit = 'band';
+    insertPayload.weight_type = 'total';
+  }
   insertPayload[idField] = exerciseId;
   invalidateTrackSnapshots(); // logged set changes done-flags and header stats
     const { data, error } = await supabaseClient.from('sets').insert(insertPayload).select();
@@ -1940,7 +1953,22 @@ function exerciseRow(ex){
     // best. Progressive overload usually means today's working weight isn't
     // your PR - one-tapping "quick save" against your all-time max would
     // silently log a heavier weight than you actually lifted today.
-    const best = ex.lastSet || ex.maxSet;
+    //
+    // For a band exercise specifically, the candidate must ALSO be a genuine
+    // band-typed set. An exercise that predates the band feature (or was
+    // just reclassified from Weight to Band) can have old history logged as
+    // plain bodyweight/weight - replaying that would silently show and
+    // re-save "Bodyweight" under an exercise the user has explicitly set up
+    // as Band, hiding the fact that no real band has ever actually been
+    // logged against it yet.
+    const ownType = measurementTypeOf(ex);
+    const isBandSet = (s) => s && (s.measurement_type === 'band' || s.weight_unit === 'band');
+    let best;
+    if (ownType === 'band'){
+      best = isBandSet(ex.lastSet) ? ex.lastSet : (isBandSet(ex.maxSet) ? ex.maxSet : null);
+    } else {
+      best = ex.lastSet || ex.maxSet;
+    }
     if (best){
       state.trackBestSetById = state.trackBestSetById || {};
       state.trackBestSetById[ex.id] = best;
