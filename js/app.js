@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.216';
+const APP_VERSION = 'Beta 5.217';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -36,28 +36,40 @@ async function getAllCategories(){
   );
   const inUse = result.__timeout || result.error ? [] : (result.data || []).map(r => r.category).filter(Boolean);
   // "Band" (singular) predates "Bands" being added as a real built-in
-  // category and is functionally the same thing - a leftover from before
-  // that fix that would otherwise sit in the picker forever as a confusing
-  // duplicate. Self-heal any exercise still tagged with it in the background
-  // (fire-and-forget, same pattern as the other self-heals in this app), and
-  // exclude it from what's shown immediately, so the duplicate disappears
-  // from the picker on this load without waiting for the write to land.
-  if (inUse.includes('Band')) mergeBandCategoryIntoBands(userData.user.id, table);
+  // category and is functionally the same thing - exclude it from what's
+  // shown immediately here. The actual data repair runs from
+  // ensureBandCategoryMerged() instead of being triggered here, because this
+  // function is ONLY called from the New Exercise form - a user who never
+  // happened to open that screen after the fix landed would never trigger
+  // the merge at all, and their existing exercises would keep showing under
+  // both "Band" and "Bands" on the Lift screen indefinitely. That screen
+  // groups by category directly and doesn't go through here.
   const merged = [...CATEGORIES, ...getCustomCategories(), ...inUse]
     .filter(c => c !== 'Band');
   return [...new Set(merged)];
 }
 let _bandCategoryMergeAttempted = false;
-async function mergeBandCategoryIntoBands(uid, table){
-  if (_bandCategoryMergeAttempted) return; // once per session is enough
+// Fires on every normal Track render (see renderTrackFromData), not gated
+// behind visiting any particular screen first. Cheap even when there is
+// nothing to fix - an UPDATE with a WHERE clause matching zero rows - and
+// guarded to actually run only once per session.
+async function ensureBandCategoryMerged(){
+  if (_bandCategoryMergeAttempted) return;
   _bandCategoryMergeAttempted = true;
   try {
-    await supabaseClient.from(table).update({ category: 'Bands' }).eq('user_id', uid).eq('category', 'Band');
-    // Also drop it if it was ever explicitly added as a custom category name,
-    // rather than only ever appearing via in-use exercises.
+    const u = await getCurrentUser();
+    if (!u) return;
+    const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+    const result = await supabaseClient.from(table).update({ category: 'Bands' }).eq('user_id', u.id).eq('category', 'Band').select();
     const customs = getCustomCategories().filter(c => c !== 'Band');
     localStorage.setItem(CUSTOM_CATEGORIES_KEY, JSON.stringify(customs));
-    warmInvalidate();
+    // Only re-render if something actually changed - otherwise this fires
+    // on every single session for every user forever, most of whom were
+    // never affected, and would repaint the screen for no visible reason.
+    if (result && result.data && result.data.length){
+      warmInvalidate();
+      if (state.currentTab === 'track') renderTrack();
+    }
   } catch(e){
     console.error('Could not merge Band category into Bands:', e);
   }
@@ -4443,6 +4455,7 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
 
   attachShellHandlers();
   prefetchOtherTabs(); // warm the other tabs while the main thread is idle
+  ensureBandCategoryMerged(); // one-time self-heal, see its own comment for why this is the right trigger point
   // Suggestions were deferred off the critical path - compute them now that
   // the page is interactive and inject into the reserved slot. Guarded by the
   // same generation token as the render, so a stale computation from a
