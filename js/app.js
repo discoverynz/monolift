@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.210';
+const APP_VERSION = 'Beta 5.211';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1613,6 +1613,57 @@ const EXERCISE_OVERRIDES = [
   { keywords: ['kneeling','leg','curl'], primaryMuscles: ['hamstrings'], secondaryMuscles: [] },
   { keywords: ['hip','abductor'], primaryMuscles: ['glutes'], secondaryMuscles: [] }
 ];
+// Direct anatomical-word recognition. This exists because fuzzy word-overlap
+// matching against the public exercise database can genuinely TIE across
+// unrelated muscles: "Banded Tricep Pull" and "Banded Shoulder Pull" both
+// score identically against several DB candidates spanning shoulders,
+// triceps and quadriceps (each sharing exactly one generic word like "pull"),
+// so whichever happened to appear first in the database array would win -
+// arbitrary, and observed to pick the wrong muscle in practice. A body-part
+// word actually present in the exercise's own name is unambiguous and should
+// simply outrank a coin-flip tie against words that don't name anything.
+//
+// Keys are the normalized (stemmed) word forms exdbNormalize would produce,
+// so this stays word-based rather than substring-based - "ab" must not match
+// inside "band" or "table", and "lat" must not match inside "lateral".
+const ANATOMY_KEYWORD_MUSCLE = {};
+(function buildAnatomyKeywords(){
+  const terms = {
+    biceps: ['bicep','biceps'], triceps: ['tricep','triceps'],
+    shoulders: ['shoulder','shoulders','delt','delts','deltoid','deltoids'],
+    chest: ['chest','pec','pecs','pectoral','pectorals'],
+    quadriceps: ['quad','quads','quadricep','quadriceps'],
+    hamstrings: ['hamstring','hamstrings'],
+    calves: ['calf','calves'],
+    glutes: ['glute','glutes'],
+    forearms: ['forearm','forearms'],
+    abdominals: ['ab','abs','abdominal','abdominals','core'],
+    traps: ['trap','traps','trapezius'],
+    lats: ['lat','lats','latissimus'],
+    neck: ['neck'],
+    adductors: ['adductor','adductors'],
+    abductors: ['abductor','abductors']
+  };
+  for (const muscle in terms){
+    terms[muscle].forEach(word => {
+      // Route each raw term through the SAME normalizer used everywhere else,
+      // so the stems here always agree with the stems produced from an
+      // actual exercise name (e.g. "biceps" and "bicep" both collapse to the
+      // same key, matching how exdbNormalize strips trailing s).
+      for (const stemmed of exdbNormalize(word)) ANATOMY_KEYWORD_MUSCLE[stemmed] = muscle;
+    });
+  }
+})();
+
+// Scans an exercise name for an explicit anatomical word and returns the
+// corresponding muscle, or null if the name doesn't name a body part at all
+// (most real exercise names still rely on the full fuzzy match below).
+function detectAnatomyKeyword(name){
+  const words = exdbNormalize(name);
+  for (const w of words){ if (ANATOMY_KEYWORD_MUSCLE[w]) return ANATOMY_KEYWORD_MUSCLE[w]; }
+  return null;
+}
+
 function checkExerciseOverride(name){
   const n = (name || '').toLowerCase();
   for (const o of EXERCISE_OVERRIDES){
@@ -1631,6 +1682,15 @@ function getNormalizedDb(db){
 }
 
 function fuzzyMatchExercise(name, db){
+  const scored = fuzzyMatchExerciseScored(name, db);
+  return scored ? scored.entry : null;
+}
+// Same matching as fuzzyMatchExercise, but also returns the score so callers
+// can distinguish a confident match (near 1.0, typically an exact or
+// near-exact name) from a weak one that only barely cleared the 0.34
+// threshold on a single generic shared word - the two should not be trusted
+// equally.
+function fuzzyMatchExerciseScored(name, db){
   if (!db) return null;
   const qwords = exdbNormalize(name);
   if (!qwords.size) return null;
@@ -1641,7 +1701,7 @@ function fuzzyMatchExercise(name, db){
     const score = overlap / Math.max(qwords.size, ewords.size);
     if (score > bestScore){ best = e; bestScore = score; }
   }
-  return bestScore >= 0.34 ? best : null;
+  return bestScore >= 0.34 ? { entry: best, score: bestScore } : null;
 }
 
 let _matchExerciseCache = null; // { forDb: <db array identity>, byName: Map }
@@ -1676,7 +1736,32 @@ function matchExerciseUncached(name, db){
     }
     return override;
   }
-  return fuzzyMatchExercise(name, db);
+
+  const scoredFuzzy = fuzzyMatchExerciseScored(name, db);
+  const fuzzy = scoredFuzzy ? scoredFuzzy.entry : null;
+  const anatomyMuscle = detectAnatomyKeyword(name);
+  // A high-confidence fuzzy match (typically an exact or near-exact real
+  // exercise name) is trusted outright, even if one of its words also
+  // happens to name a body part - "Trap Bar Deadlift" must stay quadriceps,
+  // not flip to traps just because "trap" is in the name. Below that bar,
+  // an explicit anatomical word beats a weak/tied word-overlap guess.
+  const FUZZY_CONFIDENT = 0.5;
+  const fuzzyIsConfident = scoredFuzzy && scoredFuzzy.score >= FUZZY_CONFIDENT;
+  if (anatomyMuscle && !fuzzyIsConfident){
+    const fuzzyAgrees = fuzzy && fuzzy.primaryMuscles && fuzzy.primaryMuscles[0] === anatomyMuscle;
+    if (!fuzzyAgrees){
+      // If the (weak) fuzzy match still found a real DB entry, its
+      // photos/instructions are borrowed as supplementary content; only the
+      // muscle assignment itself is overridden.
+      return {
+        name, primaryMuscles: [anatomyMuscle], secondaryMuscles: [],
+        instructions: fuzzy ? fuzzy.instructions : [], images: fuzzy ? fuzzy.images : [],
+        equipment: fuzzy ? fuzzy.equipment : null, level: fuzzy ? fuzzy.level : null,
+        mechanic: fuzzy ? fuzzy.mechanic : null
+      };
+    }
+  }
+  return fuzzy;
 }
 
 function convertWeight(value, fromUnit, toUnit){
