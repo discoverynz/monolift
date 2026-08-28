@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.208';
+const APP_VERSION = 'Beta 5.209';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -899,7 +899,7 @@ async function loadExercises(generation){
   }
   let result = await withTimeout(
     supabaseClient.from('exercises')
-      .select('id, name, category, alt_group_id, alt_groups(name, color), location_ids, muscle_override, measurement_type')
+      .select('id, name, category, alt_group_id, alt_groups(name, color), location_ids, muscle_override, measurement_type, uses_door_anchor, door_anchor_level')
       .eq('user_id', userData.user.id)
       .eq('weekday', state.selectedDay)
       .eq('active', true)
@@ -982,15 +982,24 @@ async function loadExercises(generation){
       );
     }
     let allSets = setsResult.__timeout || setsResult.error ? [] : (setsResult.data || []);
-    // Track's preview reflects only the currently active location, since the
-    // same exercise can be loaded very differently machine to machine. The
-    // full unfiltered history still shows everything once you open the
-    // exercise itself - this only narrows what the row preview shows.
-    const activeLocationId = getCurrentLocationId();
-    if (activeLocationId && locationDataAvailable) allSets = allSets.filter(s => s.location_id === activeLocationId);
     const idToLowerName = {};
     allUserExercises.forEach(ex => { idToLowerName[ex.id] = (ex.name || '').toLowerCase(); });
-    // Results are ordered newest-first, so the first time we see an exercise_id is its most recent set.
+    // Track's row preview reflects the currently EFFECTIVE location (falls
+    // back to the default location, not just an explicit same-day pick -
+    // getCurrentLocationId() returns null on any day you haven't re-tapped
+    // a location chip, which is most days, silently disabling this scoping
+    // almost all the time). Prefers the most recent set AT that location;
+    // if this exercise has never been logged there, falls back to the most
+    // recent set anywhere rather than showing nothing - the same two-tier
+    // pattern already used correctly by "Same As Last Time" in the log form.
+    const activeLocationId = effectiveLocationId();
+    const filterByLocation = activeLocationId && locationDataAvailable;
+    // Results are ordered newest-first, so the first time we see an
+    // exercise_id at the target location is its most recent set there.
+    if (filterByLocation){
+      allSets.forEach(s => { if (s.location_id === activeLocationId && !lastSetByExercise[s.exercise_id]) lastSetByExercise[s.exercise_id] = s; });
+    }
+    // Any-location fallback for exercises with nothing at the current location.
     allSets.forEach(s => { if (!lastSetByExercise[s.exercise_id]) lastSetByExercise[s.exercise_id] = s; });
     // Set of exercise IDs that have a set logged on the target date (the
     // specific calendar date the current chip represents). This makes the
@@ -1088,7 +1097,7 @@ async function loadExercisesFromMaster(generation){
 
   const result = await withTimeout(
     supabaseClient.from('exercise_days')
-      .select('exercise_master_id, exercise_master(id, name, category, alt_group_id, alt_groups(name, color), location_ids, muscle_override, measurement_type)')
+      .select('exercise_master_id, exercise_master(id, name, category, alt_group_id, alt_groups(name, color), location_ids, muscle_override, measurement_type, uses_door_anchor, door_anchor_level)')
       .eq('user_id', uid)
       .eq('weekday', state.selectedDay),
     15000
@@ -1131,8 +1140,18 @@ async function loadExercisesFromMaster(generation){
       );
     }
     let allSets = setsResult.__timeout || setsResult.error ? [] : (setsResult.data || []);
-    const activeLocationId = getCurrentLocationId();
-    if (activeLocationId && locationDataAvailable) allSets = allSets.filter(s => s.location_id === activeLocationId);
+    // Same fix as the legacy loader above: use the EFFECTIVE location (falls
+    // back to the default, not just an explicit same-day pick) and a
+    // two-tier fallback - most recent AT this location, or most recent
+    // anywhere if this exercise has never been logged here. PR (maxSet
+    // below) is deliberately computed from the full unfiltered allSets, so a
+    // true all-time best is not silently hidden just because it happened at
+    // a different gym.
+    const activeLocationId = effectiveLocationId();
+    const filterByLocation = activeLocationId && locationDataAvailable;
+    if (filterByLocation){
+      allSets.forEach(s => { if (s.location_id === activeLocationId && !lastSetByExercise[s.exercise_master_id]) lastSetByExercise[s.exercise_master_id] = s; });
+    }
     allSets.forEach(s => { if (!lastSetByExercise[s.exercise_master_id]) lastSetByExercise[s.exercise_master_id] = s; });
     allSets.forEach(s => {
       (setsByExerciseId[s.exercise_master_id] = setsByExerciseId[s.exercise_master_id] || []).push(s);
@@ -1393,7 +1412,8 @@ async function createExerciseForToday(payload){
       user_id: payload.user_id, name: payload.name, category: payload.category,
       alt_group_id: payload.alt_group_id || null, push_pull: payload.push_pull || null,
       upper_lower: payload.upper_lower || null, location_ids: payload.location_ids || null,
-      measurement_type: payload.measurement_type || null
+      measurement_type: payload.measurement_type || null,
+      uses_door_anchor: !!payload.uses_door_anchor, door_anchor_level: payload.door_anchor_level || null
     }).select();
     if (error || !inserted || !inserted[0]) return { data: null, error: error || { message: 'Could not create exercise' }, wasExisting: false };
     masterId = inserted[0].id;
@@ -7387,6 +7407,19 @@ async function openNewExerciseForm(opts){
         ${MEASUREMENT_TYPES.map(m => `<div class="chip ${m.key===selectedMeasurement?'active':''}" data-mt="${m.key}">${m.label}</div>`).join('')}
       </div>
       <div class="small" id="measurementHint" style="padding:0 18px 8px 18px; color:var(--slate); line-height:1.5;"></div>
+      <div id="doorAnchorArea" style="display:none;">
+        <div class="toggle-row" id="doorAnchorToggleRow">
+          <div style="flex:1;">
+            <div class="toggle-row-title">Uses a door anchor</div>
+            <div class="toggle-row-sub">A lot of band and tube exercises loop through a door anchor — optional, but worth noting for next time.</div>
+          </div>
+          <button class="switch off" id="doorAnchorSwitch"></button>
+        </div>
+        <div id="anchorLevelArea" style="display:none;">
+          <div class="field-label">Anchor Height / Level <span class="opt">(optional)</span></div>
+          <div class="field-card"><input class="field-input" id="anchorLevelInput" type="text" style="font-size:15px;" placeholder="e.g. Top slot, or Level 3"></div>
+        </div>
+      </div>
       <div class="field-label">Category</div>
       <div class="chip-row" id="categoryChipRow"><div class="small" style="color:var(--slate); padding:8px 0;">Loading…</div></div>
       <div class="field-label">Day</div>
@@ -7413,9 +7446,14 @@ async function openNewExerciseForm(opts){
   overlay.querySelector('#closeForm').onclick = () => overlay.remove();
 
   const measurementHintEl = overlay.querySelector('#measurementHint');
+  let usesDoorAnchor = false;
   const setMeasurementHint = () => {
     const m = MEASUREMENT_TYPES.find(x => x.key === selectedMeasurement);
     measurementHintEl.textContent = m ? m.hint : '';
+    // Door anchor setup is specific to band work - showing it for every
+    // measurement type would just be clutter for exercises it never applies to.
+    const doorArea = overlay.querySelector('#doorAnchorArea');
+    if (doorArea) doorArea.style.display = selectedMeasurement === 'band' ? 'block' : 'none';
   };
   setMeasurementHint();
   overlay.querySelectorAll('#measurementRow .chip').forEach(el => {
@@ -7426,6 +7464,13 @@ async function openNewExerciseForm(opts){
       setMeasurementHint();
     };
   });
+  const doorAnchorSwitch = overlay.querySelector('#doorAnchorSwitch');
+  if (doorAnchorSwitch) doorAnchorSwitch.onclick = () => {
+    usesDoorAnchor = !usesDoorAnchor;
+    doorAnchorSwitch.classList.toggle('off', !usesDoorAnchor);
+    const lvlArea = overlay.querySelector('#anchorLevelArea');
+    if (lvlArea) lvlArea.style.display = usesDoorAnchor ? 'block' : 'none';
+  };
 
   overlay.querySelectorAll('#pushPullRow .chip').forEach(el => {
     el.onclick = () => {
@@ -7519,7 +7564,9 @@ async function openNewExerciseForm(opts){
         user_id: userData.user.id, name, category: selectedCategory, weekday: selectedDay,
         alt_group_id: pickedAltGroup ? pickedAltGroup.id : null,
         push_pull: selectedPushPull, upper_lower: selectedUpperLower, location_ids: selectedLocationIds,
-        measurement_type: selectedMeasurement === 'weight' ? null : selectedMeasurement
+        measurement_type: selectedMeasurement === 'weight' ? null : selectedMeasurement,
+        uses_door_anchor: usesDoorAnchor,
+        door_anchor_level: usesDoorAnchor ? (document.getElementById('anchorLevelInput').value.trim() || null) : null
       });
       if (error){ alert(error.message); return; }
       overlay.remove();
@@ -7852,7 +7899,7 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
   // Band exercises swap the weight field for a band picker. Resolved from
   // the exercise already in state where possible so the form doesn't need
   // an extra round trip just to know which shape to render.
-  const exInState = (state.exercises || []).find(e => (e.masterId || e.id) === exerciseId);
+  let exInState = (state.exercises || []).find(e => (e.masterId || e.id) === exerciseId);
   let measurementType = measurementTypeOf(exInState);
   let selectedBands = [];
   // Defaults to whatever location is currently active on Track, falling back
@@ -7934,6 +7981,19 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
     if (!wArea || !bArea) return;
     wArea.style.display = 'none';
     bArea.style.display = 'block';
+    // A door-anchor reminder, set once at exercise-creation time, saves
+    // re-figuring out the setup every time - especially useful weeks later
+    // or in an unfamiliar room.
+    if (exInState && exInState.uses_door_anchor){
+      const existingBanner = overlay.querySelector('#anchorReminderBanner');
+      if (!existingBanner){
+        const banner = document.createElement('div');
+        banner.id = 'anchorReminderBanner';
+        banner.className = 'anchor-reminder';
+        banner.innerHTML = `<span>🚪 Door anchor${exInState.door_anchor_level ? ` — ${exInState.door_anchor_level}` : ''}</span>`;
+        bArea.parentNode.insertBefore(banner, bArea);
+      }
+    }
     (async () => {
       const bands = await loadBands();
       const row = overlay.querySelector('#bandPickRow');
@@ -7982,10 +8042,14 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
     (async () => {
       const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
       const r = await withTimeout(
-        supabaseClient.from(table).select('measurement_type').eq('id', exerciseId).maybeSingle(), 10000);
+        supabaseClient.from(table).select('measurement_type, uses_door_anchor, door_anchor_level').eq('id', exerciseId).maybeSingle(), 10000);
       if (r.__timeout || r.error || !r.data) return;
       const resolved = r.data.measurement_type || 'weight';
-      if (resolved === measurementType) return;
+      // Feed the anchor reminder even though this exercise wasn't in state -
+      // applyBandFormShape reads off exInState, so patch in what we just
+      // learned rather than duplicating the banner logic here.
+      if (r.data.uses_door_anchor) exInState = { uses_door_anchor: true, door_anchor_level: r.data.door_anchor_level };
+      if (resolved === measurementType && resolved !== 'band') return;
       measurementType = resolved;
       if (resolved === 'band') applyBandFormShape();
     })();
