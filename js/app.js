@@ -13,8 +13,8 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.209';
-const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
+const APP_VERSION = 'Beta 5.210';
+const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
   try { return JSON.parse(localStorage.getItem(CUSTOM_CATEGORIES_KEY) || '[]'); } catch(e){ return []; }
@@ -1871,10 +1871,18 @@ function exerciseRow(ex){
     ? `<div style="font-size:10.5px; color:#E8A33D; margin-top:8px; display:flex; align-items:center; gap:5px;"><span>📈</span>Same weight a few sessions running — try increasing</div>`
     : '';
 
+  // Door anchor setup, visible on the row itself rather than only inside the
+  // log form - the whole point of recording it once is not having to open
+  // the exercise just to remember the setup.
+  const anchorTag = ex.uses_door_anchor
+    ? `<div style="font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--brass); margin-top:3px;">🚪 Door anchor${ex.door_anchor_level ? ` — ${ex.door_anchor_level}` : ''}</div>`
+    : '';
+
   return `<div class="exercise" style="${borderStyle}" data-id="${ex.id}" data-name="${ex.name}">
     ${cornerTag}
     <div style="flex:1; min-width:0; ${topPad}">
       <div class="ex-name">${ex.name}${splitTag}${mechTag}</div>
+      ${anchorTag}
       ${subtitle}
       ${stagnantNote}
     </div>
@@ -7379,6 +7387,7 @@ async function createLocation(name){
 // ---------- NEW EXERCISE FORM ----------
 async function openNewExerciseForm(opts){
   let selectedCategory = CATEGORIES[0];
+  let categoryManuallyPicked = false;
   let selectedDay = state.selectedDay;
   let pickedAltGroup = null;
   let selectedPushPull = null;
@@ -7454,6 +7463,20 @@ async function openNewExerciseForm(opts){
     // measurement type would just be clutter for exercises it never applies to.
     const doorArea = overlay.querySelector('#doorAnchorArea');
     if (doorArea) doorArea.style.display = selectedMeasurement === 'band' ? 'block' : 'none';
+    // Category is a manual pick with no keyword detection at all - previously
+    // that meant every band exercise defaulted to "Free Weights - Bench" (or
+    // wherever the user happened to leave the chip), so band work silently
+    // scattered across unrelated categories instead of grouping together
+    // under Equipment. Auto-select Bands the moment Band is chosen here, but
+    // only if the user hasn't already deliberately picked a category -
+    // respecting an intentional choice matters more than a helpful default.
+    if (selectedMeasurement === 'band' && !categoryManuallyPicked && selectedCategory !== 'Bands'){
+      selectedCategory = 'Bands';
+      const catRow = overlay.querySelector('#categoryChipRow');
+      if (catRow){
+        catRow.querySelectorAll('.chip[data-cat]').forEach(c => c.classList.toggle('active', c.dataset.cat === 'Bands'));
+      }
+    }
   };
   setMeasurementHint();
   overlay.querySelectorAll('#measurementRow .chip').forEach(el => {
@@ -7521,12 +7544,12 @@ async function openNewExerciseForm(opts){
     row.innerHTML = cats.map(c => `<div class="chip ${c===selectedCategory?'active':''}" data-cat="${c}">${c}</div>`).join('')
       + `<div class="chip" id="newCategoryChip" style="color:var(--flame); border-color:var(--flame);">+ New</div>`;
     row.querySelectorAll('.chip[data-cat]').forEach(el => {
-      el.onclick = () => { row.querySelectorAll('.chip[data-cat]').forEach(c=>c.classList.remove('active')); el.classList.add('active'); selectedCategory = el.dataset.cat; };
+      el.onclick = () => { row.querySelectorAll('.chip[data-cat]').forEach(c=>c.classList.remove('active')); el.classList.add('active'); selectedCategory = el.dataset.cat; categoryManuallyPicked = true; };
     });
     row.querySelector('#newCategoryChip').onclick = () => {
       promptText({
         title: 'New Category Name', placeholder: 'e.g. Bodyweight',
-        onConfirm: (name) => { addCustomCategory(name); selectedCategory = name; renderCategoryChips(); }
+        onConfirm: (name) => { addCustomCategory(name); selectedCategory = name; categoryManuallyPicked = true; renderCategoryChips(); }
       });
     };
   }
