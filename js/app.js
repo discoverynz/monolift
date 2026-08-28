@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.207';
+const APP_VERSION = 'Beta 5.208';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1466,6 +1466,17 @@ function isAvailableAtLocation(ex, locationId){
   return ex.location_ids.includes(locationId);
 }
 
+// Anytime exercises are never location-filtered, regardless of what location
+// tags they happen to carry. This is a deliberate override, not just "no
+// location set": an exercise created on Anytime before this fix may already
+// have a stale location tag from whichever gym the user was at that day, and
+// without this override it would stay invisible everywhere else forever -
+// the exact bug this exists to close, for both old and new data.
+function isAvailableOnSelectedDay(ex, locationId){
+  if (isAnyDay(state.selectedDay)) return true;
+  return isAvailableAtLocation(ex, locationId);
+}
+
 function formatSetsReps(s){
   if (s.num_sets && s.reps) return ` (${s.num_sets} × ${s.reps})`;
   if (s.reps) return ` × ${s.reps}`;
@@ -1796,9 +1807,11 @@ function exerciseRow(ex){
     </div>`;
     showCheck = false; isDone = true;
   } else {
-    // Shows the best set ever recorded (any day), not just the most recent one -
-    // one line, whichever number is actually the most useful to see.
-    const best = ex.maxSet || ex.lastSet;
+    // Quick log shows and re-logs your MOST RECENT set, not your all-time
+    // best. Progressive overload usually means today's working weight isn't
+    // your PR - one-tapping "quick save" against your all-time max would
+    // silently log a heavier weight than you actually lifted today.
+    const best = ex.lastSet || ex.maxSet;
     if (best){
       state.trackBestSetById = state.trackBestSetById || {};
       state.trackBestSetById[ex.id] = best;
@@ -4115,7 +4128,7 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
     }
   });
   const currentLocationId = effectiveLocationId();
-  workingExercises.forEach(ex => { ex.locationAvailable = isAvailableAtLocation(ex, currentLocationId); });
+  workingExercises.forEach(ex => { ex.locationAvailable = isAvailableOnSelectedDay(ex, currentLocationId); });
   const currentLocationName = allLocations.find(l => l.id === currentLocationId)?.name || null;
   const hideCompleted = getHideCompletedPref();
   // Strict location filter: only what's actually available here, full stop -
@@ -7353,11 +7366,14 @@ async function openNewExerciseForm(opts){
   // Arriving from My Bands pre-selects Band, so the loop from "I own these
   // bands" to "I have an exercise I can log against them" is one tap.
   let selectedMeasurement = (opts && opts.measurement) || 'weight';
-  // Default to wherever you actually are. Creating an exercise while at a
-  // specific gym almost always means "this exists here", and having to
-  // remember to tick it every time was busywork that led to exercises
-  // silently showing up at gyms that don't have the equipment.
-  const todaysLocation = effectiveLocationId();
+  // Default to wherever you actually are - EXCEPT on Anytime, whose whole
+  // point is "not tied to a particular day or place". Auto-tagging its
+  // location meant an Anytime exercise created at your default gym silently
+  // vanished the moment that default changed (a new home gym, a trip) since
+  // isAvailableAtLocation then excluded it everywhere else. Creating on a
+  // real weekday still defaults to today's location, since that case really
+  // does almost always mean "this exists here".
+  const todaysLocation = isAnyDay(selectedDay) ? null : effectiveLocationId();
   let selectedLocationIds = todaysLocation ? [todaysLocation] : [];
   const overlay = document.createElement('div');
   overlay.className = 'overlay-screen';
