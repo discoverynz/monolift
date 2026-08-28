@@ -393,3 +393,6 @@ input:focus, button:focus{ outline:none; }
 .anchor-level-row{ display:flex; gap:8px; padding:2px 18px 6px 18px; max-width:280px; }
 .anchor-level-btn{ flex:1; aspect-ratio:1; border-radius:11px; background:var(--panel); border:1px solid var(--line); color:var(--chalk); font-family:'JetBrains Mono', monospace; font-size:15px; font-weight:600; }
 .anchor-level-btn.active{ background:var(--brass); color:var(--ink); border-color:var(--brass); }
+
+/* Edit Set form reuses .stepper-row/.stepper-btn/.stepper-value and
+   .band-pick-row/.band-pick already defined elsewhere - no new classes needed. */

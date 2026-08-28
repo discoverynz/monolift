@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.215';
+const APP_VERSION = 'Beta 5.216';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -5094,6 +5094,86 @@ function confirmRemoveExercise(exerciseId, exerciseName){
   };
 }
 
+// Edits an already-logged set directly. Exists specifically so a set with a
+// wrong sets/reps/weight - including one a bug silently wrote incorrectly -
+// can be corrected in place, rather than the only recourse being delete and
+// re-enter from scratch (which loses the original date if not done
+// carefully, and is needless friction for what's usually a one-field fix).
+function openEditSetForm(setData, onSaved){
+  let numSets = setData.num_sets || 1;
+  let reps = setData.reps || 1;
+  let selectedBands = (setData.band_snapshot || []).slice();
+  const isBand = setData.measurement_type === 'band' || setData.weight_unit === 'band';
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeEditSet">✕</button><h1>Edit Set</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll">
+      <div class="small" style="padding:0 18px 12px 18px; color:var(--slate); line-height:1.5;">${formatLoggedDate(setData.logged_at)} — correcting this entry only, nothing else in your history changes.</div>
+      ${isBand ? `
+        <div class="field-label">Band <span class="opt">tap two to stack</span></div>
+        <div class="band-pick-row" id="editBandPickRow"><div class="small" style="color:var(--slate); padding:8px 18px;">Loading…</div></div>
+      ` : ''}
+      <div class="field-label">Sets</div>
+      <div class="stepper-row"><button class="stepper-btn" data-act="dec" data-f="sets">–</button><div class="stepper-value" id="editSetsVal">${numSets}</div><button class="stepper-btn" data-act="inc" data-f="sets">+</button></div>
+      <div class="field-label">Reps</div>
+      <div class="stepper-row"><button class="stepper-btn" data-act="dec" data-f="reps">–</button><div class="stepper-value" id="editRepsVal">${reps}</div><button class="stepper-btn" data-act="inc" data-f="reps">+</button></div>
+      <button class="save-btn" id="saveEditSetBtn">Save Changes</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeEditSet').onclick = () => overlay.remove();
+  overlay.querySelectorAll('.stepper-btn').forEach(btn => {
+    btn.onclick = () => {
+      const field = btn.dataset.f, delta = btn.dataset.act === 'inc' ? 1 : -1;
+      if (field === 'sets'){ numSets = Math.max(1, Math.min(20, numSets + delta)); overlay.querySelector('#editSetsVal').textContent = numSets; }
+      else { reps = Math.max(1, Math.min(100, reps + delta)); overlay.querySelector('#editRepsVal').textContent = reps; }
+    };
+  });
+  if (isBand){
+    (async () => {
+      const bands = await loadBands();
+      const row = overlay.querySelector('#editBandPickRow');
+      if (!bands.length){ row.innerHTML = `<div class="small" style="padding:8px 18px; color:var(--slate);">No bands set up.</div>`; return; }
+      const paint = () => {
+        row.innerHTML = bands.map(b => {
+          const on = selectedBands.some(x => x.id === b.id);
+          return `<button class="band-pick ${on?'sel':''}" data-id="${b.id}">
+            <span class="band-pick-swatch" style="background:${b.colour};"></span>
+            <span class="band-pick-name">${b.label}</span>
+            <span class="band-pick-res">${b.resistance != null ? `${b.resistance}${b.resistance_unit||'lb'}` : '—'}</span>
+          </button>`;
+        }).join('');
+        row.querySelectorAll('.band-pick').forEach(btn => {
+          btn.onclick = () => {
+            const b = bands.find(x => x.id === btn.dataset.id);
+            if (selectedBands.some(x => x.id === b.id)) selectedBands = selectedBands.filter(x => x.id !== b.id);
+            else selectedBands.push(b);
+            paint();
+          };
+        });
+      };
+      paint();
+    })();
+  }
+  overlay.querySelector('#saveEditSetBtn').onclick = async () => {
+    await withButtonLoading(overlay.querySelector('#saveEditSetBtn'), 'Saving…', async () => {
+      const payload = { num_sets: numSets, reps };
+      if (isBand){
+        const combined = combinedBandResistance(selectedBands);
+        payload.band_snapshot = buildBandSnapshot(selectedBands);
+        payload.band_resistance = combined ? combined.value : null;
+        payload.band_resistance_unit = combined ? combined.unit : null;
+      }
+      const { error } = await supabaseClient.from('sets').update(payload).eq('id', setData.id);
+      if (error){ alert(error.message); return; }
+      invalidateTrackSnapshots();
+      overlay.remove();
+      if (onSaved) onSaved();
+      if (state.currentTab === 'track') renderTrack();
+    });
+  };
+}
+
 function confirmDeleteLog(setId, onDeleted){
   const overlay = document.createElement('div');
   overlay.style = 'position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:25; display:flex; align-items:center; justify-content:center;';
@@ -8515,13 +8595,28 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
       </div>`;
     }).join('');
     list.querySelectorAll('.log-row[data-id]').forEach(row => {
+      const setId = row.dataset.id;
+      const setData = sets.find(s => s.id === setId);
       let pressTimer = null;
-      const start = () => { pressTimer = setTimeout(() => confirmDeleteLog(row.dataset.id, loadHistory), 550); };
+      let longPressed = false;
+      const start = () => {
+        longPressed = false;
+        pressTimer = setTimeout(() => { longPressed = true; confirmDeleteLog(setId, loadHistory); }, 550);
+      };
       const cancel = () => clearTimeout(pressTimer);
       row.addEventListener('pointerdown', start);
       row.addEventListener('pointerup', cancel);
       row.addEventListener('pointerleave', cancel);
       row.addEventListener('pointercancel', cancel);
+      // Short tap edits the entry directly - the only way to correct a set
+      // that got logged with the wrong sets/reps/weight, including the sets
+      // count some quick-saves silently wrote as null before that was fixed.
+      // Long-press-to-delete still fires on its own; this only runs when
+      // that timer never got the chance to.
+      row.addEventListener('click', () => {
+        if (longPressed) return;
+        if (setData) openEditSetForm(setData, loadHistory);
+      });
     });
   }
   loadHistory();
