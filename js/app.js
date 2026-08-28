@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.211';
+const APP_VERSION = 'Beta 5.212';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -7510,8 +7510,13 @@ async function openNewExerciseForm(opts){
           <button class="switch off" id="doorAnchorSwitch"></button>
         </div>
         <div id="anchorLevelArea" style="display:none;">
-          <div class="field-label">Anchor Height / Level <span class="opt">(optional)</span></div>
-          <div class="field-card"><input class="field-input" id="anchorLevelInput" type="text" style="font-size:15px;" placeholder="e.g. Top slot, or Level 3"></div>
+          <div class="field-label">Anchor Height <span class="opt">(optional)</span></div>
+          <div class="anchor-level-row" id="anchorLevelRow">
+            ${[1,2,3,4,5].map(n => `<button class="anchor-level-btn" data-level="${n}">${n}</button>`).join('')}
+          </div>
+          <div class="small" style="padding:0 18px 8px 18px; color:var(--slate); display:flex; justify-content:space-between; max-width:260px;">
+            <span>↑ Top</span><span>Bottom ↓</span>
+          </div>
         </div>
       </div>
       <div class="field-label">Category</div>
@@ -7579,6 +7584,21 @@ async function openNewExerciseForm(opts){
     const lvlArea = overlay.querySelector('#anchorLevelArea');
     if (lvlArea) lvlArea.style.display = usesDoorAnchor ? 'block' : 'none';
   };
+  // Fixed 1-5 levels, top to bottom, rather than free text - matches how a
+  // real door anchor actually works (a handful of physical loop slots) and
+  // means every band exercise's anchor height reads consistently instead of
+  // "Top slot" here and "level 3" there for the same physical position.
+  let selectedAnchorLevel = null;
+  overlay.querySelectorAll('.anchor-level-btn').forEach(btn => {
+    btn.onclick = () => {
+      const level = parseInt(btn.dataset.level, 10);
+      // Tapping the already-selected level clears it, since the level is
+      // optional and there needs to be a way back to "not set" without
+      // fighting the toggle off and back on.
+      selectedAnchorLevel = (selectedAnchorLevel === level) ? null : level;
+      overlay.querySelectorAll('.anchor-level-btn').forEach(b => b.classList.toggle('active', parseInt(b.dataset.level,10) === selectedAnchorLevel));
+    };
+  });
 
   overlay.querySelectorAll('#pushPullRow .chip').forEach(el => {
     el.onclick = () => {
@@ -7674,7 +7694,7 @@ async function openNewExerciseForm(opts){
         push_pull: selectedPushPull, upper_lower: selectedUpperLower, location_ids: selectedLocationIds,
         measurement_type: selectedMeasurement === 'weight' ? null : selectedMeasurement,
         uses_door_anchor: usesDoorAnchor,
-        door_anchor_level: usesDoorAnchor ? (document.getElementById('anchorLevelInput').value.trim() || null) : null
+        door_anchor_level: (usesDoorAnchor && selectedAnchorLevel) ? `Level ${selectedAnchorLevel}` : null
       });
       if (error){ alert(error.message); return; }
       overlay.remove();
