@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.212';
+const APP_VERSION = 'Beta 5.213';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -35,8 +35,32 @@ async function getAllCategories(){
     15000
   );
   const inUse = result.__timeout || result.error ? [] : (result.data || []).map(r => r.category).filter(Boolean);
-  const merged = [...CATEGORIES, ...getCustomCategories(), ...inUse];
+  // "Band" (singular) predates "Bands" being added as a real built-in
+  // category and is functionally the same thing - a leftover from before
+  // that fix that would otherwise sit in the picker forever as a confusing
+  // duplicate. Self-heal any exercise still tagged with it in the background
+  // (fire-and-forget, same pattern as the other self-heals in this app), and
+  // exclude it from what's shown immediately, so the duplicate disappears
+  // from the picker on this load without waiting for the write to land.
+  if (inUse.includes('Band')) mergeBandCategoryIntoBands(userData.user.id, table);
+  const merged = [...CATEGORIES, ...getCustomCategories(), ...inUse]
+    .filter(c => c !== 'Band');
   return [...new Set(merged)];
+}
+let _bandCategoryMergeAttempted = false;
+async function mergeBandCategoryIntoBands(uid, table){
+  if (_bandCategoryMergeAttempted) return; // once per session is enough
+  _bandCategoryMergeAttempted = true;
+  try {
+    await supabaseClient.from(table).update({ category: 'Bands' }).eq('user_id', uid).eq('category', 'Band');
+    // Also drop it if it was ever explicitly added as a custom category name,
+    // rather than only ever appearing via in-use exercises.
+    const customs = getCustomCategories().filter(c => c !== 'Band');
+    localStorage.setItem(CUSTOM_CATEGORIES_KEY, JSON.stringify(customs));
+    warmInvalidate();
+  } catch(e){
+    console.error('Could not merge Band category into Bands:', e);
+  }
 }
 
 // A small reusable text-input modal, used for naming a new category or renaming
