@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.219';
+const APP_VERSION = 'Beta 5.220';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -2024,7 +2024,14 @@ function exerciseRow(ex){
     if (ownType === 'band'){
       best = isBandSet(ex.lastSet) ? ex.lastSet : (isBandSet(ex.maxSet) ? ex.maxSet : null);
     } else {
-      best = ex.lastSet || ex.maxSet;
+      // The reverse case: an exercise that WAS Band and is later reclassified
+      // back to Weight (or any other type) can leave band-shaped history as
+      // its "last set". Quick-saving that through the normal path would
+      // write weight_unit:"band" onto what's now meant to be, say, a plain
+      // Weight exercise - nonsense the exercise's own current type disagrees
+      // with. Skip a band-shaped candidate here too, same as the forward
+      // case above, rather than only guarding one direction of the mismatch.
+      best = !isBandSet(ex.lastSet) ? ex.lastSet : (!isBandSet(ex.maxSet) ? ex.maxSet : null);
     }
     if (best){
       state.trackBestSetById = state.trackBestSetById || {};
