@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.223';
+const APP_VERSION = 'Beta 5.224';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -4463,9 +4463,9 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   app.innerHTML = `
     <div class="app-shell">
       <div class="scroll-area">
-        ${renderBrandbar(allLocations.length > 0 ? `<div id="locSwitcher" style="display:flex; align-items:center; gap:5px; background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:5px 10px 5px 8px; cursor:pointer;">
-            <span style="font-size:10px;">📍</span>
-            <span style="font-family:'Bebas Neue',sans-serif; font-size:10px; color:var(--flame); letter-spacing:0.5px;">${currentLocationName ? currentLocationName.toUpperCase() : 'ANYWHERE'}</span>
+        ${renderBrandbar(allLocations.length > 0 ? `<div id="locSwitcher" style="display:flex; align-items:center; gap:6px; background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:9px 14px 9px 11px; cursor:pointer;">
+            <span style="font-size:14px;">📍</span>
+            <span style="font-family:'Bebas Neue',sans-serif; font-size:13px; color:var(--flame); letter-spacing:0.5px;">${currentLocationName ? currentLocationName.toUpperCase() : 'ANYWHERE'}</span>
           </div>` : '')}
         <div class="day-strip">${dayChips}</div>
         <div class="header">
@@ -5730,6 +5730,8 @@ async function openPicker(initialTab, jumpToMuscle){
   }
 
   let ideaFilter = 'All';
+  let ideaGroupBy = 'equipment';
+  const EQUIPMENT_GROUP_LABEL = { band: 'Bands', bodyweight: 'Bodyweight', time: 'Timed Holds' };
   function renderIdeasTab(){
     removeSideIndex();
     const body = overlay.querySelector('#pickerBody');
@@ -5740,12 +5742,33 @@ async function openPicker(initialTab, jumpToMuscle){
     const presentSubs = subCatOrder.filter(c => HOME_GYM_IDEAS.some(i => i.sub === c));
     const subCats = ['All', ...presentSubs];
     const filtered = ideaFilter === 'All' ? HOME_GYM_IDEAS : HOME_GYM_IDEAS.filter(i => i.sub === ideaFilter);
-    body.innerHTML = `
-      <div class="small" style="padding:10px 18px 8px 18px; color:var(--slate); line-height:1.5;">Bands, push-up handles and bodyweight only - built to fit a hotel room or a small space. Tap + to add and log straight away.</div>
-      <div class="chip-row" style="padding:0 18px 10px 18px;">
-        ${subCats.map(c => `<div class="chip ${c===ideaFilter?'active':''}" data-idea-filter="${c}">${c}</div>`).join('')}
-      </div>
-      ${filtered.map((idea, i) => `
+
+    // Group into sections. Equipment answers "what do I need for this";
+    // Muscle reuses the exact same fineMuscleCategory logic the main Lift
+    // screen's Muscle view uses, driven off a hand-authored muscle per idea
+    // rather than fuzzy database matching - that already caused real bugs
+    // earlier for custom "Banded X" names with no strong database match.
+    const groups = {};
+    filtered.forEach(idea => {
+      const key = ideaGroupBy === 'muscle'
+        ? fineMuscleCategory(idea.muscle, idea.name)
+        : (EQUIPMENT_GROUP_LABEL[idea.measurementType] || 'Other');
+      (groups[key] = groups[key] || []).push(idea);
+    });
+    // Order of first appearance in the source array, rather than
+    // alphabetical - keeps a sensible Pull->Push->Legs->Core-ish flow
+    // instead of "Abdominals" landing before "Biceps" for no useful reason.
+    const orderedKeys = [];
+    filtered.forEach(idea => {
+      const key = ideaGroupBy === 'muscle'
+        ? fineMuscleCategory(idea.muscle, idea.name)
+        : (EQUIPMENT_GROUP_LABEL[idea.measurementType] || 'Other');
+      if (!orderedKeys.includes(key)) orderedKeys.push(key);
+    });
+
+    const sectionsHtml = orderedKeys.map(key => `
+      <div class="category" style="font-size:14px; padding:14px 18px 6px 18px;">${key}</div>
+      ${groups[key].map(idea => `
         <div class="ex-card" data-idea-idx="${HOME_GYM_IDEAS.indexOf(idea)}" style="margin:0 18px 9px 18px; background:var(--panel); border-radius:12px; padding:12px 14px;">
           <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
             <div style="flex:1;">
@@ -5756,9 +5779,21 @@ async function openPicker(initialTab, jumpToMuscle){
             <button class="idea-add-btn" data-idx="${HOME_GYM_IDEAS.indexOf(idea)}" style="width:30px; height:30px; border-radius:9px; background:rgba(255,107,26,0.15); color:var(--flame); border:1px solid rgba(255,107,26,0.35); font-size:16px; flex-shrink:0;">+</button>
           </div>
         </div>`).join('')}
+    `).join('');
+
+    body.innerHTML = `
+      <div class="small" style="padding:10px 18px 8px 18px; color:var(--slate); line-height:1.5;">Bands, push-up handles and bodyweight only - built to fit a hotel room or a small space. Tap + to add and log straight away.</div>
+      ${groupByToggleHtml(ideaGroupBy)}
+      <div class="chip-row" style="padding:0 18px 10px 18px;">
+        ${subCats.map(c => `<div class="chip ${c===ideaFilter?'active':''}" data-idea-filter="${c}">${c}</div>`).join('')}
+      </div>
+      ${sectionsHtml}
     `;
     body.querySelectorAll('[data-idea-filter]').forEach(chip => {
       chip.onclick = () => { ideaFilter = chip.dataset.ideaFilter; renderIdeasTab(); };
+    });
+    body.querySelectorAll('[data-groupby]').forEach(chip => {
+      chip.onclick = () => { ideaGroupBy = chip.dataset.groupby; renderIdeasTab(); };
     });
     body.querySelectorAll('.idea-add-btn').forEach(btn => {
       btn.onclick = () => addIdeaExercise(HOME_GYM_IDEAS[parseInt(btn.dataset.idx, 10)]);
@@ -9184,133 +9219,194 @@ function openTimer(){
 const HOME_GYM_IDEAS = [
   // ---- Pull ----
   { name:'Banded Pulldown', sub:'Pull', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 5',
-    hint:'Anchor at the top of a door. Kneel or sit facing it, pull down to chest height - closest band substitute for a pull-up or lat pulldown.' },
+    hint:'Anchor at the top of a door. Kneel or sit facing it, pull down to chest height - closest band substitute for a pull-up or lat pulldown.',
+    muscle:'lats' },
   { name:'Doorway Row', sub:'Pull', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
-    hint:'No anchor needed - loop the band around a solid door frame or heavy furniture leg at chest height and row toward you.' },
+    hint:'No anchor needed - loop the band around a solid door frame or heavy furniture leg at chest height and row toward you.',
+    muscle:'lats' },
   { name:'Banded Face Pull', sub:'Pull', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 3',
-    hint:'Anchor at chest height. Pull toward your face, elbows high - the one most home setups skip and shoulders miss most.' },
+    hint:'Anchor at chest height. Pull toward your face, elbows high - the one most home setups skip and shoulders miss most.',
+    muscle:'shoulders' },
   { name:'Banded Bicep Curl', sub:'Pull', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Stand on the band, curl as normal.' },
+    hint:'Stand on the band, curl as normal.',
+    muscle:'biceps' },
   { name:'Banded Hammer Curl', sub:'Pull', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Same as a bicep curl but neutral grip (palms facing in) - hits the forearm and brachialis more.' },
+    hint:'Same as a bicep curl but neutral grip (palms facing in) - hits the forearm and brachialis more.',
+    muscle:'biceps' },
   { name:'Single-Arm Banded Row', sub:'Pull', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Step on one end, staggered stance, row with the opposite hand - trains each side evenly, which two-handed rows can hide an imbalance in.' },
+    hint:'Step on one end, staggered stance, row with the opposite hand - trains each side evenly, which two-handed rows can hide an imbalance in.',
+    muscle:'lats' },
   { name:'Banded Straight-Arm Pulldown', sub:'Pull', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 5',
-    hint:'Anchor high, arms stay straight, pull down in an arc to your thighs - isolates lats without much bicep involvement.' },
+    hint:'Anchor high, arms stay straight, pull down in an arc to your thighs - isolates lats without much bicep involvement.',
+    muscle:'lats' },
   { name:'Banded Reverse Fly', sub:'Pull', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 3',
-    hint:'Anchor at chest height, pull the handles apart and back - rear delts, the most commonly under-trained muscle at home.' },
+    hint:'Anchor at chest height, pull the handles apart and back - rear delts, the most commonly under-trained muscle at home.',
+    muscle:'shoulders' },
   { name:'Banded Shrug', sub:'Pull', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Stand on the band, shrug straight up - traps.' },
+    hint:'Stand on the band, shrug straight up - traps.',
+    muscle:'traps' },
   { name:'Banded Upright Row', sub:'Pull', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Stand on the band, pull straight up to chin height, elbows leading - shoulders and traps together.' },
+    hint:'Stand on the band, pull straight up to chin height, elbows leading - shoulders and traps together.',
+    muscle:'shoulders' },
   { name:'Banded Deadlift', sub:'Pull', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Stand on the band, hinge at the hips and stand tall - closest band substitute for a barbell deadlift.' },
+    hint:'Stand on the band, hinge at the hips and stand tall - closest band substitute for a barbell deadlift.',
+    muscle:'hamstrings' },
   { name:'Pull-Up', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Needs a pull-up bar (doorframe bars work). If you don\'t have one, Banded Pulldown is the substitute below.' },
+    hint:'Needs a pull-up bar (doorframe bars work). If you don\'t have one, Banded Pulldown is the substitute below.',
+    muscle:'lats' },
   { name:'Chin-Up', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Needs a pull-up bar. Underhand grip, more bicep involvement than a standard pull-up.' },
+    hint:'Needs a pull-up bar. Underhand grip, more bicep involvement than a standard pull-up.',
+    muscle:'lats' },
   { name:'Negative Pull-Up', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Needs a pull-up bar. Jump or step to the top position, lower as slowly as you can - the standard way to build toward a first full pull-up.' },
+    hint:'Needs a pull-up bar. Jump or step to the top position, lower as slowly as you can - the standard way to build toward a first full pull-up.',
+    muscle:'lats' },
   { name:'Band-Assisted Pull-Up', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Needs a pull-up bar. Loop a band over the bar, knee or foot in the other end - the band takes some of your weight through the hardest part of the rep.' },
+    hint:'Needs a pull-up bar. Loop a band over the bar, knee or foot in the other end - the band takes some of your weight through the hardest part of the rep.',
+    muscle:'lats' },
   { name:'Towel Row Under Table', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Lie under a sturdy table, feet braced, pull your chest to the edge - a genuine no-equipment row when you have neither a band nor a bar.' },
+    hint:'Lie under a sturdy table, feet braced, pull your chest to the edge - a genuine no-equipment row when you have neither a band nor a bar.',
+    muscle:'lats' },
   { name:'Superman Hold', sub:'Pull', measurementType:'time', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Face down, lift arms and legs off the floor together and hold - lower back and rear chain, no equipment at all.' },
+    hint:'Face down, lift arms and legs off the floor together and hold - lower back and rear chain, no equipment at all.',
+    muscle:'lower back' },
   { name:'Wall Slide', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Back against a wall, arms in a goalpost shape, slide up and down keeping contact - shoulder mobility and rear delt activation, good as a warm-up.' },
+    hint:'Back against a wall, arms in a goalpost shape, slide up and down keeping contact - shoulder mobility and rear delt activation, good as a warm-up.',
+    muscle:'shoulders' },
 
   // ---- Push ----
   { name:'Handle Push-Ups', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Push-up handles let your wrists stay neutral through a deeper range than flat-palm push-ups.' },
+    hint:'Push-up handles let your wrists stay neutral through a deeper range than flat-palm push-ups.',
+    muscle:'chest' },
   { name:'Banded Chest Press', sub:'Push', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 3',
-    hint:'Anchor behind you at chest height, band running under your arms - presses forward like a cable chest press.' },
+    hint:'Anchor behind you at chest height, band running under your arms - presses forward like a cable chest press.',
+    muscle:'chest' },
   { name:'Banded Overhead Press', sub:'Push', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Stand on the band, press overhead - no anchor needed, just floor space to stand.' },
+    hint:'Stand on the band, press overhead - no anchor needed, just floor space to stand.',
+    muscle:'shoulders' },
   { name:'Banded Tricep Pushdown', sub:'Push', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 5',
-    hint:'Anchor at the top of a door, push down - closest band substitute for a cable pushdown.' },
+    hint:'Anchor at the top of a door, push down - closest band substitute for a cable pushdown.',
+    muscle:'triceps' },
   { name:'Banded Front Raise', sub:'Push', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Stand on the band, raise straight out in front to shoulder height - front delts.' },
+    hint:'Stand on the band, raise straight out in front to shoulder height - front delts.',
+    muscle:'shoulders' },
   { name:'Banded Lateral Raise', sub:'Push', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Stand on the band, raise out to the sides - side delts, the muscle that gives shoulders width.' },
+    hint:'Stand on the band, raise out to the sides - side delts, the muscle that gives shoulders width.',
+    muscle:'shoulders' },
   { name:'Diamond Push-Up', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Hands together under your chest, thumbs and index fingers touching - shifts emphasis heavily onto the triceps.' },
+    hint:'Hands together under your chest, thumbs and index fingers touching - shifts emphasis heavily onto the triceps.',
+    muscle:'triceps' },
   { name:'Pike Push-Up', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Hips high in an inverted-V, lower your head toward the floor - the closest bodyweight-only substitute for an overhead press.' },
+    hint:'Hips high in an inverted-V, lower your head toward the floor - the closest bodyweight-only substitute for an overhead press.',
+    muscle:'shoulders' },
   { name:'Handle Push-Up (Decline)', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Feet elevated on a chair or bed, hands on the handles - targets the upper chest more than a flat push-up.' },
+    hint:'Feet elevated on a chair or bed, hands on the handles - targets the upper chest more than a flat push-up.',
+    muscle:'chest' },
   { name:'Handle Push-Up (Incline)', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Hands elevated on a chair or counter, feet on the floor - an easier variant that targets the lower chest more.' },
+    hint:'Hands elevated on a chair or counter, feet on the floor - an easier variant that targets the lower chest more.',
+    muscle:'chest' },
   { name:'Archer Push-Up', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Wide hand position, shift your weight to one side each rep - a harder, single-arm-leaning progression once standard push-ups get easy.' },
+    hint:'Wide hand position, shift your weight to one side each rep - a harder, single-arm-leaning progression once standard push-ups get easy.',
+    muscle:'chest' },
   { name:'Banded Overhead Tricep Extension', sub:'Push', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 1',
-    hint:'Anchor low, band over your shoulder, extend overhead - a genuine skull-crusher substitute.' },
+    hint:'Anchor low, band over your shoulder, extend overhead - a genuine skull-crusher substitute.',
+    muscle:'triceps' },
   { name:'Banded Chest Fly', sub:'Push', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 3',
-    hint:'Anchor behind you at chest height, arms wide, bring your hands together in an arc - chest, more stretch than a press.' },
+    hint:'Anchor behind you at chest height, arms wide, bring your hands together in an arc - chest, more stretch than a press.',
+    muscle:'chest' },
   { name:'Wall Push-Up', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Hands on a wall instead of the floor - the easiest regression, genuinely useful for building toward a full push-up rather than beneath anyone.' },
+    hint:'Hands on a wall instead of the floor - the easiest regression, genuinely useful for building toward a full push-up rather than beneath anyone.',
+    muscle:'chest' },
   { name:'Chair Dips', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Two sturdy chairs, hands on the seats, lower between them - triceps and chest, needs furniture that won\'t slide.' },
+    hint:'Two sturdy chairs, hands on the seats, lower between them - triceps and chest, needs furniture that won\'t slide.',
+    muscle:'triceps' },
   { name:'Banded Push Press', sub:'Push', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Stand on the band, dip your knees and drive the press up explosively - adds a leg-drive element a strict press doesn\'t have.' },
+    hint:'Stand on the band, dip your knees and drive the press up explosively - adds a leg-drive element a strict press doesn\'t have.',
+    muscle:'shoulders' },
 
   // ---- Legs ----
   { name:'Banded Squats', sub:'Legs', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Stand on the band, handles at shoulder height, squat as normal - the band adds resistance through the whole range.' },
+    hint:'Stand on the band, handles at shoulder height, squat as normal - the band adds resistance through the whole range.',
+    muscle:'quadriceps' },
   { name:'Banded Romanian Deadlift', sub:'Legs', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Stand on the band, hinge at the hips - closest band substitute for a barbell RDL.' },
+    hint:'Stand on the band, hinge at the hips - closest band substitute for a barbell RDL.',
+    muscle:'hamstrings' },
   { name:'Walking Lunges', sub:'Legs', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Needs a few metres of clear floor - the one exercise here that genuinely wants a bit of room.' },
+    hint:'Needs a few metres of clear floor - the one exercise here that genuinely wants a bit of room.',
+    muscle:'quadriceps' },
   { name:'Bulgarian Split Squat', sub:'Legs', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Rear foot up on a chair, lower on the front leg - single-leg quad and glute work that needs nothing but a chair.' },
+    hint:'Rear foot up on a chair, lower on the front leg - single-leg quad and glute work that needs nothing but a chair.',
+    muscle:'quadriceps' },
   { name:'Banded Monster Walk', sub:'Legs', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Small loop band around your ankles or above the knees, step sideways keeping tension - glute medius, the muscle that stabilises your hips.' },
+    hint:'Small loop band around your ankles or above the knees, step sideways keeping tension - glute medius, the muscle that stabilises your hips.',
+    muscle:'glutes' },
   { name:'Banded Leg Extension', sub:'Legs', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 1',
-    hint:'Seated, anchor low behind you, band around your ankle, extend the knee - quads, isolated.' },
+    hint:'Seated, anchor low behind you, band around your ankle, extend the knee - quads, isolated.',
+    muscle:'quadriceps' },
   { name:'Banded Leg Curl', sub:'Legs', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 1',
-    hint:'Anchor low, band around your ankle, curl your heel toward your glutes - the hamstring exercise home setups miss most.' },
+    hint:'Anchor low, band around your ankle, curl your heel toward your glutes - the hamstring exercise home setups miss most.',
+    muscle:'hamstrings' },
   { name:'Single-Leg Glute Bridge', sub:'Legs', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Lying on your back, one foot down, drive your hips up on that side alone - no equipment, real glute work.' },
+    hint:'Lying on your back, one foot down, drive your hips up on that side alone - no equipment, real glute work.',
+    muscle:'glutes' },
   { name:'Banded Glute Bridge', sub:'Legs', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Band across your hips, lying on your back, drive up against the resistance.' },
+    hint:'Band across your hips, lying on your back, drive up against the resistance.',
+    muscle:'glutes' },
   { name:'Calf Raise', sub:'Legs', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Off the edge of a step for full range, or flat ground if you don\'t have one.' },
+    hint:'Off the edge of a step for full range, or flat ground if you don\'t have one.',
+    muscle:'calves' },
   { name:'Banded Standing Calf Raise', sub:'Legs', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 1',
-    hint:'Anchor low, band over your shoulders, rise onto your toes - adds resistance a bodyweight calf raise runs out of quickly.' },
+    hint:'Anchor low, band over your shoulders, rise onto your toes - adds resistance a bodyweight calf raise runs out of quickly.',
+    muscle:'calves' },
   { name:'Cossack Squat', sub:'Legs', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Wide stance, shift your weight fully to one bent leg while the other stays straight - hits the inner thigh most exercises here miss.' },
+    hint:'Wide stance, shift your weight fully to one bent leg while the other stays straight - hits the inner thigh most exercises here miss.',
+    muscle:'adductors' },
   { name:'Wall Sit', sub:'Legs', measurementType:'time', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Back against a wall, knees at 90 degrees, hold - pure quad endurance, no equipment.' },
+    hint:'Back against a wall, knees at 90 degrees, hold - pure quad endurance, no equipment.',
+    muscle:'quadriceps' },
   { name:'Step-Up', sub:'Legs', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
-    hint:'A sturdy step or low chair, drive up through one leg at a time.' },
+    hint:'A sturdy step or low chair, drive up through one leg at a time.',
+    muscle:'quadriceps' },
   { name:'Banded Hip Thrust', sub:'Legs', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Shoulders on a chair or bed, band across your hips, drive up - more range than a floor glute bridge.' },
+    hint:'Shoulders on a chair or bed, band across your hips, drive up - more range than a floor glute bridge.',
+    muscle:'glutes' },
   { name:'Curtsy Lunge', sub:'Legs', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Step one leg diagonally behind the other and lower - glute medius from a different angle than a monster walk.' },
+    hint:'Step one leg diagonally behind the other and lower - glute medius from a different angle than a monster walk.',
+    muscle:'glutes' },
 
   // ---- Core ----
   { name:'Plank', sub:'Core', measurementType:'time', usesDoorAnchor:false, anchorLevel:null,
-    hint:'No equipment at all - the one entry here that costs nothing to add.' },
+    hint:'No equipment at all - the one entry here that costs nothing to add.',
+    muscle:'abdominals' },
   { name:'Banded Pallof Press', sub:'Core', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 3',
-    hint:'Anchor at chest height, stand side-on, press straight out and resist the rotation - genuinely hard to replicate any other way at home.' },
+    hint:'Anchor at chest height, stand side-on, press straight out and resist the rotation - genuinely hard to replicate any other way at home.',
+    muscle:'abdominals' },
   { name:'Side Plank', sub:'Core', measurementType:'time', usesDoorAnchor:false, anchorLevel:null,
-    hint:'On one forearm, hips lifted, body in a straight line - obliques, the side of the core a front plank does not reach.' },
+    hint:'On one forearm, hips lifted, body in a straight line - obliques, the side of the core a front plank does not reach.',
+    muscle:'abdominals' },
   { name:'Bird Dog', sub:'Core', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
-    hint:'On hands and knees, extend opposite arm and leg, hold, switch - core stability without any spinal loading.' },
+    hint:'On hands and knees, extend opposite arm and leg, hold, switch - core stability without any spinal loading.',
+    muscle:'abdominals' },
   { name:'Dead Bug', sub:'Core', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
-    hint:'On your back, opposite arm and leg lower toward the floor together - trains the core to resist movement rather than create it.' },
+    hint:'On your back, opposite arm and leg lower toward the floor together - trains the core to resist movement rather than create it.',
+    muscle:'abdominals' },
   { name:'Banded Woodchopper', sub:'Core', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 5',
-    hint:'Anchor high or low, pull the band diagonally across your body - rotational core strength, the pattern most home routines skip entirely.' },
+    hint:'Anchor high or low, pull the band diagonally across your body - rotational core strength, the pattern most home routines skip entirely.',
+    muscle:'abdominals' },
   { name:'Mountain Climbers', sub:'Core', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Plank position, drive your knees toward your chest quickly - core plus a real cardio hit.' },
+    hint:'Plank position, drive your knees toward your chest quickly - core plus a real cardio hit.',
+    muscle:'abdominals' },
   { name:'Hollow Body Hold', sub:'Core', measurementType:'time', usesDoorAnchor:false, anchorLevel:null,
-    hint:'On your back, lower back pressed to the floor, arms and legs extended and lifted - a gymnastics staple, harder than it looks.' },
+    hint:'On your back, lower back pressed to the floor, arms and legs extended and lifted - a gymnastics staple, harder than it looks.',
+    muscle:'abdominals' },
   { name:'Banded Standing Crunch', sub:'Core', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 5',
-    hint:'Anchor high, kneel facing away, crunch down against the resistance - loaded abs work without lying on the floor.' },
+    hint:'Anchor high, kneel facing away, crunch down against the resistance - loaded abs work without lying on the floor.',
+    muscle:'abdominals' },
   { name:'Russian Twist', sub:'Core', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Seated, lean back slightly, rotate side to side - hold a band taut between your hands for extra resistance if you want it.' },
+    hint:'Seated, lean back slightly, rotate side to side - hold a band taut between your hands for extra resistance if you want it.',
+    muscle:'abdominals' },
   { name:'Leg Raise', sub:'Core', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Lying on your back, legs straight, lower them slowly without touching down - lower abs.' },
+    hint:'Lying on your back, legs straight, lower them slowly without touching down - lower abs.',
+    muscle:'abdominals' },
 ];
 
 // How an exercise is measured. Null in the database means 'weight', so every
