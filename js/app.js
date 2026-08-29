@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.224';
+const APP_VERSION = 'Beta 5.225';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -5735,36 +5735,27 @@ async function openPicker(initialTab, jumpToMuscle){
   function renderIdeasTab(){
     removeSideIndex();
     const body = overlay.querySelector('#pickerBody');
-    // Derived from the data rather than hardcoded, so adding a new
-    // sub-category to the library later doesn't also require touching
-    // this render function.
-    const subCatOrder = ['Pull', 'Push', 'Legs', 'Core'];
-    const presentSubs = subCatOrder.filter(c => HOME_GYM_IDEAS.some(i => i.sub === c));
-    const subCats = ['All', ...presentSubs];
-    const filtered = ideaFilter === 'All' ? HOME_GYM_IDEAS : HOME_GYM_IDEAS.filter(i => i.sub === ideaFilter);
+    // The filter chips and the section headers must always describe the
+    // SAME categorization, or tapping a chip and reading the header above it
+    // tell two different stories. groupKeyOf is the single source both the
+    // chip list and the sections are built from, so they can't drift apart.
+    const groupKeyOf = (idea) => ideaGroupBy === 'muscle'
+      ? fineMuscleCategory(idea.muscle, idea.name)
+      : (EQUIPMENT_GROUP_LABEL[idea.measurementType] || 'Other');
 
-    // Group into sections. Equipment answers "what do I need for this";
-    // Muscle reuses the exact same fineMuscleCategory logic the main Lift
-    // screen's Muscle view uses, driven off a hand-authored muscle per idea
-    // rather than fuzzy database matching - that already caused real bugs
-    // earlier for custom "Banded X" names with no strong database match.
+    // Filter options come from the FULL library, not the already-filtered
+    // list, so every chip stays available regardless of which one is
+    // currently active - picking "Biceps" shouldn't make "Lats" disappear
+    // from the row entirely.
+    const allKeysInOrder = [];
+    HOME_GYM_IDEAS.forEach(idea => { const k = groupKeyOf(idea); if (!allKeysInOrder.includes(k)) allKeysInOrder.push(k); });
+    const filterOptions = ['All', ...allKeysInOrder];
+
+    const filtered = ideaFilter === 'All' ? HOME_GYM_IDEAS : HOME_GYM_IDEAS.filter(idea => groupKeyOf(idea) === ideaFilter);
+
     const groups = {};
-    filtered.forEach(idea => {
-      const key = ideaGroupBy === 'muscle'
-        ? fineMuscleCategory(idea.muscle, idea.name)
-        : (EQUIPMENT_GROUP_LABEL[idea.measurementType] || 'Other');
-      (groups[key] = groups[key] || []).push(idea);
-    });
-    // Order of first appearance in the source array, rather than
-    // alphabetical - keeps a sensible Pull->Push->Legs->Core-ish flow
-    // instead of "Abdominals" landing before "Biceps" for no useful reason.
-    const orderedKeys = [];
-    filtered.forEach(idea => {
-      const key = ideaGroupBy === 'muscle'
-        ? fineMuscleCategory(idea.muscle, idea.name)
-        : (EQUIPMENT_GROUP_LABEL[idea.measurementType] || 'Other');
-      if (!orderedKeys.includes(key)) orderedKeys.push(key);
-    });
+    filtered.forEach(idea => { const key = groupKeyOf(idea); (groups[key] = groups[key] || []).push(idea); });
+    const orderedKeys = allKeysInOrder.filter(k => groups[k]);
 
     const sectionsHtml = orderedKeys.map(key => `
       <div class="category" style="font-size:14px; padding:14px 18px 6px 18px;">${key}</div>
@@ -5784,8 +5775,8 @@ async function openPicker(initialTab, jumpToMuscle){
     body.innerHTML = `
       <div class="small" style="padding:10px 18px 8px 18px; color:var(--slate); line-height:1.5;">Bands, push-up handles and bodyweight only - built to fit a hotel room or a small space. Tap + to add and log straight away.</div>
       ${groupByToggleHtml(ideaGroupBy)}
-      <div class="chip-row" style="padding:0 18px 10px 18px;">
-        ${subCats.map(c => `<div class="chip ${c===ideaFilter?'active':''}" data-idea-filter="${c}">${c}</div>`).join('')}
+      <div class="chip-row" style="padding:0 18px 10px 18px; flex-wrap:wrap;">
+        ${filterOptions.map(c => `<div class="chip ${c===ideaFilter?'active':''}" data-idea-filter="${c}">${c}</div>`).join('')}
       </div>
       ${sectionsHtml}
     `;
@@ -5793,7 +5784,14 @@ async function openPicker(initialTab, jumpToMuscle){
       chip.onclick = () => { ideaFilter = chip.dataset.ideaFilter; renderIdeasTab(); };
     });
     body.querySelectorAll('[data-groupby]').forEach(chip => {
-      chip.onclick = () => { ideaGroupBy = chip.dataset.groupby; renderIdeasTab(); };
+      chip.onclick = () => {
+        // A filter chip only means something within the grouping mode that
+        // produced it - "Pull" or "Biceps" from one mode is meaningless once
+        // the categorization underneath it has changed entirely.
+        ideaGroupBy = chip.dataset.groupby;
+        ideaFilter = 'All';
+        renderIdeasTab();
+      };
     });
     body.querySelectorAll('.idea-add-btn').forEach(btn => {
       btn.onclick = () => addIdeaExercise(HOME_GYM_IDEAS[parseInt(btn.dataset.idx, 10)]);
