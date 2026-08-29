@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.220';
+const APP_VERSION = 'Beta 5.221';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -2242,10 +2242,15 @@ function openEquipmentSubPage(){
         <div><div>Resistance Bands</div><div class="small" style="color:var(--slate); margin-top:2px;" id="bandCountLabel">—</div></div>
         <div class="chev" style="margin-top:2px;">›</div>
       </div>
+      <div class="me-item" id="subWorkoutIdeasBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px; border:1px solid rgba(201,162,39,0.3);">
+        <div><div>Workout Ideas</div><div class="small" style="color:var(--slate); margin-top:2px;">Home &amp; travel exercises using what you own</div></div>
+        <div class="chev" style="margin-top:2px;">›</div>
+      </div>
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#closeEquip').onclick = () => overlay.remove();
   overlay.querySelector('#subMyBandsBtn').onclick = () => openMyBandsScreen();
+  overlay.querySelector('#subWorkoutIdeasBtn').onclick = () => { overlay.remove(); openPicker('ideas'); };
   loadBands().then(bands => {
     const el = document.getElementById('bandCountLabel');
     if (el) el.textContent = bands.length
@@ -4432,6 +4437,7 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
       <div class="category">Quick Add — Common for ${effectiveDayTypeLabel}</div>
       ${starters.map(s => `<div class="pick-row starter-add" data-name="${s.name}" data-cat="${s.category}"><div class="ex-name">${s.name}</div><div class="chev" style="color:var(--flame); font-size:20px;">+</div></div>`).join('')}
       <div style="padding:14px 18px;"><button class="btn-primary" id="emptyAddBtn">+ Add a Different Exercise</button></div>
+      <div style="padding:0 18px 8px 18px;"><button class="btn-primary" id="browseIdeasBtn" style="width:100%; background:var(--brass); color:var(--ink);">Browse workout ideas</button></div>
       <div style="padding:0 18px 14px 18px;"><button class="btn-primary" id="logOffPlanBtn" style="width:100%; background:var(--panel); color:var(--chalk); border:1px solid var(--line);">Log something off-plan</button></div>`;
   } else if (visibleExercises.length === 0 && currentLocationId){
     // The user HAS exercises on this day, but every one of them is tagged
@@ -4643,6 +4649,8 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   if (clearLocBtn) clearLocBtn.onclick = () => openLocationPicker(allLocations, currentLocationId);
   const offPlanBtn = document.getElementById('logOffPlanBtn');
   if (offPlanBtn) offPlanBtn.onclick = () => openPicker('offplan');
+  const browseIdeasBtn = document.getElementById('browseIdeasBtn');
+  if (browseIdeasBtn) browseIdeasBtn.onclick = () => openPicker('ideas');
   document.querySelectorAll('.starter-add').forEach(el => {
     el.onclick = () => quickAddStarter(el.dataset.name, el.dataset.cat, state.selectedDay);
   });
@@ -5562,6 +5570,7 @@ async function openPicker(initialTab, jumpToMuscle){
     <div style="display:flex; padding:0 18px; border-bottom:1px solid var(--line);">
       <div class="picker-toptab" data-tab="mine" style="flex:1; text-align:center; padding:10px 0; font-family:'Oswald',sans-serif; font-size:12px; text-transform:uppercase; letter-spacing:0.5px; color:var(--slate); border-bottom:2px solid transparent; cursor:pointer;">Your Exercises</div>
       <div class="picker-toptab" data-tab="database" style="flex:1; text-align:center; padding:10px 0; font-family:'Oswald',sans-serif; font-size:12px; text-transform:uppercase; letter-spacing:0.5px; color:var(--slate); border-bottom:2px solid transparent; cursor:pointer;">Database</div>
+      <div class="picker-toptab" data-tab="ideas" style="flex:1; text-align:center; padding:10px 0; font-family:'Oswald',sans-serif; font-size:12px; text-transform:uppercase; letter-spacing:0.5px; color:var(--slate); border-bottom:2px solid transparent; cursor:pointer;">Ideas</div>
     </div>
     <div class="overlay-scroll" id="pickerBody"></div>`;
   document.body.appendChild(overlay);
@@ -5620,6 +5629,69 @@ async function openPicker(initialTab, jumpToMuscle){
     overlay.querySelector('#selectionAdd').onclick = onAdd;
     if (onDelete) overlay.querySelector('#selectionDelete').onclick = onDelete;
     if (onRename && count === 1) overlay.querySelector('#selectionRename').onclick = onRename;
+  }
+
+  let ideaFilter = 'All';
+  function renderIdeasTab(){
+    removeSideIndex();
+    const body = overlay.querySelector('#pickerBody');
+    const subCats = ['All', 'Push', 'Pull', 'Legs', 'Core'];
+    const filtered = ideaFilter === 'All' ? HOME_GYM_IDEAS : HOME_GYM_IDEAS.filter(i => i.sub === ideaFilter);
+    body.innerHTML = `
+      <div class="small" style="padding:10px 18px 8px 18px; color:var(--slate); line-height:1.5;">Bands, push-up handles and bodyweight only - built to fit a hotel room or a small space. Tap + to add and log straight away.</div>
+      <div class="chip-row" style="padding:0 18px 10px 18px;">
+        ${subCats.map(c => `<div class="chip ${c===ideaFilter?'active':''}" data-idea-filter="${c}">${c}</div>`).join('')}
+      </div>
+      ${filtered.map((idea, i) => `
+        <div class="ex-card" data-idea-idx="${HOME_GYM_IDEAS.indexOf(idea)}" style="margin:0 18px 9px 18px; background:var(--panel); border-radius:12px; padding:12px 14px;">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
+            <div style="flex:1;">
+              <div class="ex-name" style="font-size:13.5px;">${idea.name}</div>
+              ${idea.usesDoorAnchor ? `<div style="font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--brass); margin-top:3px;">🚪 Door anchor — ${idea.anchorLevel}</div>` : ''}
+              <div class="small" style="color:var(--slate); margin-top:5px; line-height:1.5;">${idea.hint}</div>
+            </div>
+            <button class="idea-add-btn" data-idx="${HOME_GYM_IDEAS.indexOf(idea)}" style="width:30px; height:30px; border-radius:9px; background:rgba(255,107,26,0.15); color:var(--flame); border:1px solid rgba(255,107,26,0.35); font-size:16px; flex-shrink:0;">+</button>
+          </div>
+        </div>`).join('')}
+    `;
+    body.querySelectorAll('[data-idea-filter]').forEach(chip => {
+      chip.onclick = () => { ideaFilter = chip.dataset.ideaFilter; renderIdeasTab(); };
+    });
+    body.querySelectorAll('.idea-add-btn').forEach(btn => {
+      btn.onclick = () => addIdeaExercise(HOME_GYM_IDEAS[parseInt(btn.dataset.idx, 10)]);
+    });
+  }
+
+  async function addIdeaExercise(idea){
+    const userData = { user: await getCurrentUser() };
+    if (!userData.user) return;
+    // Reuse an existing exercise of the same name if one exists, same
+    // dedup logic used everywhere else an exercise gets created - so
+    // re-adding "Band Squats" from a second trip lands on the same history
+    // rather than starting a parallel record.
+    const compatEx = await fetchAllExercisesCompat(userData.user.id);
+    const existing = compatEx.find(ex => ex.weekday === state.selectedDay && ex.name.toLowerCase() === idea.name.toLowerCase());
+    if (existing){
+      removeSideIndex(); overlay.remove();
+      openLogForm(existing.id, existing.name);
+      return;
+    }
+    // Same location rule as everywhere else an exercise gets created: never
+    // auto-tag a location on Anytime, since the whole point of that slot is
+    // not being tied to one place - default to today's location on a real
+    // weekday, same as the New Exercise form already does.
+    const locId = isAnyDay(state.selectedDay) ? null : effectiveLocationId();
+    const { data: inserted, error } = await createExerciseForToday({
+      user_id: userData.user.id, name: idea.name,
+      category: idea.measurementType === 'band' ? 'Bands' : 'Other',
+      weekday: state.selectedDay, alt_group_id: null,
+      measurement_type: idea.measurementType === 'weight' ? null : idea.measurementType,
+      uses_door_anchor: idea.usesDoorAnchor, door_anchor_level: idea.anchorLevel,
+      location_ids: locId ? [locId] : null
+    });
+    if (error){ alert(error.message); return; }
+    removeSideIndex(); overlay.remove();
+    openLogForm(inserted[0].id, idea.name, true);
   }
 
   function renderMineTab(){
@@ -6086,13 +6158,18 @@ async function openPicker(initialTab, jumpToMuscle){
       tab.classList.add('active'); tab.style.color = 'var(--chalk)'; tab.style.borderBottomColor = 'var(--flame)';
       overlay.querySelector('#pickerBody').scrollTop = 0;
       selection.active = false; selection.items.clear(); renderSelectionBar();
-      if (tab.dataset.tab === 'mine') renderMineTab(); else renderDatabaseTab();
+      if (tab.dataset.tab === 'mine') renderMineTab();
+      else if (tab.dataset.tab === 'ideas') renderIdeasTab();
+      else renderDatabaseTab();
     };
   });
 
-  const startTab = overlay.querySelector(`.picker-toptab[data-tab="${initialTab === 'database' ? 'database' : 'mine'}"]`);
+  const startTabName = initialTab === 'database' ? 'database' : initialTab === 'ideas' ? 'ideas' : 'mine';
+  const startTab = overlay.querySelector(`.picker-toptab[data-tab="${startTabName}"]`);
   startTab.classList.add('active'); startTab.style.color = 'var(--chalk)'; startTab.style.borderBottomColor = 'var(--flame)';
-  if (initialTab === 'database') renderDatabaseTab(); else renderMineTab();
+  if (startTabName === 'database') renderDatabaseTab();
+  else if (startTabName === 'ideas') renderIdeasTab();
+  else renderMineTab();
 }
 
 // ---------- AUTO ALT GROUP REVIEW ----------
@@ -8994,6 +9071,41 @@ function openTimer(){
   paintSoundBtns();
   paint();
 }
+
+// A small curated library of home/travel exercises using only bands, push-up
+// handles and bodyweight - the stuff that fits in a hotel room or a mate's
+// living room. Static content, not fetched from anywhere, since it's small
+// and specific to exactly the equipment this app already knows about.
+// subCategory drives the filter chips; noAnchor exists as its own flag
+// (rather than deriving it from !usesDoorAnchor) purely for filter clarity.
+const HOME_GYM_IDEAS = [
+  { name:'Band Pulldown', sub:'Pull', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 5',
+    hint:'Anchor at the top of a door. Kneel or sit facing it, pull down to chest height - closest band substitute for a pull-up or lat pulldown.' },
+  { name:'Doorway Row', sub:'Pull', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
+    hint:'No anchor needed - loop the band around a solid door frame or heavy furniture leg at chest height and row toward you.' },
+  { name:'Band Face Pull', sub:'Pull', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 3',
+    hint:'Anchor at chest height. Pull toward your face, elbows high - the one most home setups skip and shoulders miss most.' },
+  { name:'Handle Push-Ups', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Push-up handles let your wrists stay neutral through a deeper range than flat-palm push-ups.' },
+  { name:'Band Chest Press', sub:'Push', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 3',
+    hint:'Anchor behind you at chest height, band running under your arms - presses forward like a cable chest press.' },
+  { name:'Band Overhead Press', sub:'Push', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Stand on the band, press overhead - no anchor needed, just floor space to stand.' },
+  { name:'Band Squats', sub:'Legs', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Stand on the band, handles at shoulder height, squat as normal - the band adds resistance through the whole range.' },
+  { name:'Band Romanian Deadlift', sub:'Legs', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Stand on the band, hinge at the hips - closest band substitute for a barbell RDL.' },
+  { name:'Walking Lunges', sub:'Legs', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Needs a few metres of clear floor - the one exercise here that genuinely wants a bit of room.' },
+  { name:'Band Bicep Curl', sub:'Pull', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Stand on the band, curl as normal.' },
+  { name:'Band Tricep Pushdown', sub:'Push', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 5',
+    hint:'Anchor at the top of a door, push down - closest band substitute for a cable pushdown.' },
+  { name:'Plank', sub:'Core', measurementType:'time', usesDoorAnchor:false, anchorLevel:null,
+    hint:'No equipment at all - the one entry here that costs nothing to add.' },
+  { name:'Band Pallof Press', sub:'Core', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 3',
+    hint:'Anchor at chest height, stand side-on, press straight out and resist the rotation - genuinely hard to replicate any other way at home.' }
+];
 
 // How an exercise is measured. Null in the database means 'weight', so every
 // exercise that existed before this feature keeps working untouched.
