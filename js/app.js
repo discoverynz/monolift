@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.222';
+const APP_VERSION = 'Beta 5.223';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -4682,6 +4682,7 @@ function showExerciseActionsMenu(exerciseId, exerciseName){
       <div class="me-item" id="menuRename" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Rename Exercise</div><div class="chev">›</div></div>
       <div class="me-item" id="menuEditAlt" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Edit Alt Group</div><div class="chev">›</div></div>
       <div class="me-item" id="menuEditCategory" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Edit Category</div><div class="chev">›</div></div>
+      <div class="me-item" id="menuEditMeasurement" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>How It's Measured</div><div class="chev">›</div></div>
       <div class="me-item" id="menuEditMuscle" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Edit Muscle Group</div><div class="chev">›</div></div>
       <div class="me-item" id="menuEditLoc" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Edit Push/Pull/Upper/Lower/Location</div><div class="chev">›</div></div>
       <div class="me-item" id="menuRemove" style="border-bottom:none; cursor:pointer;"><div style="color:var(--flame);">Remove from ${dayLabelOf(state.selectedDay)}</div><div class="chev">›</div></div>
@@ -4692,6 +4693,7 @@ function showExerciseActionsMenu(exerciseId, exerciseName){
   overlay.querySelector('#menuRename').onclick = () => { overlay.remove(); openRenameExerciseForm(exerciseId, exerciseName); };
   overlay.querySelector('#menuEditAlt').onclick = () => { overlay.remove(); openEditAltGroupForm(exerciseId, exerciseName); };
   overlay.querySelector('#menuEditCategory').onclick = () => { overlay.remove(); openEditCategoryForm(exerciseId, exerciseName); };
+  overlay.querySelector('#menuEditMeasurement').onclick = () => { overlay.remove(); openEditMeasurementForm(exerciseId, exerciseName); };
   overlay.querySelector('#menuEditMuscle').onclick = () => { overlay.remove(); openEditMuscleForm(exerciseId, exerciseName); };
   overlay.querySelector('#menuEditLoc').onclick = () => { overlay.remove(); openEditTagsForm(exerciseId, exerciseName); };
   overlay.querySelector('#menuRemove').onclick = () => { overlay.remove(); confirmRemoveExercise(exerciseId, exerciseName); };
@@ -4853,6 +4855,102 @@ function openEditMuscleForm(exerciseId, exerciseName){
   overlay.querySelectorAll('.chip[data-muscle]').forEach(chip => {
     chip.onclick = () => apply(chip.dataset.muscle);
   });
+}
+
+// Lets the measurement type (and door anchor info) be corrected after the
+// fact - previously the only way to fix a wrongly-typed exercise, or add
+// anchor info that was skipped at creation time, was to delete and recreate
+// it, which orphans all its logged history under a new exercise_master row.
+// This is also what actually lets someone hit the reclassification scenario
+// the Beta 5.220 quick-save guard defends against - before this, the app had
+// defensive code for a path the UI provided no way to trigger.
+function openEditMeasurementForm(exerciseId, exerciseName){
+  let selectedType = 'weight';
+  let usesDoorAnchor = false;
+  let selectedLevel = null;
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeMeasEdit">✕</button><h1>How It's Measured</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll">
+      <div class="field-label" style="padding-top:0;">${exerciseName}</div>
+      <div class="small" style="padding:0 18px 10px 18px; color:var(--slate); line-height:1.5;">Changing this only affects how new sets are logged and displayed - nothing about your existing history is rewritten or reinterpreted.</div>
+      <div class="chip-row" id="editMeasChipRow">
+        ${MEASUREMENT_TYPES.map(m => `<div class="chip" data-mt="${m.key}">${m.label}</div>`).join('')}
+      </div>
+      <div id="editDoorAnchorArea" style="display:none;">
+        <div class="toggle-row" id="editDoorAnchorToggleRow">
+          <div style="flex:1;">
+            <div class="toggle-row-title">Uses a door anchor</div>
+            <div class="toggle-row-sub">A lot of band and tube exercises loop through a door anchor.</div>
+          </div>
+          <button class="switch off" id="editDoorAnchorSwitch"></button>
+        </div>
+        <div id="editAnchorLevelArea" style="display:none;">
+          <div class="field-label">Anchor Height <span class="opt">(optional)</span></div>
+          <div class="anchor-level-row" id="editAnchorLevelRow">
+            ${[1,2,3,4,5].map(n => `<button class="anchor-level-btn" data-level="${n}">${n}</button>`).join('')}
+          </div>
+          <div class="small" style="padding:0 18px 8px 18px; color:var(--slate); display:flex; justify-content:space-between; max-width:260px;">
+            <span>↑ Top</span><span>Bottom ↓</span>
+          </div>
+        </div>
+      </div>
+      <button class="save-btn" id="saveMeasBtn">Save</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeMeasEdit').onclick = () => overlay.remove();
+
+  const applyMeasChip = () => {
+    overlay.querySelectorAll('#editMeasChipRow .chip').forEach(c => c.classList.toggle('active', c.dataset.mt === selectedType));
+    overlay.querySelector('#editDoorAnchorArea').style.display = selectedType === 'band' ? 'block' : 'none';
+  };
+  const applyAnchorState = () => {
+    overlay.querySelector('#editDoorAnchorSwitch').classList.toggle('off', !usesDoorAnchor);
+    overlay.querySelector('#editAnchorLevelArea').style.display = usesDoorAnchor ? 'block' : 'none';
+    overlay.querySelectorAll('.anchor-level-btn').forEach(b => b.classList.toggle('active', parseInt(b.dataset.level,10) === selectedLevel));
+  };
+  overlay.querySelectorAll('#editMeasChipRow .chip').forEach(el => {
+    el.onclick = () => { selectedType = el.dataset.mt; applyMeasChip(); };
+  });
+  overlay.querySelector('#editDoorAnchorSwitch').onclick = () => { usesDoorAnchor = !usesDoorAnchor; applyAnchorState(); };
+  overlay.querySelectorAll('.anchor-level-btn').forEach(btn => {
+    btn.onclick = () => {
+      const level = parseInt(btn.dataset.level, 10);
+      selectedLevel = (selectedLevel === level) ? null : level;
+      applyAnchorState();
+    };
+  });
+
+  (async () => {
+    const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+    const r = await withTimeout(
+      supabaseClient.from(table).select('measurement_type, uses_door_anchor, door_anchor_level').eq('id', exerciseId).maybeSingle(), 15000);
+    if (!r.__timeout && !r.error && r.data){
+      selectedType = r.data.measurement_type || 'weight';
+      usesDoorAnchor = !!r.data.uses_door_anchor;
+      selectedLevel = r.data.door_anchor_level ? parseInt(String(r.data.door_anchor_level).replace(/\D/g,''), 10) || null : null;
+    }
+    applyMeasChip();
+    applyAnchorState();
+  })();
+
+  overlay.querySelector('#saveMeasBtn').onclick = async () => {
+    await withButtonLoading(overlay.querySelector('#saveMeasBtn'), 'Saving…', async () => {
+      const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+      const payload = {
+        measurement_type: selectedType === 'weight' ? null : selectedType,
+        uses_door_anchor: selectedType === 'band' ? usesDoorAnchor : false,
+        door_anchor_level: (selectedType === 'band' && usesDoorAnchor && selectedLevel) ? `Level ${selectedLevel}` : null
+      };
+      const { error } = await supabaseClient.from(table).update(payload).eq('id', exerciseId);
+      if (error){ alert(error.message); return; }
+      invalidateTrackSnapshots();
+      warmInvalidate();
+      overlay.remove();
+      if (state.currentTab === 'track') renderTrack();
+    });
+  };
 }
 
 function openEditCategoryForm(exerciseId, exerciseName){
