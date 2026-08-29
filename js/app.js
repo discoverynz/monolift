@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.225';
+const APP_VERSION = 'Beta 5.226';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -2971,7 +2971,7 @@ async function openMergeDuplicateExercisesScreen(){
   }
 
   const [mastersResult, daysResult] = await Promise.all([
-    withTimeout(supabaseClient.from('exercise_master').select('id, name, created_at').eq('user_id', uid), 15000),
+    withTimeout(supabaseClient.from('exercise_master').select('id, name, created_at, measurement_type, uses_door_anchor, door_anchor_level').eq('user_id', uid), 15000),
     withTimeout(supabaseClient.from('exercise_days').select('id, exercise_master_id, weekday').eq('user_id', uid), 15000)
   ]);
   if (mastersResult.__timeout || mastersResult.error){
@@ -3010,11 +3010,34 @@ async function openMergeDuplicateExercisesScreen(){
         for (const group of dupeGroups){
           // Survivor: whichever copy has the most day-placements, tiebroken by
           // being first in the list (stable, not meaningful beyond determinism).
+          // Day-placement count says nothing about which copy was actually
+          // configured properly - a duplicate could easily have more
+          // placements while a DIFFERENT copy is the one someone deliberately
+          // set up as Band with a door anchor. Deleting that copy without
+          // checking would permanently lose the only record of that setup,
+          // since exercise_master rows are hard-deleted below, not archived.
           const survivor = group.slice().sort((a, b) => (daysByMaster[b.id]||[]).length - (daysByMaster[a.id]||[]).length)[0];
           const survivorDayweekdays = new Set((daysByMaster[survivor.id]||[]).map(d => d.weekday));
           const duplicates = group.filter(m => m.id !== survivor.id);
+          // Tracks whether the survivor's own measurement setup is real, so
+          // that at most one duplicate's configuration gets adopted rather
+          // than the last-processed one silently overwriting an earlier
+          // reconciliation within the same merge.
+          let survivorHasRealSetup = !!survivor.measurement_type;
           for (const dup of duplicates){
             try {
+              // If this duplicate carries real setup that the survivor
+              // doesn't have, adopt it onto the survivor before the
+              // duplicate's row is deleted - otherwise that configuration
+              // has no other record anywhere and is gone permanently.
+              if (!survivorHasRealSetup && dup.measurement_type){
+                await supabaseClient.from('exercise_master').update({
+                  measurement_type: dup.measurement_type,
+                  uses_door_anchor: !!dup.uses_door_anchor,
+                  door_anchor_level: dup.door_anchor_level || null
+                }).eq('id', survivor.id);
+                survivorHasRealSetup = true;
+              }
               // Reassign this duplicate's logged sets onto the survivor - this is
               // the actual history, so it has to move, not just get dropped.
               await supabaseClient.from('sets').update({ exercise_master_id: survivor.id }).eq('exercise_master_id', dup.id);
