@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.227';
+const APP_VERSION = 'Beta 5.228';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1158,6 +1158,44 @@ function detectWeightStagnation(setsForExercise){
   return mostRecentWeight <= oldestWeight + 0.01;
 }
 
+// The band equivalent of detectWeightStagnation, but inverted in spirit -
+// weight staying flat is the bad signal there; for bands there's no
+// continuous number to increase, so the useful signal is reps CLIMBING on a
+// band that hasn't changed. That's what actually indicates the current band
+// has gotten too light, rather than "reps happen to be high" on a
+// genuinely hard exercise (which wouldn't be climbing at all).
+function detectBandProgressionReady(setsForExercise){
+  const byDate = {};
+  setsForExercise.forEach(s => {
+    if (s.measurement_type !== 'band' && s.weight_unit !== 'band') return;
+    if (!s.band_snapshot || !s.band_snapshot.length) return;
+    const bandKey = s.band_snapshot.map(b => b.id || b.label).sort().join('+');
+    const reps = Number(s.reps) || 0;
+    if (!byDate[s.logged_at] || reps > byDate[s.logged_at].reps){
+      byDate[s.logged_at] = { reps, bandKey, bandLabel: s.band_snapshot.map(b => b.label).join(' + ') };
+    }
+  });
+  const today = todayStr();
+  const priorSessions = Object.entries(byDate)
+    .filter(([date]) => date !== today)
+    .sort((a,b) => b[0].localeCompare(a[0]))
+    .slice(0, 4)
+    .map(([, v]) => v);
+  if (priorSessions.length < 3) return null;
+  // If the band itself already changed across these sessions, the person
+  // has already progressed on their own - nothing useful to say here.
+  if (new Set(priorSessions.map(p => p.bandKey)).size > 1) return null;
+  const oldest = priorSessions[priorSessions.length - 1];
+  const mostRecent = byDate[today] !== undefined ? byDate[today] : priorSessions[0];
+  if (mostRecent.bandKey !== oldest.bandKey) return null;
+  // Both conditions together, not either alone: genuinely climbing (not
+  // just consistently high) AND comfortably past a normal working rep range.
+  if (mostRecent.reps >= 15 && mostRecent.reps > oldest.reps){
+    return { bandLabel: mostRecent.bandLabel, reps: mostRecent.reps };
+  }
+  return null;
+}
+
 async function loadExercisesFromMaster(generation){
   const isStale = () => generation !== undefined && state.renderGeneration !== generation;
   const userData = { user: await getCurrentUser() };
@@ -1251,13 +1289,14 @@ async function loadExercisesFromMaster(generation){
     allSets.forEach(s => { if (s.logged_at === targetInfo.doneDateStr) loggedOnTargetByExId.add(s.exercise_master_id); });
   }
 
-  const withLogs = exercises.map(ex => {
+const withLogs = exercises.map(ex => {
     const lastSet = lastSetByExercise[ex.id] || null;
     const loggedToday = loggedOnTargetByExId.has(ex.id);
     const maxSet = maxSetByExercise[ex.id] || null;
     const showPr = maxSet && lastSet && maxSet.logged_at !== lastSet.logged_at;
     const stagnant = detectWeightStagnation(setsByExerciseId[ex.id] || []);
-    return { ...ex, lastSet, loggedToday, maxSet, showPr, stagnant };
+    const bandReady = detectBandProgressionReady(setsByExerciseId[ex.id] || []);
+    return { ...ex, lastSet, loggedToday, maxSet, showPr, stagnant, bandReady };
   });
 
   const doneGroupMember = {};
@@ -2071,6 +2110,12 @@ function exerciseRow(ex){
   const stagnantNote = ex.stagnant
     ? `<div style="font-size:10.5px; color:#E8A33D; margin-top:8px; display:flex; align-items:center; gap:5px;"><span>📈</span>Same weight a few sessions running — try increasing</div>`
     : '';
+  // Band equivalent of the stagnation note above - climbing reps on an
+  // unchanged band is the band version of "time to increase", since there's
+  // no continuous weight number to watch instead.
+  const bandReadyNote = ex.bandReady
+    ? `<div style="font-size:10.5px; color:#8FBF7A; margin-top:8px; display:flex; align-items:center; gap:5px;"><span>💪</span>${ex.bandReady.reps} reps on ${ex.bandReady.bandLabel} — might be time to move up a level</div>`
+    : '';
 
   // Door anchor setup, visible on the row itself rather than only inside the
   // log form - the whole point of recording it once is not having to open
@@ -2086,6 +2131,7 @@ function exerciseRow(ex){
       ${anchorTag}
       ${subtitle}
       ${stagnantNote}
+      ${bandReadyNote}
     </div>
     ${showCheck ? `<div class="check-circle">${ICON_CHECK}</div>` : (hasQuickButtons || isDone ? '' : `<div class="chev">›</div>`)}
   </div>`;
