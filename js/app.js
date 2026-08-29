@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.226';
+const APP_VERSION = 'Beta 5.227';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -5754,6 +5754,7 @@ async function openPicker(initialTab, jumpToMuscle){
 
   let ideaFilter = 'All';
   let ideaGroupBy = 'equipment';
+  let showKitRecs = false;
   const EQUIPMENT_GROUP_LABEL = { band: 'Bands', bodyweight: 'Bodyweight', time: 'Timed Holds' };
   function renderIdeasTab(){
     removeSideIndex();
@@ -5797,12 +5798,29 @@ async function openPicker(initialTab, jumpToMuscle){
 
     body.innerHTML = `
       <div class="small" style="padding:10px 18px 8px 18px; color:var(--slate); line-height:1.5;">Bands, push-up handles and bodyweight only - built to fit a hotel room or a small space. Tap + to add and log straight away.</div>
+      <div style="margin:0 18px 12px 18px; background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden;">
+        <button id="kitRecsToggle" style="width:100%; display:flex; justify-content:space-between; align-items:center; padding:11px 13px; background:none; border:none; color:var(--chalk); text-align:left;">
+          <span style="font-family:'Oswald',sans-serif; font-size:12.5px;">💡 Want a more complete home setup?</span>
+          <span style="color:var(--slate); font-size:13px;">${showKitRecs ? '▲' : '▼'}</span>
+        </button>
+        ${showKitRecs ? `
+        <div style="padding:0 13px 13px 13px; font-size:12px; color:var(--slate); line-height:1.65;">
+          Bands and handles genuinely cover push, pull, legs and core - nothing here needs more than that. But if you're settling somewhere for a while and want to add one or two things, in order of value:
+          <br><br><b style="color:var(--chalk);">1. A doorway pull-up bar.</b> Band Pulldown is a good substitute, but a real pull-up trains grip and full-body tension a band can't replicate. The single highest-value addition if your ceiling and door frame allow it.
+          <br><br><b style="color:var(--chalk);">2. A pair of adjustable dumbbells.</b> The main thing bands can't do is genuine progressive overload with a precise, repeatable number - a band's resistance is a level, not a measured weight. One compact adjustable pair covers presses, rows, curls and squats with real numbers to track.
+          <br><br><b style="color:var(--chalk);">3. An adjustable bench.</b> Unlocks proper incline and flat pressing angles, plus step-ups and single-leg work - the piece that turns a floor-and-doorway setup into something closer to a real gym.
+          <br><br><b style="color:var(--chalk);">4. A kettlebell.</b> One bell covers swings, goblet squats and rows in a single compact object - good value if space for a full dumbbell set genuinely isn't there.
+          <br><br>In that order, each one earns its place before moving to the next - there's rarely a good reason to own three kettlebells before owning one adjustable dumbbell.
+        </div>` : ''}
+      </div>
       ${groupByToggleHtml(ideaGroupBy)}
       <div class="chip-row" style="padding:0 18px 10px 18px; flex-wrap:wrap;">
         ${filterOptions.map(c => `<div class="chip ${c===ideaFilter?'active':''}" data-idea-filter="${c}">${c}</div>`).join('')}
       </div>
       ${sectionsHtml}
     `;
+    const kitToggle = body.querySelector('#kitRecsToggle');
+    if (kitToggle) kitToggle.onclick = () => { showKitRecs = !showKitRecs; renderIdeasTab(); };
     body.querySelectorAll('[data-idea-filter]').forEach(chip => {
       chip.onclick = () => { ideaFilter = chip.dataset.ideaFilter; renderIdeasTab(); };
     });
