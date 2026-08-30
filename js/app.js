@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.239';
+const APP_VERSION = 'Beta 5.240';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1396,6 +1396,23 @@ async function insertExerciseSafely(payload){
 // old-style per-day rows unconditionally, and passing that id into the log
 // form under the new structure caused a foreign key violation the moment
 // someone tried to save a set, since that id doesn't exist in exercise_master.
+// fetchAllExercisesCompat returns one row PER DAY PLACEMENT - the same
+// exercise on three different days appears three times, each with a
+// different (day-link) id but the same masterId. Any screen that wants to
+// show or count real, distinct exercises rather than day-placements needs
+// this collapse first. Extracted as its own function rather than
+// reimplemented per screen, since a second divergent copy of this exact
+// logic already caused a real duplicate-rows bug in the equipment screen.
+function dedupeByMasterId(compatList){
+  const seen = new Set();
+  return (compatList || []).filter(ex => {
+    const key = ex.masterId || ex.id;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 async function fetchAllExercisesCompat(uid){
   // Wait for the master-flag heal to complete before deciding which schema
   // to read from. Without this, callers like the reorganizer or merge
@@ -2274,11 +2291,24 @@ function openLocationSubPage(){
         <div><div>Assign Exercises</div><div class="small" style="color:var(--slate); margin-top:2px;">Tell the app which exercises exist where, gym by gym</div></div>
         <div class="chev" style="margin-top:2px;">›</div>
       </div>
+      <div class="me-item" id="subUnconfirmedBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+        <div><div>Check for Unconfirmed Exercises</div><div class="small" style="color:var(--slate); margin-top:2px;" id="unconfirmedCountLabel">Exercises never explicitly given a location - checking…</div></div>
+        <div class="chev" style="margin-top:2px;">›</div>
+      </div>
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#closeLocSubPage').onclick = () => overlay.remove();
   overlay.querySelector('#subDefaultLocationBtn').onclick = () => openDefaultLocationPicker();
   overlay.querySelector('#subBulkLocationBtn').onclick = () => openBulkLocationAssign();
+  overlay.querySelector('#subUnconfirmedBtn').onclick = () => openUnconfirmedLocationsScreen();
+  (async () => {
+    const all = await fetchAllExercisesCompat((await getCurrentUser()).id);
+    const unconfirmed = dedupeByMasterId(all).filter(ex => !ex.location_confirmed);
+    const label = overlay.querySelector('#unconfirmedCountLabel');
+    if (label) label.textContent = unconfirmed.length
+      ? `${unconfirmed.length} exercise${unconfirmed.length===1?'':'s'} never explicitly given a location`
+      : 'Every exercise has an explicit location on record';
+  })();
 
   async function renderList(){
     const listArea = overlay.querySelector('#locSubList');
@@ -3627,14 +3657,7 @@ function openEditLocationEquipmentScreen(locationId, locationName, currentTags, 
   (async () => {
     const userData = { user: await getCurrentUser() };
     if (!userData.user) return;
-    const compat = await fetchAllExercisesCompat(userData.user.id);
-    const seen = new Set();
-    myExercises = compat.filter(ex => {
-      const key = ex.masterId || ex.id;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+    myExercises = dedupeByMasterId(await fetchAllExercisesCompat(userData.user.id));
     renderMachines();
   })();
 
@@ -5221,7 +5244,60 @@ function openEditMuscleForm(exerciseId, exerciseName){
 // an explicit, deliberate edit - the selection made here is the definitive
 // answer and fully replaces whatever was stored before, including removing
 // a wrong tag outright.
-function openEditLocationsForm(exerciseId, exerciseName){
+// Surfaces every exercise that's never had an explicit location decision
+// recorded - the exact class of landmine the whole location_confirmed
+// system exists to prevent, but without this screen the only way to find
+// one is waiting for the log form to happen to ask about it, one exercise
+// at a time, whenever it's next logged. This lets it be reviewed all at
+// once instead.
+async function openUnconfirmedLocationsScreen(){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeUnconfirmed">✕</button><h1>Unconfirmed Locations</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll">
+      <div class="small" style="padding:8px 18px 14px 18px; color:var(--slate); line-height:1.55;">These exercises predate location tagging and were never explicitly asked. Their current tag below is whatever it happened to end up as - it may already be correct, or it may be exactly the kind of silent mistake this screen exists to catch.</div>
+      <div id="unconfirmedList"><div class="small" style="padding:14px 18px; color:var(--slate);">Checking your library…</div></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeUnconfirmed').onclick = () => overlay.remove();
+
+  async function render(){
+    const listArea = overlay.querySelector('#unconfirmedList');
+    const userData = { user: await getCurrentUser() };
+    if (!userData.user) return;
+    const [allExercises, allLocations] = await Promise.all([
+      fetchAllExercisesCompat(userData.user.id),
+      loadLocations()
+    ]);
+    const unconfirmed = dedupeByMasterId(allExercises).filter(ex => !ex.location_confirmed);
+    if (!unconfirmed.length){
+      listArea.innerHTML = `<div class="empty-state" style="padding:26px 18px; text-align:center; line-height:1.55;">Nothing here.<br><span class="small" style="color:var(--slate);">Every exercise in your library has an explicit location on record.</span></div>`;
+      return;
+    }
+    const locNameById = {};
+    allLocations.forEach(l => { locNameById[l.id] = l.name; });
+    listArea.innerHTML = unconfirmed.map(ex => {
+      const tagLabel = (ex.location_ids && ex.location_ids.length)
+        ? ex.location_ids.map(id => locNameById[id] || 'Unknown location').join(', ')
+        : 'Everywhere';
+      return `<div class="loc-row unconfirmed-row" data-id="${ex.masterId || ex.id}" data-name="${ex.name}">
+        <div style="flex:1; min-width:0;">
+          <div class="ex-name" style="font-size:13.5px;">${ex.name}</div>
+          <div class="small" style="color:var(--slate); margin-top:2px;">Currently: ${tagLabel}</div>
+        </div>
+        <button class="loc-act" data-act="review">Review</button>
+      </div>`;
+    }).join('');
+    listArea.querySelectorAll('.unconfirmed-row .loc-act').forEach(btn => {
+      const row = btn.closest('.unconfirmed-row');
+      btn.onclick = () => openEditLocationsForm(row.dataset.id, row.dataset.name, render);
+    });
+  }
+  render();
+}
+
+function openEditLocationsForm(exerciseId, exerciseName, onSaved){
   let selectedIds = [];
   const overlay = document.createElement('div');
   overlay.className = 'overlay-screen';
@@ -5275,7 +5351,8 @@ function openEditLocationsForm(exerciseId, exerciseName){
       invalidateTrackSnapshots();
       warmInvalidate();
       overlay.remove();
-      if (state.currentTab === 'track') renderTrack();
+      if (onSaved) onSaved(); // e.g. the unconfirmed-locations list refreshing to drop this one
+      else if (state.currentTab === 'track') renderTrack();
     });
   };
 }
