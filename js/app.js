@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.244';
+const APP_VERSION = 'Beta 5.245';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -2828,7 +2828,7 @@ async function openMigrateToMasterScreen(){
   }
 
   const exResult = await withTimeout(
-    supabaseClient.from('exercises').select('id, name, category, weekday, alt_group_id, push_pull, upper_lower, muscle_override, location_ids, active').eq('user_id', userData.user.id),
+    supabaseClient.from('exercises').select('id, name, category, weekday, alt_group_id, push_pull, upper_lower, muscle_override, location_ids, active, location_confirmed, measurement_type, uses_door_anchor, door_anchor_level').eq('user_id', userData.user.id),
     15000
   );
   const body = overlay.querySelector('#migrateBody');
@@ -2910,9 +2910,18 @@ async function openMigrateToMasterScreen(){
     let created = 0, dayLinks = 0, errors = [];
     for (const g of groups){
       const t = g.template;
+      // Carry location_confirmed across the migration. This rebuild deletes
+      // and recreates every exercise_master row, so omitting the field would
+      // silently reset an entire already-reviewed library back to
+      // unconfirmed - re-prompting for every exercise the user had already
+      // explicitly answered for, with no indication anything had been lost.
       const { data: inserted, error } = await supabaseClient.from('exercise_master').insert({
         user_id: userData.user.id, name: t.name, category: t.category, alt_group_id: t.alt_group_id,
-        push_pull: t.push_pull, upper_lower: t.upper_lower, muscle_override: t.muscle_override, location_ids: t.location_ids
+        push_pull: t.push_pull, upper_lower: t.upper_lower, muscle_override: t.muscle_override, location_ids: t.location_ids,
+        location_confirmed: !!t.location_confirmed,
+        measurement_type: t.measurement_type || null,
+        uses_door_anchor: !!t.uses_door_anchor,
+        door_anchor_level: t.door_anchor_level || null
       }).select();
       if (error || !inserted || !inserted[0]){ errors.push(`${t.name}: ${error ? error.message : 'no row returned'}`); continue; }
       created++;
@@ -6293,9 +6302,14 @@ async function ensureExerciseExistsUnattached(uid, name, category){
     if (!existing.__timeout && !existing.error && existing.data && existing.data.length){
       return existing.data[0].id;
     }
+    // Off-plan logging means "I'm somewhere unusual, outside the plan" -
+    // Everywhere is the only honest default, and it IS a deliberate one
+    // rather than an accident, so it gets marked confirmed like every other
+    // creation path. Without this, every off-plan log silently added another
+    // exercise to the unconfirmed pile.
     const created = await withTimeout(
       supabaseClient.from('exercise_master')
-        .insert({ user_id: uid, name, category: category || 'Other', location_ids: null })
+        .insert({ user_id: uid, name, category: category || 'Other', location_ids: null, location_confirmed: true })
         .select(),
       15000
     );
@@ -6306,7 +6320,8 @@ async function ensureExerciseExistsUnattached(uid, name, category){
   // weekday, so there's no way to represent one without a day. Fall back to
   // today rather than failing the log outright.
   const created = await insertExerciseSafely({
-    user_id: uid, name, category: category || 'Other', weekday: state.selectedDay, alt_group_id: null
+    user_id: uid, name, category: category || 'Other', weekday: state.selectedDay, alt_group_id: null,
+    location_confirmed: true
   });
   return (created && created.data && created.data[0]) ? created.data[0].id : null;
 }
