@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.229';
+const APP_VERSION = 'Beta 5.230';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1516,12 +1516,48 @@ async function createExerciseForToday(payload){
   // + limit(1) just takes the first match if there's any, so the function
   // becomes a duplicate-breaker rather than a duplicate-multiplier.
   const existingMaster = await withTimeout(
-    supabaseClient.from('exercise_master').select('id').eq('user_id', payload.user_id).ilike('name', payload.name).limit(1),
+    supabaseClient.from('exercise_master').select('id, location_ids, measurement_type, uses_door_anchor, door_anchor_level')
+      .eq('user_id', payload.user_id).ilike('name', payload.name).limit(1),
     15000
   );
   let masterId;
   if (!existingMaster.__timeout && !existingMaster.error && existingMaster.data && existingMaster.data.length){
-    masterId = existingMaster.data[0].id;
+    // Reusing an existing exercise by name - the right behaviour when the
+    // same exercise is being added to a second day, so its history stays
+    // one continuous record rather than forking. But reuse must not
+    // silently discard what the user just chose in THIS form: adding
+    // "V Bar Tricep Pushdown" while standing at a new gym and picking that
+    // gym's location previously vanished into the void here, since only the
+    // exercise_days link got created below - location_ids, measurement_type
+    // and door anchor on the existing row were never touched, so the
+    // exercise kept showing only wherever it was originally tagged.
+    const existing = existingMaster.data[0];
+    masterId = existing.id;
+    const updates = {};
+    // Location: UNION, never narrow. If the existing row is already
+    // untagged (available everywhere), leave it that way - restricting it
+    // to only the newly-picked location would make it disappear from every
+    // other place it currently correctly shows. If it has a specific list,
+    // add the new selection to it rather than replacing it, so it becomes
+    // available at both the original and the new location.
+    if (payload.location_ids && payload.location_ids.length && existing.location_ids && existing.location_ids.length){
+      const merged = [...new Set([...existing.location_ids, ...payload.location_ids])];
+      if (merged.length !== existing.location_ids.length) updates.location_ids = merged;
+    }
+    // Measurement type and door anchor: adopt the fresh selection only if
+    // the existing row doesn't already have real setup - same reconciliation
+    // rule as the Merge Duplicates fix, so a genuine prior configuration is
+    // never silently overwritten by a form that may have just defaulted to
+    // Weight, but a genuinely blank existing record does get the setup the
+    // user just specified rather than staying permanently unconfigured.
+    if (!existing.measurement_type && payload.measurement_type){
+      updates.measurement_type = payload.measurement_type;
+      updates.uses_door_anchor = !!payload.uses_door_anchor;
+      updates.door_anchor_level = payload.door_anchor_level || null;
+    }
+    if (Object.keys(updates).length){
+      await supabaseClient.from('exercise_master').update(updates).eq('id', masterId);
+    }
   } else {
     const { data: inserted, error } = await supabaseClient.from('exercise_master').insert({
       user_id: payload.user_id, name: payload.name, category: payload.category,
