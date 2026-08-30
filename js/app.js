@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.240';
+const APP_VERSION = 'Beta 5.241';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -5256,40 +5256,135 @@ async function openUnconfirmedLocationsScreen(){
   overlay.innerHTML = `
     <div class="form-header"><button id="closeUnconfirmed">✕</button><h1>Unconfirmed Locations</h1><div style="width:18px;"></div></div>
     <div class="overlay-scroll">
-      <div class="small" style="padding:8px 18px 14px 18px; color:var(--slate); line-height:1.55;">These exercises predate location tagging and were never explicitly asked. Their current tag below is whatever it happened to end up as - it may already be correct, or it may be exactly the kind of silent mistake this screen exists to catch.</div>
+      <div class="small" style="padding:8px 18px 14px 18px; color:var(--slate); line-height:1.55;">These exercises predate location tagging and were never explicitly asked. Their current tag below is whatever it happened to end up as - it may already be correct, or it may be exactly the kind of silent mistake this screen exists to catch. Grouped by category, the same grouping Your Machines uses - if a batch already shares real equipment, resolve the whole batch at once instead of one at a time.</div>
+      <div id="unconfirmedTopAction" style="display:none; margin:0 18px 16px 18px;">
+        <button class="btn-primary" id="resolveAllBtn" style="width:100%; background:var(--panel); color:var(--chalk); border:1px solid var(--line);">Resolve All <span id="resolveAllCount"></span></button>
+      </div>
       <div id="unconfirmedList"><div class="small" style="padding:14px 18px; color:var(--slate);">Checking your library…</div></div>
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#closeUnconfirmed').onclick = () => overlay.remove();
 
+  let unconfirmed = [];
+  let allLocations = [];
+
+  // Applies one location decision - Everywhere or a set of specific gyms -
+  // to every exercise in the given list, in bulk. Union with whatever's
+  // already there for a specific gym pick, same principle used everywhere
+  // else a bulk location action exists in this app; Everywhere replaces
+  // outright, since it's strictly broader than any specific list.
+  async function bulkResolve(exercises, isEverywhere, locationIds){
+    const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+    const errors = [];
+    for (const ex of exercises){
+      const realId = ex.masterId || ex.id;
+      const current = ex.location_ids || [];
+      const nextIds = isEverywhere ? null : [...new Set([...current, ...locationIds])];
+      const { error } = await supabaseClient.from(table).update({ location_ids: nextIds, location_confirmed: true }).eq('id', realId);
+      if (error) errors.push(`${ex.name}: ${error.message}`);
+    }
+    if (errors.length) alert(`Resolved, but ${errors.length} failed:\n\n${errors.join('\n')}`);
+    invalidateTrackSnapshots();
+    warmInvalidate();
+  }
+
+  // A small inline Everywhere/location picker used for both the per-group
+  // and resolve-all actions - same choice, same shape, just a different
+  // scope of exercises it gets applied to.
+  function openBulkLocationPicker(exercises, scopeLabel, onDone){
+    let isEverywhere = false;
+    let picked = [];
+    const pickerOv = document.createElement('div');
+    pickerOv.className = 'overlay-screen';
+    pickerOv.innerHTML = `
+      <div class="form-header"><button id="closeBulkPick">✕</button><h1>Resolve ${scopeLabel}</h1><div style="width:18px;"></div></div>
+      <div class="overlay-scroll">
+        <div class="small" style="padding:0 18px 12px 18px; color:var(--slate); line-height:1.5;">Applies to ${exercises.length} exercise${exercises.length===1?'':'s'}. A specific gym merges with whatever's already tagged; Everywhere replaces it, since it's broader than any specific list.</div>
+        <div class="chip-row" id="bulkEverywhereRow" style="padding:0 18px 8px 18px;"><div class="chip" id="bulkEverywhereChip">Everywhere</div></div>
+        <div class="chip-row" id="bulkLocRow" style="padding:0 18px;"></div>
+        <button class="save-btn" id="confirmBulkResolve" style="margin:20px 18px;">Apply</button>
+      </div>`;
+    document.body.appendChild(pickerOv);
+    pickerOv.querySelector('#closeBulkPick').onclick = () => pickerOv.remove();
+    pickerOv.querySelector('#bulkEverywhereChip').onclick = () => {
+      isEverywhere = true; picked = [];
+      pickerOv.querySelector('#bulkEverywhereChip').classList.add('active');
+      pickerOv.querySelectorAll('#bulkLocRow .chip').forEach(c => c.classList.remove('active'));
+    };
+    (async () => {
+      const row = pickerOv.querySelector('#bulkLocRow');
+      row.innerHTML = allLocations.map(l => `<div class="chip" data-loc="${l.id}">${l.name}</div>`).join('');
+      row.querySelectorAll('.chip[data-loc]').forEach(el => {
+        el.onclick = () => {
+          isEverywhere = false;
+          pickerOv.querySelector('#bulkEverywhereChip').classList.remove('active');
+          const id = el.dataset.loc;
+          picked = picked.includes(id) ? picked.filter(x => x !== id) : [...picked, id];
+          el.classList.toggle('active');
+        };
+      });
+    })();
+    pickerOv.querySelector('#confirmBulkResolve').onclick = async () => {
+      if (!isEverywhere && !picked.length) return; // same required-choice rule as everywhere else
+      await withButtonLoading(pickerOv.querySelector('#confirmBulkResolve'), 'Applying…', async () => {
+        await bulkResolve(exercises, isEverywhere, picked);
+        pickerOv.remove();
+        onDone();
+      });
+    };
+  }
+
   async function render(){
     const listArea = overlay.querySelector('#unconfirmedList');
     const userData = { user: await getCurrentUser() };
     if (!userData.user) return;
-    const [allExercises, allLocations] = await Promise.all([
+    const [allExercises, locs] = await Promise.all([
       fetchAllExercisesCompat(userData.user.id),
       loadLocations()
     ]);
-    const unconfirmed = dedupeByMasterId(allExercises).filter(ex => !ex.location_confirmed);
+    allLocations = locs;
+    unconfirmed = dedupeByMasterId(allExercises).filter(ex => !ex.location_confirmed);
+    const topAction = overlay.querySelector('#unconfirmedTopAction');
     if (!unconfirmed.length){
+      topAction.style.display = 'none';
       listArea.innerHTML = `<div class="empty-state" style="padding:26px 18px; text-align:center; line-height:1.55;">Nothing here.<br><span class="small" style="color:var(--slate);">Every exercise in your library has an explicit location on record.</span></div>`;
       return;
     }
+    topAction.style.display = 'block';
+    overlay.querySelector('#resolveAllCount').textContent = `(${unconfirmed.length})`;
+    overlay.querySelector('#resolveAllBtn').onclick = () => openBulkLocationPicker(unconfirmed, `All ${unconfirmed.length}`, render);
+
     const locNameById = {};
     allLocations.forEach(l => { locNameById[l.id] = l.name; });
-    listArea.innerHTML = unconfirmed.map(ex => {
-      const tagLabel = (ex.location_ids && ex.location_ids.length)
-        ? ex.location_ids.map(id => locNameById[id] || 'Unknown location').join(', ')
-        : 'Everywhere';
-      return `<div class="loc-row unconfirmed-row" data-id="${ex.masterId || ex.id}" data-name="${ex.name}">
-        <div style="flex:1; min-width:0;">
-          <div class="ex-name" style="font-size:13.5px;">${ex.name}</div>
-          <div class="small" style="color:var(--slate); margin-top:2px;">Currently: ${tagLabel}</div>
+    const byCategory = {};
+    unconfirmed.forEach(ex => { (byCategory[ex.category || 'Other'] = byCategory[ex.category || 'Other'] || []).push(ex); });
+    const categoryNames = Object.keys(byCategory).sort();
+
+    listArea.innerHTML = categoryNames.map(cat => {
+      const list = byCategory[cat];
+      return `
+        <div class="section-label" style="display:flex; justify-content:space-between; align-items:center; padding-right:18px;">
+          <span>${cat} (${list.length})</span>
+          <button class="loc-act resolve-group-btn" data-cat="${cat}" style="text-transform:none; font-family:'JetBrains Mono',monospace;">Resolve Group</button>
         </div>
-        <button class="loc-act" data-act="review">Review</button>
-      </div>`;
+        ${list.map(ex => {
+          const tagLabel = (ex.location_ids && ex.location_ids.length)
+            ? ex.location_ids.map(id => locNameById[id] || 'Unknown location').join(', ')
+            : 'Everywhere';
+          return `<div class="loc-row unconfirmed-row" data-id="${ex.masterId || ex.id}" data-name="${ex.name}">
+            <div style="flex:1; min-width:0;">
+              <div class="ex-name" style="font-size:13.5px;">${ex.name}</div>
+              <div class="small" style="color:var(--slate); margin-top:2px;">Currently: ${tagLabel}</div>
+            </div>
+            <button class="loc-act" data-act="review">Review</button>
+          </div>`;
+        }).join('')}`;
     }).join('');
-    listArea.querySelectorAll('.unconfirmed-row .loc-act').forEach(btn => {
+
+    listArea.querySelectorAll('.resolve-group-btn').forEach(btn => {
+      btn.onclick = () => openBulkLocationPicker(byCategory[btn.dataset.cat], btn.dataset.cat, render);
+    });
+    listArea.querySelectorAll('.unconfirmed-row .loc-act[data-act="review"]').forEach(btn => {
       const row = btn.closest('.unconfirmed-row');
       btn.onclick = () => openEditLocationsForm(row.dataset.id, row.dataset.name, render);
     });
