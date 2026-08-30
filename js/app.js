@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.237';
+const APP_VERSION = 'Beta 5.238';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1429,7 +1429,15 @@ async function fetchAllExercisesCompat(uid){
   const compat = [];
   masters.forEach(m => {
     const placements = daysByMaster[m.id] || [];
-    const base = { masterId: m.id, name: m.name, category: m.category, alt_group_id: m.alt_group_id, push_pull: m.push_pull, upper_lower: m.upper_lower, location_ids: m.location_ids };
+    const base = { masterId: m.id, name: m.name, category: m.category, alt_group_id: m.alt_group_id, push_pull: m.push_pull, upper_lower: m.upper_lower, location_ids: m.location_ids,
+      // These were being selected from the database on the query above but
+      // never actually copied into the object this function returns - every
+      // caller reading them off a compat object (the reuse-reconciliation
+      // check, and now the equipment screen's confirmed-status check) was
+      // silently reading undefined instead of the real value regardless of
+      // what was actually stored.
+      measurement_type: m.measurement_type, uses_door_anchor: m.uses_door_anchor, door_anchor_level: m.door_anchor_level,
+      location_confirmed: m.location_confirmed };
     if (placements.length){
       placements.forEach(p => compat.push({ ...base, id: p.id, weekday: p.weekday }));
     } else {
@@ -3646,14 +3654,29 @@ function openEditLocationEquipmentScreen(locationId, locationName, currentTags, 
         const shouldHave = pending[key];
         const current = ex.location_ids || [];
         const already = current.includes(locationId);
-        if (shouldHave === already) continue; // no actual change needed
-        const nextIds = shouldHave ? [...new Set([...current, locationId])] : current.filter(id => id !== locationId);
         // masterId, not the compat id - the compat id is an exercise_days
         // row for the master schema, a different table entirely. Falls back
         // to id for the legacy schema, where the compat id genuinely is the
         // real exercises-table row.
         const realId = ex.masterId || ex.id;
-        const { error: exErr } = await supabaseClient.from(table).update({ location_ids: nextIds.length ? nextIds : null }).eq('id', realId);
+        // A deliberate choice was just made about this exercise's location
+        // right here - the same thing the log form's own "Where is this
+        // available?" prompt exists to capture. This includes an exercise
+        // that was already correctly tagged and simply left as-is: the user
+        // still reviewed it in this screen, so it counts as answered even
+        // though location_ids itself doesn't need to change. Skipping the
+        // write entirely in that case (as an earlier version of this did)
+        // would leave a legacy exercise triggering the log form's own
+        // confirmation prompt right after being explicitly reviewed here.
+        if (shouldHave === already){
+          if (!ex.location_confirmed){
+            await supabaseClient.from(table).update({ location_confirmed: true }).eq('id', realId);
+          }
+          continue;
+        }
+        const nextIds = shouldHave ? [...new Set([...current, locationId])] : current.filter(id => id !== locationId);
+        const { error: exErr } = await supabaseClient.from(table)
+          .update({ location_ids: nextIds.length ? nextIds : null, location_confirmed: true }).eq('id', realId);
         if (exErr) errors.push(`${ex.name}: ${exErr.message}`);
       }
       invalidateTrackSnapshots();
