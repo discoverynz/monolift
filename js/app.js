@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.238';
+const APP_VERSION = 'Beta 5.239';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1558,7 +1558,7 @@ async function createExerciseForToday(payload){
   // + limit(1) just takes the first match if there's any, so the function
   // becomes a duplicate-breaker rather than a duplicate-multiplier.
   const existingMaster = await withTimeout(
-    supabaseClient.from('exercise_master').select('id, location_ids, measurement_type, uses_door_anchor, door_anchor_level')
+    supabaseClient.from('exercise_master').select('id, location_ids, measurement_type, uses_door_anchor, door_anchor_level, location_confirmed')
       .eq('user_id', payload.user_id).ilike('name', payload.name).limit(1),
     15000
   );
@@ -5266,7 +5266,11 @@ function openEditLocationsForm(exerciseId, exerciseName){
       // An explicit save here means exactly what's checked, full stop - no
       // union, no merge. Empty selection is stored as null (available
       // everywhere), matching how every other untagged exercise behaves.
-      const { error } = await supabaseClient.from(table).update({ location_ids: selectedIds.length ? selectedIds : null }).eq('id', exerciseId);
+      // This is about as deliberate a location decision as the app has -
+      // it should mark the exercise confirmed too, or the log form's own
+      // "Where is this available?" prompt would ask the very same question
+      // again the next time it's logged, right after being answered here.
+      const { error } = await supabaseClient.from(table).update({ location_ids: selectedIds.length ? selectedIds : null, location_confirmed: true }).eq('id', exerciseId);
       if (error){ alert(error.message); return; }
       invalidateTrackSnapshots();
       warmInvalidate();
