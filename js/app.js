@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.230';
+const APP_VERSION = 'Beta 5.231';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1404,7 +1404,7 @@ async function fetchAllExercisesCompat(uid){
   await awaitMasterFlagHealed();
   if (!getUseExerciseMasterFlag()){
     const result = await withTimeout(
-      supabaseClient.from('exercises').select('id, name, category, weekday, alt_group_id, push_pull, upper_lower, location_ids').eq('user_id', uid).eq('active', true),
+      supabaseClient.from('exercises').select('id, name, category, weekday, alt_group_id, push_pull, upper_lower, location_ids, measurement_type, uses_door_anchor, door_anchor_level').eq('user_id', uid).eq('active', true),
       15000
     );
     return result.__timeout || result.error ? [] : (result.data || []);
@@ -1417,7 +1417,7 @@ async function fetchAllExercisesCompat(uid){
   // still needs to show up here, or the reorganizer has nothing to work with
   // at all even though the exercise genuinely still exists.
   const [masterResult, daysResult] = await Promise.all([
-    withTimeout(supabaseClient.from('exercise_master').select('id, name, category, alt_group_id, push_pull, upper_lower, location_ids').eq('user_id', uid), 15000),
+    withTimeout(supabaseClient.from('exercise_master').select('id, name, category, alt_group_id, push_pull, upper_lower, location_ids, measurement_type, uses_door_anchor, door_anchor_level').eq('user_id', uid), 15000),
     withTimeout(supabaseClient.from('exercise_days').select('id, exercise_master_id, weekday').eq('user_id', uid), 15000)
   ]);
   if (masterResult.__timeout || masterResult.error) return [];
@@ -1500,6 +1500,35 @@ async function removeExerciseFromDay(exerciseRow){
   return { ok: !error && data && data.length > 0, error: error ? error.message : (!data || !data.length ? 'delete matched zero rows' : null) };
 }
 
+// Shared by every path that can decide to reuse an existing exercise by
+// name instead of creating a new one - createExerciseForToday's own
+// duplicate-by-name check, AND the New Exercise form's separate same-day
+// duplicate check, which redirects straight to the log form without ever
+// calling createExerciseForToday at all. Those two paths independently
+// deciding "reuse this" with different rules for what survives the reuse is
+// exactly how a location picked in the form could vanish silently - one
+// path honoured it, the other didn't, and which one ran depended on
+// something as easy to miss as which day the duplicate happened to share.
+// Centralising the rule means both paths behave identically by construction.
+function computeExerciseReuseUpdates(existing, payload){
+  const updates = {};
+  // Union, never narrow - an existing "everywhere" record must never be
+  // restricted down to just the newly-picked location.
+  if (payload.location_ids && payload.location_ids.length && existing.location_ids && existing.location_ids.length){
+    const merged = [...new Set([...existing.location_ids, ...payload.location_ids])];
+    if (merged.length !== existing.location_ids.length) updates.location_ids = merged;
+  }
+  // Only adopt fresh measurement/anchor info if the existing exercise has no
+  // real setup yet - never overwrite a genuine prior configuration with a
+  // form that may have just defaulted to Weight.
+  if (!existing.measurement_type && payload.measurement_type){
+    updates.measurement_type = payload.measurement_type;
+    updates.uses_door_anchor = !!payload.uses_door_anchor;
+    updates.door_anchor_level = payload.door_anchor_level || null;
+  }
+  return updates;
+}
+
 async function createExerciseForToday(payload){
   invalidateTrackSnapshots(); // day contents change - stale snapshot must not survive
   // Wait for the master-flag heal to complete before deciding which schema
@@ -1533,28 +1562,7 @@ async function createExerciseForToday(payload){
     // exercise kept showing only wherever it was originally tagged.
     const existing = existingMaster.data[0];
     masterId = existing.id;
-    const updates = {};
-    // Location: UNION, never narrow. If the existing row is already
-    // untagged (available everywhere), leave it that way - restricting it
-    // to only the newly-picked location would make it disappear from every
-    // other place it currently correctly shows. If it has a specific list,
-    // add the new selection to it rather than replacing it, so it becomes
-    // available at both the original and the new location.
-    if (payload.location_ids && payload.location_ids.length && existing.location_ids && existing.location_ids.length){
-      const merged = [...new Set([...existing.location_ids, ...payload.location_ids])];
-      if (merged.length !== existing.location_ids.length) updates.location_ids = merged;
-    }
-    // Measurement type and door anchor: adopt the fresh selection only if
-    // the existing row doesn't already have real setup - same reconciliation
-    // rule as the Merge Duplicates fix, so a genuine prior configuration is
-    // never silently overwritten by a form that may have just defaulted to
-    // Weight, but a genuinely blank existing record does get the setup the
-    // user just specified rather than staying permanently unconfigured.
-    if (!existing.measurement_type && payload.measurement_type){
-      updates.measurement_type = payload.measurement_type;
-      updates.uses_door_anchor = !!payload.uses_door_anchor;
-      updates.door_anchor_level = payload.door_anchor_level || null;
-    }
+    const updates = computeExerciseReuseUpdates(existing, payload);
     if (Object.keys(updates).length){
       await supabaseClient.from('exercise_master').update(updates).eq('id', masterId);
     }
@@ -8238,6 +8246,23 @@ async function openNewExerciseForm(opts){
       const compatEx = await fetchAllExercisesCompat(userData.user.id);
       const existingMatch = compatEx.find(ex => ex.weekday === selectedDay && ex.name.toLowerCase() === name.toLowerCase());
       if (existingMatch){
+        // This redirects straight to the log form without ever calling
+        // createExerciseForToday - which is exactly why the fresh location,
+        // measurement type and door anchor just chosen in this form used to
+        // vanish silently here specifically. Same reconciliation as that
+        // function's own duplicate-by-name check, so which path happens to
+        // catch the duplicate no longer changes what survives it.
+        const reuseUpdates = computeExerciseReuseUpdates(existingMatch, {
+          location_ids: selectedLocationIds,
+          measurement_type: selectedMeasurement === 'weight' ? null : selectedMeasurement,
+          uses_door_anchor: usesDoorAnchor,
+          door_anchor_level: (usesDoorAnchor && selectedAnchorLevel) ? `Level ${selectedAnchorLevel}` : null
+        });
+        if (Object.keys(reuseUpdates).length){
+          const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+          await supabaseClient.from(table).update(reuseUpdates).eq('id', existingMatch.id);
+          invalidateTrackSnapshots();
+        }
         alert(`"${name}" already exists on ${dayNameOf(selectedDay)} - opening it instead of creating a duplicate.`);
         overlay.remove();
         state.selectedDay = selectedDay;
