@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.243';
+const APP_VERSION = 'Beta 5.244';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -158,7 +158,15 @@ async function quickAddStarter(name, category, weekday){
   const compatEx = await fetchAllExercisesCompat(userData.user.id);
   const existingMatch = compatEx.find(ex => ex.weekday === weekday && ex.name.toLowerCase() === name.toLowerCase());
   if (existingMatch){ renderTrack(); return; }
-  const { error } = await createExerciseForToday({ user_id: userData.user.id, name, category, weekday, alt_group_id: null });
+  // Same evidence-based default as the database-search add flows - these
+  // starter names (Bench Press, Lat Pulldown...) match the public database
+  // just as confidently as anything found through search.
+  const suggestion = await suggestLocationsForExercise(name, await loadLocations());
+  const { error } = await createExerciseForToday({
+    user_id: userData.user.id, name, category, weekday, alt_group_id: null,
+    location_ids: suggestion ? suggestion.locations.map(l => l.id) : null,
+    location_confirmed: true
+  });
   if (error){ alert(error.message); return; }
   renderTrack();
 }
@@ -4405,7 +4413,12 @@ async function openSuggestionPreview(name, category, navList){
       openLogForm(existingMatch.masterId || existingMatch.id, name);
       return;
     }
-    const { error } = await createExerciseForToday({ user_id: userData.user.id, name, category, weekday: targetDay, alt_group_id: null });
+    const suggestion = await suggestLocationsForExercise(name, await loadLocations());
+    const { error } = await createExerciseForToday({
+      user_id: userData.user.id, name, category, weekday: targetDay, alt_group_id: null,
+      location_ids: suggestion ? suggestion.locations.map(l => l.id) : null,
+      location_confirmed: true
+    });
     if (error){ alert(error.message); return; }
     overlay.remove();
     state.currentTab = 'track';
@@ -6492,7 +6505,11 @@ async function openPicker(initialTab, jumpToMuscle){
       weekday: state.selectedDay, alt_group_id: null,
       measurement_type: idea.measurementType === 'weight' ? null : idea.measurementType,
       uses_door_anchor: idea.usesDoorAnchor, door_anchor_level: idea.anchorLevel,
-      location_ids: locId ? [locId] : null
+      location_ids: locId ? [locId] : null,
+      // The ANY-day-safe location rule above is already a deliberate,
+      // considered default (that's the whole reason it exists) - not an
+      // accident needing a human to double check it later.
+      location_confirmed: true
     });
     if (error){ alert(error.message); return; }
     removeSideIndex(); overlay.remove();
@@ -6670,9 +6687,17 @@ async function openPicker(initialTab, jumpToMuscle){
             openLogForm(masterId, picked.name, true);
             return;
           }
+          // This is the actual database-matched exercise the user just
+          // searched for and picked - if its equipment matches something a
+          // location is tagged with, that's a real, evidence-based signal,
+          // not a guess. Falls back to Everywhere when no confident match
+          // exists, same as picking Everywhere manually would.
+          const suggestion = await suggestLocationsForExercise(picked.name, await loadLocations());
           const { data: inserted, error } = await createExerciseForToday({
             user_id: userData.user.id, name: picked.name, category: picked.category,
-            weekday: targetDay, alt_group_id: null
+            weekday: targetDay, alt_group_id: null,
+            location_ids: suggestion ? suggestion.locations.map(l => l.id) : null,
+            location_confirmed: true
           });
           if (error){ alert(error.message); return; }
           openLogForm(inserted[0].id, picked.name, true);
@@ -6689,11 +6714,15 @@ async function openPicker(initialTab, jumpToMuscle){
           await withButtonLoading(btn, 'Adding…', async () => {
             const userData = { user: await getCurrentUser() };
             const errors = [];
+            const allLocs = await loadLocations(); // fetched once for the whole batch, not per item
             for (const item of items){
               const alreadyToday = all.find(ex => ex.weekday === targetDay && ex.name.toLowerCase() === item.name.toLowerCase());
               if (alreadyToday) continue; // already there, nothing to do
+              const suggestion = await suggestLocationsForExercise(item.name, allLocs);
               const { error } = await createExerciseForToday({
-                user_id: userData.user.id, name: item.name, category: item.category || 'Other', weekday: targetDay, alt_group_id: null
+                user_id: userData.user.id, name: item.name, category: item.category || 'Other', weekday: targetDay, alt_group_id: null,
+                location_ids: suggestion ? suggestion.locations.map(l => l.id) : null,
+                location_confirmed: true
               });
               if (error) errors.push(`${item.name}: ${error.message}`);
             }
@@ -6935,11 +6964,15 @@ async function openPicker(initialTab, jumpToMuscle){
           await withButtonLoading(btn, 'Adding…', async () => {
             const userData = { user: await getCurrentUser() };
             const errors = [];
+            const allLocs = await loadLocations(); // fetched once for the whole batch, not per item
             for (const item of items){
               const alreadyToday = todayNames.has(item.name.toLowerCase());
               if (alreadyToday) continue;
+              const suggestion = await suggestLocationsForExercise(item.name, allLocs);
               const { error } = await createExerciseForToday({
-                user_id: userData.user.id, name: item.name, category: item.category, weekday: state.selectedDay, alt_group_id: null
+                user_id: userData.user.id, name: item.name, category: item.category, weekday: state.selectedDay, alt_group_id: null,
+                location_ids: suggestion ? suggestion.locations.map(l => l.id) : null,
+                location_confirmed: true
               });
               if (error) errors.push(`${item.name}: ${error.message}`);
             }
@@ -7139,9 +7172,15 @@ async function openAutoAltReview(){
         const groupId = insertResult.__timeout || !insertResult.data ? null : insertResult.data[0].id;
         if (!groupId) continue;
         const category = s.candidates.find(c => c.name === s.picked);
+        // A substitute exercise inherits the same location context as the
+        // exercise it's standing in for, rather than starting blank - if
+        // "Cable Fly" only exists at Smales, its alt-group substitute isn't
+        // meaningfully available anywhere different by default either.
         const created = await createExerciseForToday({
           user_id: userData.user.id, name: s.picked, category: category ? EQUIPMENT_TO_CATEGORY[category.equipment] || s.forExercise.category : s.forExercise.category,
-          weekday: state.selectedDay, alt_group_id: groupId
+          weekday: state.selectedDay, alt_group_id: groupId,
+          location_ids: s.forExercise.location_ids || null,
+          location_confirmed: true
         });
         await supabaseClient.from(memberTable).update({ alt_group_id: groupId }).eq('id', s.forExercise.id);
         if (created.data && created.data[0] && getUseExerciseMasterFlag()){
@@ -8298,7 +8337,10 @@ async function openPlanReorganizer(){
             await createExerciseForToday({
               user_id: userData.user.id, name: sample.name, category: sample.category,
               weekday: dp.dayIdx, alt_group_id: clearAlt ? null : sample.alt_group_id,
-              push_pull: sample.push_pull, upper_lower: sample.upper_lower, location_ids: sample.location_ids
+              push_pull: sample.push_pull, upper_lower: sample.upper_lower, location_ids: sample.location_ids,
+              // Copying an existing, presumably-already-considered exercise
+              // record's own location tag over verbatim - not a fresh guess.
+              location_confirmed: true
             });
           } else {
             const moveResults = await moveExerciseToDay(it, dp.dayIdx, clearAlt);
