@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.233';
+const APP_VERSION = 'Beta 5.234';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1404,7 +1404,7 @@ async function fetchAllExercisesCompat(uid){
   await awaitMasterFlagHealed();
   if (!getUseExerciseMasterFlag()){
     const result = await withTimeout(
-      supabaseClient.from('exercises').select('id, name, category, weekday, alt_group_id, push_pull, upper_lower, location_ids, measurement_type, uses_door_anchor, door_anchor_level').eq('user_id', uid).eq('active', true),
+      supabaseClient.from('exercises').select('id, name, category, weekday, alt_group_id, push_pull, upper_lower, location_ids, measurement_type, uses_door_anchor, door_anchor_level, location_confirmed').eq('user_id', uid).eq('active', true),
       15000
     );
     return result.__timeout || result.error ? [] : (result.data || []);
@@ -1417,7 +1417,7 @@ async function fetchAllExercisesCompat(uid){
   // still needs to show up here, or the reorganizer has nothing to work with
   // at all even though the exercise genuinely still exists.
   const [masterResult, daysResult] = await Promise.all([
-    withTimeout(supabaseClient.from('exercise_master').select('id, name, category, alt_group_id, push_pull, upper_lower, location_ids, measurement_type, uses_door_anchor, door_anchor_level').eq('user_id', uid), 15000),
+    withTimeout(supabaseClient.from('exercise_master').select('id, name, category, alt_group_id, push_pull, upper_lower, location_ids, measurement_type, uses_door_anchor, door_anchor_level, location_confirmed').eq('user_id', uid), 15000),
     withTimeout(supabaseClient.from('exercise_days').select('id, exercise_master_id, weekday').eq('user_id', uid), 15000)
   ]);
   if (masterResult.__timeout || masterResult.error) return [];
@@ -1512,6 +1512,11 @@ async function removeExerciseFromDay(exerciseRow){
 // Centralising the rule means both paths behave identically by construction.
 function computeExerciseReuseUpdates(existing, payload){
   const updates = {};
+  // If the caller just made an explicit location decision (payload says so)
+  // and the existing row was never confirmed, that decision counts - even a
+  // reused exercise now has a real answer on record rather than staying
+  // permanently unconfirmed just because it happened to already exist.
+  if (payload.location_confirmed && !existing.location_confirmed) updates.location_confirmed = true;
   // Union, never narrow - an existing "everywhere" record must never be
   // restricted down to just the newly-picked location.
   if (payload.location_ids && payload.location_ids.length && existing.location_ids && existing.location_ids.length){
@@ -1570,7 +1575,13 @@ async function createExerciseForToday(payload){
     const { data: inserted, error } = await supabaseClient.from('exercise_master').insert({
       user_id: payload.user_id, name: payload.name, category: payload.category,
       alt_group_id: payload.alt_group_id || null, push_pull: payload.push_pull || null,
-      upper_lower: payload.upper_lower || null, location_ids: payload.location_ids || null,
+      upper_lower: payload.upper_lower || null,
+      // Normalized here rather than trusting every caller to pass exactly
+      // null for "everywhere" - an empty array is truthy in JS, so
+      // `payload.location_ids || null` alone would have let one slip through
+      // as [] instead of null, two representations of the same thing.
+      location_ids: (payload.location_ids && payload.location_ids.length) ? payload.location_ids : null,
+      location_confirmed: !!payload.location_confirmed,
       measurement_type: payload.measurement_type || null,
       uses_door_anchor: !!payload.uses_door_anchor, door_anchor_level: payload.door_anchor_level || null
     }).select();
@@ -8119,15 +8130,14 @@ async function openNewExerciseForm(opts){
   // Arriving from My Bands pre-selects Band, so the loop from "I own these
   // bands" to "I have an exercise I can log against them" is one tap.
   let selectedMeasurement = (opts && opts.measurement) || 'weight';
-  // Default to wherever you actually are - EXCEPT on Anytime, whose whole
-  // point is "not tied to a particular day or place". Auto-tagging its
-  // location meant an Anytime exercise created at your default gym silently
-  // vanished the moment that default changed (a new home gym, a trip) since
-  // isAvailableAtLocation then excluded it everywhere else. Creating on a
-  // real weekday still defaults to today's location, since that case really
-  // does almost always mean "this exists here".
-  const todaysLocation = isAnyDay(selectedDay) ? null : effectiveLocationId();
-  let selectedLocationIds = todaysLocation ? [todaysLocation] : [];
+  // No silent default at all, on any day - not "wherever you are now", not
+  // Anytime's "nowhere". A quiet auto-default is exactly what let an
+  // exercise get tagged to a single gym with nothing visible ever having
+  // been decided, discoverable only once it mysteriously failed to show up
+  // somewhere else. Nothing is pre-selected; Save is blocked until the user
+  // explicitly picks Everywhere or at least one real location.
+  let selectedLocationIds = [];
+  let locationIsEverywhere = false;
   const overlay = document.createElement('div');
   overlay.className = 'overlay-screen';
   overlay.innerHTML = `
@@ -8173,9 +8183,11 @@ async function openNewExerciseForm(opts){
         <div class="chip" data-ul="upper">Upper</div>
         <div class="chip" data-ul="lower">Lower</div>
       </div>
-      <div class="field-label">Locations <span class="opt">(optional, pick any that apply)</span></div>
+      <div class="field-label">Where Is This Available <span class="opt">(required)</span></div>
+      <div class="small" style="padding:0 18px 8px 18px; color:var(--slate); line-height:1.5;">Pick Everywhere for anything that isn't tied to specific equipment - bodyweight, bands, most cables. Pick a gym only for something that genuinely only exists there, like a specific machine.</div>
+      <div class="chip-row" id="everywhereChipRow"><div class="chip" id="everywhereChip">Everywhere</div></div>
       <div class="chip-row" id="locationChipRow"><div class="small" style="color:var(--slate); padding:8px 0;">Loading…</div></div>
-      <div class="small" style="padding:0 18px 8px 18px; color:var(--slate);">Defaults to where you are now. Clear it if it's available everywhere (dumbbells, cables, bodyweight), or pick several if it exists at more than one.</div>
+      <div class="small" id="locationRequiredHint" style="padding:0 18px 8px 18px; color:#E8492A; display:none;">Pick Everywhere or at least one location before saving.</div>
       <div class="field-label">Alt Group <span class="opt">(optional)</span></div>
       <div id="altGroupArea" class="field-card" style="display:block;"><div class="ex-name" style="color:var(--slate); font-size:13px;" id="altGroupPickBtn">Tap to choose or create…</div></div>
       <button class="save-btn" id="saveExerciseBtn">Add Exercise</button>
@@ -8256,6 +8268,15 @@ async function openNewExerciseForm(opts){
     };
   });
 
+  const everywhereChip = () => overlay.querySelector('#everywhereChip');
+  const hideRequiredHint = () => { const h = overlay.querySelector('#locationRequiredHint'); if (h) h.style.display = 'none'; };
+  everywhereChip().onclick = () => {
+    locationIsEverywhere = true;
+    selectedLocationIds = [];
+    everywhereChip().classList.add('active');
+    overlay.querySelectorAll('#locationChipRow .chip[data-loc]').forEach(c => c.classList.remove('active'));
+    hideRequiredHint();
+  };
   async function renderLocationChips(){
     const locs = await loadLocations();
     const row = overlay.querySelector('#locationChipRow');
@@ -8264,8 +8285,14 @@ async function openNewExerciseForm(opts){
     row.querySelectorAll('.chip[data-loc]').forEach(el => {
       el.onclick = () => {
         const id = el.dataset.loc;
+        // Picking any specific location is mutually exclusive with
+        // Everywhere - the two answer the same question and can't both be
+        // true at once.
+        locationIsEverywhere = false;
+        everywhereChip().classList.remove('active');
         if (selectedLocationIds.includes(id)){ selectedLocationIds = selectedLocationIds.filter(x=>x!==id); el.classList.remove('active'); }
         else { selectedLocationIds.push(id); el.classList.add('active'); }
+        hideRequiredHint();
       };
     });
     row.querySelector('#newLocationChip').onclick = () => {
@@ -8273,13 +8300,14 @@ async function openNewExerciseForm(opts){
         title: 'New Location Name', placeholder: 'e.g. Home Gym',
         onConfirm: async (name) => {
           const loc = await createLocation(name);
-          if (loc) selectedLocationIds.push(loc.id);
+          if (loc){ locationIsEverywhere = false; everywhereChip().classList.remove('active'); selectedLocationIds.push(loc.id); hideRequiredHint(); }
           renderLocationChips();
         }
       });
     };
   }
   await renderLocationChips();
+
 
   async function renderCategoryChips(){
     const cats = await getAllCategories();
@@ -8315,6 +8343,12 @@ async function openNewExerciseForm(opts){
   overlay.querySelector('#saveExerciseBtn').onclick = async () => {
     const name = document.getElementById('exNameInput').value.trim();
     if (!name) return;
+    if (!locationIsEverywhere && selectedLocationIds.length === 0){
+      const hint = overlay.querySelector('#locationRequiredHint');
+      if (hint) hint.style.display = 'block';
+      overlay.querySelector('#everywhereChipRow').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
     await withButtonLoading(overlay.querySelector('#saveExerciseBtn'), 'Saving…', async () => {
       const userData = { user: await getCurrentUser() };
       const compatEx = await fetchAllExercisesCompat(userData.user.id);
@@ -8327,7 +8361,8 @@ async function openNewExerciseForm(opts){
         // function's own duplicate-by-name check, so which path happens to
         // catch the duplicate no longer changes what survives it.
         const reuseUpdates = computeExerciseReuseUpdates(existingMatch, {
-          location_ids: selectedLocationIds,
+          location_ids: locationIsEverywhere ? null : selectedLocationIds,
+          location_confirmed: true,
           measurement_type: selectedMeasurement === 'weight' ? null : selectedMeasurement,
           uses_door_anchor: usesDoorAnchor,
           door_anchor_level: (usesDoorAnchor && selectedAnchorLevel) ? `Level ${selectedAnchorLevel}` : null
@@ -8347,7 +8382,9 @@ async function openNewExerciseForm(opts){
       const { error } = await createExerciseForToday({
         user_id: userData.user.id, name, category: selectedCategory, weekday: selectedDay,
         alt_group_id: pickedAltGroup ? pickedAltGroup.id : null,
-        push_pull: selectedPushPull, upper_lower: selectedUpperLower, location_ids: selectedLocationIds,
+        push_pull: selectedPushPull, upper_lower: selectedUpperLower,
+        location_ids: locationIsEverywhere ? null : selectedLocationIds,
+        location_confirmed: true,
         measurement_type: selectedMeasurement === 'weight' ? null : selectedMeasurement,
         uses_door_anchor: usesDoorAnchor,
         door_anchor_level: (usesDoorAnchor && selectedAnchorLevel) ? `Level ${selectedAnchorLevel}` : null
@@ -8752,6 +8789,12 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
     </div>
     <div class="overlay-scroll">
       <div id="tagInfoArea" style="padding:0 18px; margin-bottom:10px;"></div>
+      <div id="locationConfirmArea" style="display:none; margin:0 18px 16px 18px; background:var(--panel); border:1px solid rgba(232,73,42,0.35); border-radius:13px; padding:13px 14px;">
+        <div style="font-family:'Oswald',sans-serif; font-size:13.5px; margin-bottom:2px;">Where is this available?</div>
+        <div class="small" style="color:var(--slate); margin-bottom:10px; line-height:1.5;">This exercise predates location tagging and was never asked - answer once and it's remembered for every future set.</div>
+        <div class="chip-row" id="logEverywhereChipRow" style="padding:0 0 8px 0;"><div class="chip" id="logEverywhereChip">Everywhere</div></div>
+        <div class="chip-row" id="logLocationChipRow" style="padding:0;"></div>
+      </div>
       <div id="guideArea" style="margin-bottom:18px;"></div>
       <div id="sameAsLastArea" style="margin-bottom:18px;"></div>
       <button class="save-btn" id="saveSetBtn" style="margin-bottom:18px;">Save Set</button>
@@ -8797,6 +8840,47 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
   };
   if (navPrev) overlay.querySelector('#prevExerciseBtn').onclick = () => { overlay.remove(); openLogForm(navPrev.id, navPrev.name); };
   if (navNext) overlay.querySelector('#nextExerciseBtn').onclick = () => { overlay.remove(); openLogForm(navNext.id, navNext.name); };
+
+  // First-log location confirmation. New exercises now require this choice
+  // at creation time, but every exercise that existed before that change
+  // never got asked - this is where those get caught, once, the first time
+  // they're actually logged again, rather than needing every old exercise
+  // reviewed in one sitting.
+  let pendingLocationIsEverywhere = null; // null = not yet answered
+  let pendingLocationIds = [];
+  let needsLocationConfirm = false;
+  (async () => {
+    let confirmed = exInState ? exInState.location_confirmed : undefined;
+    let currentLocIds = exInState ? exInState.location_ids : undefined;
+    if (confirmed === undefined){
+      const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+      const r = await withTimeout(
+        supabaseClient.from(table).select('location_confirmed, location_ids').eq('id', exerciseId).maybeSingle(), 10000);
+      if (!r.__timeout && !r.error && r.data){ confirmed = r.data.location_confirmed; currentLocIds = r.data.location_ids; }
+    }
+    if (confirmed) return; // already answered at some point - nothing to do
+    needsLocationConfirm = true;
+    const area = overlay.querySelector('#locationConfirmArea');
+    if (!area) return;
+    area.style.display = 'block';
+    const locs = await loadLocations();
+    const everywhereEl = overlay.querySelector('#logEverywhereChip');
+    const row = overlay.querySelector('#logLocationChipRow');
+    const paint = () => {
+      everywhereEl.classList.toggle('active', pendingLocationIsEverywhere === true);
+      row.innerHTML = locs.map(l => `<div class="chip ${pendingLocationIds.includes(l.id)?'active':''}" data-loc="${l.id}">${l.name}</div>`).join('');
+      row.querySelectorAll('.chip[data-loc]').forEach(el => {
+        el.onclick = () => {
+          pendingLocationIsEverywhere = false;
+          const id = el.dataset.loc;
+          pendingLocationIds = pendingLocationIds.includes(id) ? pendingLocationIds.filter(x=>x!==id) : [...pendingLocationIds, id];
+          paint();
+        };
+      });
+    };
+    everywhereEl.onclick = () => { pendingLocationIsEverywhere = true; pendingLocationIds = []; paint(); };
+    paint();
+  })();
 
   // Band exercises swap the weight field for a band picker.
   function applyBandFormShape(){
@@ -9239,6 +9323,23 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
   })();
 
   async function handleSaveClick(){
+    if (needsLocationConfirm && pendingLocationIsEverywhere === null){
+      const area = overlay.querySelector('#locationConfirmArea');
+      if (area){
+        area.style.borderColor = '#E8492A';
+        area.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      return;
+    }
+    if (needsLocationConfirm){
+      const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+      await supabaseClient.from(table).update({
+        location_ids: pendingLocationIsEverywhere ? null : pendingLocationIds,
+        location_confirmed: true
+      }).eq('id', exerciseId);
+      needsLocationConfirm = false; // answered - don't ask again even if this save method gets called twice
+      warmInvalidate();
+    }
     const weightRaw = document.getElementById('weightInput').value;
     const setsVal = document.getElementById('setsInput').value;
     const repsVal = document.getElementById('repsInput').value;
