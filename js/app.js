@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.231';
+const APP_VERSION = 'Beta 5.232';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -4796,6 +4796,7 @@ function showExerciseActionsMenu(exerciseId, exerciseName){
       <div class="me-item" id="menuEditAlt" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Edit Alt Group</div><div class="chev">›</div></div>
       <div class="me-item" id="menuEditCategory" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Edit Category</div><div class="chev">›</div></div>
       <div class="me-item" id="menuEditMeasurement" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>How It's Measured</div><div class="chev">›</div></div>
+      <div class="me-item" id="menuEditLocations" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Locations</div><div class="chev">›</div></div>
       <div class="me-item" id="menuEditMuscle" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Edit Muscle Group</div><div class="chev">›</div></div>
       <div class="me-item" id="menuEditLoc" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Edit Push/Pull/Upper/Lower/Location</div><div class="chev">›</div></div>
       <div class="me-item" id="menuRemove" style="border-bottom:none; cursor:pointer;"><div style="color:var(--flame);">Remove from ${dayLabelOf(state.selectedDay)}</div><div class="chev">›</div></div>
@@ -4807,6 +4808,7 @@ function showExerciseActionsMenu(exerciseId, exerciseName){
   overlay.querySelector('#menuEditAlt').onclick = () => { overlay.remove(); openEditAltGroupForm(exerciseId, exerciseName); };
   overlay.querySelector('#menuEditCategory').onclick = () => { overlay.remove(); openEditCategoryForm(exerciseId, exerciseName); };
   overlay.querySelector('#menuEditMeasurement').onclick = () => { overlay.remove(); openEditMeasurementForm(exerciseId, exerciseName); };
+  overlay.querySelector('#menuEditLocations').onclick = () => { overlay.remove(); openEditLocationsForm(exerciseId, exerciseName); };
   overlay.querySelector('#menuEditMuscle').onclick = () => { overlay.remove(); openEditMuscleForm(exerciseId, exerciseName); };
   overlay.querySelector('#menuEditLoc').onclick = () => { overlay.remove(); openEditTagsForm(exerciseId, exerciseName); };
   overlay.querySelector('#menuRemove').onclick = () => { overlay.remove(); confirmRemoveExercise(exerciseId, exerciseName); };
@@ -4977,6 +4979,70 @@ function openEditMuscleForm(exerciseId, exerciseName){
 // This is also what actually lets someone hit the reclassification scenario
 // the Beta 5.220 quick-save guard defends against - before this, the app had
 // defensive code for a path the UI provided no way to trigger.
+// Direct visibility and control over which locations an exercise is tagged
+// to - previously there was no way to see this at all, only to infer it from
+// where an exercise did or didn't show up, which is exactly what made a
+// mistagged exercise so hard to diagnose. Unlike the reuse-reconciliation
+// logic elsewhere (which only ever adds a location, never removes one, since
+// it runs automatically without the user reviewing anything), this screen is
+// an explicit, deliberate edit - the selection made here is the definitive
+// answer and fully replaces whatever was stored before, including removing
+// a wrong tag outright.
+function openEditLocationsForm(exerciseId, exerciseName){
+  let selectedIds = [];
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeLocEdit">✕</button><h1>Locations</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll">
+      <div class="field-label" style="padding-top:0;">${exerciseName}</div>
+      <div class="small" style="padding:0 18px 10px 18px; color:var(--slate); line-height:1.5;">Select every gym this exists at. Leave all unchecked for available everywhere - that's the default for most exercises.</div>
+      <div class="chip-row" id="editLocChipRow"><div class="small" style="color:var(--slate); padding:8px 18px;">Loading current tags…</div></div>
+      <button class="save-btn" id="saveLocEditBtn">Save</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeLocEdit').onclick = () => overlay.remove();
+
+  (async () => {
+    const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+    // Fetched fresh from the database, not from whatever's sitting in local
+    // state - the whole point is to show the real, current, authoritative
+    // answer rather than something that could itself be stale.
+    const [exResult, locsResult] = await Promise.all([
+      withTimeout(supabaseClient.from(table).select('location_ids').eq('id', exerciseId).maybeSingle(), 15000),
+      loadLocations()
+    ]);
+    selectedIds = (!exResult.__timeout && !exResult.error && exResult.data && exResult.data.location_ids) || [];
+    const row = overlay.querySelector('#editLocChipRow');
+    const paint = () => {
+      row.innerHTML = locsResult.map(l => `<div class="chip ${selectedIds.includes(l.id)?'active':''}" data-loc="${l.id}">${l.name}</div>`).join('');
+      row.querySelectorAll('.chip[data-loc]').forEach(el => {
+        el.onclick = () => {
+          const id = el.dataset.loc;
+          selectedIds = selectedIds.includes(id) ? selectedIds.filter(x => x !== id) : [...selectedIds, id];
+          paint();
+        };
+      });
+    };
+    paint();
+  })();
+
+  overlay.querySelector('#saveLocEditBtn').onclick = async () => {
+    await withButtonLoading(overlay.querySelector('#saveLocEditBtn'), 'Saving…', async () => {
+      const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+      // An explicit save here means exactly what's checked, full stop - no
+      // union, no merge. Empty selection is stored as null (available
+      // everywhere), matching how every other untagged exercise behaves.
+      const { error } = await supabaseClient.from(table).update({ location_ids: selectedIds.length ? selectedIds : null }).eq('id', exerciseId);
+      if (error){ alert(error.message); return; }
+      invalidateTrackSnapshots();
+      warmInvalidate();
+      overlay.remove();
+      if (state.currentTab === 'track') renderTrack();
+    });
+  };
+}
+
 function openEditMeasurementForm(exerciseId, exerciseName){
   let selectedType = 'weight';
   let usesDoorAnchor = false;
