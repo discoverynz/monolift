@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.228';
+const APP_VERSION = 'Beta 5.229';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -8500,6 +8500,46 @@ async function loadExerciseGuide(overlay, exerciseName){
 }
 
 // ---------- PR CELEBRATION ----------
+// ---------- BAND LEVEL-UP CELEBRATION ----------
+// The natural completion of the progression nudge (detectBandProgressionReady)
+// - that nudge suggests moving up; this acknowledges it when someone actually
+// does. Deliberately a lighter toast rather than the full confetti PR
+// celebration below: moving up a band happens more often than a genuine
+// all-time PR and shouldn't compete with it for how special it feels.
+function celebrateBandLevelUp(exerciseName, bandLabel){
+  const toast = document.createElement('div');
+  toast.style = 'position:fixed; bottom:100px; left:50%; transform:translateX(-50%); max-width:90%; background:var(--panel); border:1px solid rgba(201,162,39,0.4); border-radius:12px; padding:13px 16px; display:flex; align-items:center; gap:12px; z-index:30; box-shadow:0 8px 24px rgba(0,0,0,0.4); animation:levelUpPop 0.3s ease;';
+  toast.innerHTML = `
+    <style>@keyframes levelUpPop{0%{transform:translateX(-50%) scale(0.9); opacity:0;}100%{transform:translateX(-50%) scale(1); opacity:1;}}</style>
+    <span style="font-size:20px;">⬆️</span>
+    <div><div style="font-size:13px; color:var(--chalk);">Levelled up to <b style="color:var(--brass);">${bandLabel}</b></div><div style="font-size:11px; color:var(--slate); margin-top:1px;">${exerciseName}</div></div>`;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 3500);
+}
+
+// Compares a freshly-logged band set against the most recent PRIOR set (any
+// day before today) for the same exercise. If the prior set used a different,
+// lower-resistance band, this is a genuine level-up worth acknowledging -
+// converted to a common unit first, since a set logged in kg and one in lb
+// must never be compared as raw numbers.
+function checkBandLevelUp(exerciseName, newBandResistance, newBandUnit, priorSets){
+  if (newBandResistance == null) return null;
+  // priorSets is expected to already be band-only, typically via a query
+  // filtered server-side with .not('band_resistance', 'is', null) - so
+  // band_resistance presence is the one thing that's actually guaranteed to
+  // be populated here. Filtering on measurement_type or weight_unit as well
+  // would silently break this whenever the caller's query didn't happen to
+  // select those columns, since undefined !== 'band' - checked directly
+  // against a real caller rather than assumed, and it didn't.
+  const priorBandSets = (priorSets || []).filter(s => s.band_resistance != null);
+  if (!priorBandSets.length) return null;
+  const mostRecentPrior = priorBandSets.sort((a,b) => b.logged_at.localeCompare(a.logged_at))[0];
+  const priorInNewUnit = mostRecentPrior.band_resistance_unit === newBandUnit
+    ? mostRecentPrior.band_resistance
+    : convertWeight(mostRecentPrior.band_resistance, mostRecentPrior.band_resistance_unit || 'lb', newBandUnit);
+  return newBandResistance > priorInNewUnit ? true : null;
+}
+
 function celebratePR(exerciseName, weight, unit, priorBest){
   const gain = Math.round((weight - priorBest) * 10) / 10;
   const overlay = document.createElement('div');
@@ -8733,7 +8773,7 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
       const combinedNow = combinedBandResistance(selectedBands);
       if (combinedNow){
         const prev = await withTimeout(
-          supabaseClient.from('sets').select('band_resistance, band_resistance_unit, reps')
+          supabaseClient.from('sets').select('band_resistance, band_resistance_unit, reps, logged_at')
             .eq(idField, exerciseId).not('band_resistance', 'is', null),
           10000);
         if (!prev.__timeout && !prev.error && prev.data && prev.data.length){
@@ -8742,11 +8782,17 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
             if (!m || v > m.res || (v === m.res && (Number(r.reps)||0) > m.reps)) return { res: v, reps: Number(r.reps)||0 };
             return m;
           }, null);
-          if (best){
-            const repsNow = Number(reps) || 0;
-            if (combinedNow.value > best.res || (combinedNow.value === best.res && repsNow > best.reps)){
-              celebratePR(exerciseName, combinedNow.value, combinedNow.unit, best.res);
-            }
+          const repsNow = Number(reps) || 0;
+          const isAllTimePR = best && (combinedNow.value > best.res || (combinedNow.value === best.res && repsNow > best.reps));
+          if (isAllTimePR){
+            celebratePR(exerciseName, combinedNow.value, combinedNow.unit, best.res);
+          } else if (checkBandLevelUp(exerciseName, combinedNow.value, combinedNow.unit, prev.data)){
+            // Not an all-time PR, but a level-up is still worth acknowledging
+            // on its own - it's a different question ("higher than my LAST
+            // session specifically", not "higher than ever"), and completes
+            // the loop on the progression nudge shown on the Lift row: this
+            // is what actually following through on that nudge looks like.
+            celebrateBandLevelUp(exerciseName, selectedBands.map(b => b.label).join(' + '));
           }
         }
       }
