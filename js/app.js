@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.236';
+const APP_VERSION = 'Beta 5.237';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -3277,8 +3277,15 @@ async function openClearDayScreen(){
 const EQUIPMENT_CATEGORIES = [
   { key: 'barbell', label: 'Barbell', dbValues: ['barbell', 'e-z curl bar'] },
   { key: 'dumbbell', label: 'Dumbbells', dbValues: ['dumbbell'] },
-  { key: 'cable', label: 'Cables', dbValues: ['cable'] },
-  { key: 'machine', label: 'Machines', dbValues: ['machine'] },
+  { key: 'cable', label: 'Cable Machine', dbValues: ['cable'] },
+  // No dbValues - the public exercise database has no standalone "bench"
+  // equipment value (a bench is an accessory, not its own listed equipment
+  // type there), so this can't drive an automatic suggestion the way Cable
+  // or Barbell can. It's still a real, useful location tag on its own -
+  // just one the "Your Machines" matching below can inform better than the
+  // public database ever could.
+  { key: 'bench', label: 'Bench', dbValues: [] },
+  { key: 'machine', label: 'Machines (Other)', dbValues: ['machine'] },
   { key: 'kettlebells', label: 'Kettlebells', dbValues: ['kettlebells'] },
   { key: 'bands', label: 'Resistance Bands', dbValues: ['bands'] },
   { key: 'bodyweight', label: 'Bodyweight Only', dbValues: ['body only'] },
@@ -3487,15 +3494,35 @@ async function openPublishToMonoLiftScreen(){
 
 function openEditLocationEquipmentScreen(locationId, locationName, currentTags, onSaved){
   const selected = new Set(currentTags || []);
+  // Pending per-exercise location changes, keyed by exercise id -> true (add
+  // this location) or false (remove it). Nothing is written until Save -
+  // this mirrors the confirm-before-apply step from the mockup rather than
+  // writing on every tap, since a single group toggle can affect many
+  // exercises at once and deserves a chance to review before it commits.
+  const pending = {};
+  // fetchAllExercisesCompat returns one row PER DAY PLACEMENT - an exercise
+  // on three different days appears three times, each with a different
+  // (day-link) id but the same masterId. Deduplicated by masterId below so
+  // "Your Machines" shows each real exercise exactly once, and masterId is
+  // used as the identity everywhere in this screen instead of the compat
+  // object's own id field, since that id belongs to exercise_days, not the
+  // exercise_master/exercises row this screen actually needs to update -
+  // using it directly would target a completely different table's primary
+  // key and silently fail to change anything.
+  let myExercises = [];
   const overlay = document.createElement('div');
   overlay.className = 'overlay-screen';
   overlay.innerHTML = `
     <div class="form-header"><button id="closeEditEnvEquip">✕</button><h1>${locationName}</h1><div style="width:18px;"></div></div>
     <div class="overlay-scroll">
-      <div class="small" style="padding:8px 18px 16px 18px; color:var(--slate);">Select everything actually available at this location. Leave everything unselected to skip filtering here entirely.</div>
+      <div class="small" style="padding:8px 18px 10px 18px; color:var(--slate);">Select everything actually available at this location. Leave everything unselected to skip filtering here entirely.</div>
+      <div class="small" style="padding:0 18px 14px 18px; color:var(--slate); font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:1px; text-transform:uppercase;">Standard Equipment</div>
       <div id="envEquipChips" style="display:flex; flex-wrap:wrap; gap:8px; padding:0 18px;">
         ${EQUIPMENT_CATEGORIES.map(c => `<div class="chip env-equip-chip ${selected.has(c.key)?'active':''}" data-key="${c.key}">${c.label}</div>`).join('')}
       </div>
+      <div class="small" style="padding:22px 18px 6px 18px; color:var(--slate); font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:1px; text-transform:uppercase;">Your Machines</div>
+      <div class="small" style="padding:0 18px 12px 18px; color:var(--slate); line-height:1.5;">Grouped by your own exercise categories. Toggle a whole group at once, or open one to pick individual exercises.</div>
+      <div id="myMachinesArea"><div class="small" style="padding:10px 18px; color:var(--slate);">Loading your exercises…</div></div>
       <button class="save-btn" id="saveEnvEquipBtn" style="margin:24px 18px 20px 18px;">Save</button>
     </div>`;
   document.body.appendChild(overlay);
@@ -3507,16 +3534,153 @@ function openEditLocationEquipmentScreen(locationId, locationName, currentTags, 
       else { selected.add(key); chip.classList.add('active'); }
     };
   });
+
+  // Whether this exercise counts as tagged to this location right now,
+  // folding in any not-yet-saved pending change for it.
+  const exKey = (ex) => ex.masterId || ex.id;
+  const isTaggedHere = (ex) => {
+    const key = exKey(ex);
+    if (key in pending) return pending[key];
+    return !!(ex.location_ids && ex.location_ids.includes(locationId));
+  };
+
+  function groupState(exercisesInGroup){
+    const taggedCount = exercisesInGroup.filter(isTaggedHere).length;
+    if (taggedCount === 0) return 'none';
+    if (taggedCount === exercisesInGroup.length) return 'all';
+    return 'mixed';
+  }
+
+  function renderMachines(){
+    const area = overlay.querySelector('#myMachinesArea');
+    const byCategory = {};
+    myExercises.forEach(ex => { (byCategory[ex.category || 'Other'] = byCategory[ex.category || 'Other'] || []).push(ex); });
+    const categoryNames = Object.keys(byCategory).sort();
+    if (!categoryNames.length){
+      area.innerHTML = `<div class="small" style="padding:10px 18px; color:var(--slate);">No exercises yet - this fills in as you build out your library.</div>`;
+      return;
+    }
+    area.innerHTML = categoryNames.map(cat => {
+      const list = byCategory[cat];
+      const state = groupState(list);
+      const sample = list.slice(0, 2).map(e => e.name).join(', ');
+      const more = list.length > 2 ? `, +${list.length - 2} more` : '';
+      return `
+        <div class="cat-group" data-cat="${cat}" style="margin:0 18px 8px 18px; background:var(--panel); border-radius:12px; overflow:hidden;">
+          <div class="cat-head" style="display:flex; align-items:center; gap:10px; padding:12px 13px; cursor:pointer;">
+            <div class="info" style="flex:1;" data-role="expand">
+              <div style="font-family:'Oswald',sans-serif; font-size:13.5px;">${cat}</div>
+              <div class="small" style="color:var(--slate); margin-top:2px;">${list.length} exercise${list.length===1?'':'s'} — ${sample}${more}</div>
+            </div>
+            <div class="cat-toggle ${state==='all'?'on':''} ${state==='mixed'?'mixed':''}" data-role="toggle"
+              style="width:42px; height:25px; border-radius:13px; background:${state==='all'?'var(--flame)':(state==='mixed'?'rgba(255,107,26,0.35)':'var(--ink)')}; border:1px solid ${state==='none'?'var(--line)':'var(--flame)'}; position:relative; flex-shrink:0;">
+              <div style="position:absolute; width:19px; height:19px; border-radius:50%; background:#fff; top:2px; left:${state==='none'?'2px':'21px'};"></div>
+            </div>
+            <div class="small" data-role="chev" style="color:var(--slate); cursor:pointer; padding:0 2px;">▾</div>
+          </div>
+          <div class="item-list" data-role="items" style="display:none; border-top:1px solid var(--line);">
+            ${list.map(ex => `
+              <div class="item-row" data-ex="${exKey(ex)}" style="display:flex; align-items:center; gap:10px; padding:9px 13px 9px 18px; border-bottom:1px solid rgba(255,255,255,0.03); cursor:pointer;">
+                <div class="checkbox" data-role="itembox" style="width:18px; height:18px; border-radius:5px; border:1.5px solid ${isTaggedHere(ex)?'var(--flame)':'var(--line)'}; background:${isTaggedHere(ex)?'var(--flame)':'transparent'}; flex-shrink:0; display:flex; align-items:center; justify-content:center; color:var(--ink); font-size:11px; font-weight:700;">${isTaggedHere(ex)?'✓':''}</div>
+                <div class="small" style="font-size:12.5px; color:var(--chalk);">${ex.name}</div>
+              </div>`).join('')}
+          </div>
+        </div>`;
+    }).join('');
+
+    area.querySelectorAll('.cat-group').forEach(groupEl => {
+      const cat = groupEl.dataset.cat;
+      const list = byCategory[cat];
+      groupEl.querySelector('[data-role="toggle"]').onclick = (e) => {
+        e.stopPropagation();
+        const turningOn = groupState(list) !== 'all';
+        list.forEach(ex => { pending[exKey(ex)] = turningOn; });
+        renderMachines();
+      };
+      groupEl.querySelector('[data-role="chev"]').onclick = () => {
+        const itemsEl = groupEl.querySelector('[data-role="items"]');
+        itemsEl.style.display = itemsEl.style.display === 'none' ? 'block' : 'none';
+      };
+      groupEl.querySelectorAll('.item-row').forEach(row => {
+        row.onclick = () => {
+          const exId = row.dataset.ex;
+          const ex = list.find(x => exKey(x) === exId);
+          pending[exId] = !isTaggedHere(ex);
+          renderMachines();
+          // Keep this group expanded across the re-render, since the user
+          // is clearly mid-review of individual items here.
+          const itemsEl = overlay.querySelector(`.cat-group[data-cat="${cat}"] [data-role="items"]`);
+          if (itemsEl) itemsEl.style.display = 'block';
+        };
+      });
+    });
+  }
+
+  (async () => {
+    const userData = { user: await getCurrentUser() };
+    if (!userData.user) return;
+    const compat = await fetchAllExercisesCompat(userData.user.id);
+    const seen = new Set();
+    myExercises = compat.filter(ex => {
+      const key = ex.masterId || ex.id;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    renderMachines();
+  })();
+
   overlay.querySelector('#saveEnvEquipBtn').onclick = async () => {
-    await withButtonLoading(overlay.querySelector('#saveEnvEquipBtn'), 'Saving…', async () => {
+    const pendingIds = Object.keys(pending);
+    const doSave = async () => {
       const { error } = await supabaseClient.from('locations').update({ equipment_tags: [...selected] }).eq('id', locationId);
       if (error){
         alert(`Could not save: ${error.message}\n\nIf this mentions a missing column, the equipment_tags migration needs to be run first.`);
-        return;
+        return false;
       }
+      const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+      const errors = [];
+      for (const key of pendingIds){
+        const ex = myExercises.find(e => exKey(e) === key);
+        if (!ex) continue;
+        const shouldHave = pending[key];
+        const current = ex.location_ids || [];
+        const already = current.includes(locationId);
+        if (shouldHave === already) continue; // no actual change needed
+        const nextIds = shouldHave ? [...new Set([...current, locationId])] : current.filter(id => id !== locationId);
+        // masterId, not the compat id - the compat id is an exercise_days
+        // row for the master schema, a different table entirely. Falls back
+        // to id for the legacy schema, where the compat id genuinely is the
+        // real exercises-table row.
+        const realId = ex.masterId || ex.id;
+        const { error: exErr } = await supabaseClient.from(table).update({ location_ids: nextIds.length ? nextIds : null }).eq('id', realId);
+        if (exErr) errors.push(`${ex.name}: ${exErr.message}`);
+      }
+      invalidateTrackSnapshots();
+      warmInvalidate();
+      if (errors.length) alert(`Saved, but ${errors.length} exercise${errors.length===1?'':'s'} failed to update:\n\n${errors.join('\n')}`);
       overlay.remove();
       if (onSaved) onSaved();
-    });
+      return true;
+    };
+    if (!pendingIds.length){
+      await withButtonLoading(overlay.querySelector('#saveEnvEquipBtn'), 'Saving…', doSave);
+      return;
+    }
+    // Bulk exercise changes get a review step first, same principle as any
+    // other action here that touches more than one exercise at once - the
+    // user should see the actual scope before it commits, not discover it
+    // afterward.
+    const addCount = pendingIds.filter(id => pending[id]).length;
+    const removeCount = pendingIds.length - addCount;
+    const parts = [];
+    if (addCount) parts.push(`tag ${addCount} exercise${addCount===1?'':'s'} to ${locationName}`);
+    if (removeCount) parts.push(`untag ${removeCount} exercise${removeCount===1?'':'s'} from ${locationName}`);
+    showConfirmDialog(
+      `This will ${parts.join(' and ')}. Nothing else about those exercises changes.`,
+      () => withButtonLoading(overlay.querySelector('#saveEnvEquipBtn'), 'Saving…', doSave),
+      { title: 'Apply Equipment Changes?', confirmLabel: 'Apply' }
+    );
   };
 }
 
