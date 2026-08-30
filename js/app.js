@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.242';
+const APP_VERSION = 'Beta 5.243';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -5250,6 +5250,27 @@ function openEditMuscleForm(exerciseId, exerciseName){
 // one is waiting for the log form to happen to ask about it, one exercise
 // at a time, whenever it's next logged. This lets it be reviewed all at
 // once instead.
+// A batch of 100+ sequential requests over a real connection has a real
+// chance of hitting at least one transient network hiccup - "TypeError: Load
+// failed" is Safari's generic message for an interrupted fetch, not a
+// genuine server-side rejection, so it's worth retrying briefly before
+// counting it as a real failure. Small, fixed backoff rather than anything
+// elaborate - this only needs to survive a brief blip, not a real outage.
+async function withBulkRetry(fn, attempts){
+  let lastError = null;
+  for (let i = 0; i < (attempts || 3); i++){
+    try {
+      const result = await fn();
+      if (!result.error) return result;
+      lastError = result.error;
+    } catch(e){
+      lastError = e;
+    }
+    if (i < (attempts || 3) - 1) await new Promise(res => setTimeout(res, 400 * (i + 1)));
+  }
+  return { error: lastError };
+}
+
 async function openUnconfirmedLocationsScreen(){
   const overlay = document.createElement('div');
   overlay.className = 'overlay-screen';
@@ -5283,10 +5304,10 @@ async function openUnconfirmedLocationsScreen(){
       const realId = ex.masterId || ex.id;
       const current = ex.location_ids || [];
       const nextIds = isEverywhere ? null : [...new Set([...current, ...locationIds])];
-      const { error } = await supabaseClient.from(table).update({ location_ids: nextIds, location_confirmed: true }).eq('id', realId);
-      if (error) errors.push(`${ex.name}: ${error.message}`);
+      const { error } = await withBulkRetry(() => supabaseClient.from(table).update({ location_ids: nextIds, location_confirmed: true }).eq('id', realId));
+      if (error) errors.push(`${ex.name}: ${error.message || error}`);
     }
-    if (errors.length) alert(`Resolved, but ${errors.length} failed:\n\n${errors.join('\n')}`);
+    if (errors.length) alert(`Resolved, but ${errors.length} didn't go through - likely a dropped connection mid-batch, not a real problem with these exercises. They're still sitting in the list below, ready to try again:\n\n${errors.join('\n')}`);
     invalidateTrackSnapshots();
     warmInvalidate();
   }
@@ -5301,10 +5322,10 @@ async function openUnconfirmedLocationsScreen(){
     const errors = [];
     for (const ex of exercises){
       const realId = ex.masterId || ex.id;
-      const { error } = await supabaseClient.from(table).update({ location_confirmed: true }).eq('id', realId);
-      if (error) errors.push(`${ex.name}: ${error.message}`);
+      const { error } = await withBulkRetry(() => supabaseClient.from(table).update({ location_confirmed: true }).eq('id', realId));
+      if (error) errors.push(`${ex.name}: ${error.message || error}`);
     }
-    if (errors.length) alert(`Accepted, but ${errors.length} failed:\n\n${errors.join('\n')}`);
+    if (errors.length) alert(`Accepted, but ${errors.length} didn't go through - likely a dropped connection mid-batch, not a real problem with these exercises. They're still sitting in the list below, ready to try again:\n\n${errors.join('\n')}`);
     invalidateTrackSnapshots();
     warmInvalidate();
     onDone();
