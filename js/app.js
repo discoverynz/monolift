@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.241';
+const APP_VERSION = 'Beta 5.242';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -5256,9 +5256,12 @@ async function openUnconfirmedLocationsScreen(){
   overlay.innerHTML = `
     <div class="form-header"><button id="closeUnconfirmed">✕</button><h1>Unconfirmed Locations</h1><div style="width:18px;"></div></div>
     <div class="overlay-scroll">
-      <div class="small" style="padding:8px 18px 14px 18px; color:var(--slate); line-height:1.55;">These exercises predate location tagging and were never explicitly asked. Their current tag below is whatever it happened to end up as - it may already be correct, or it may be exactly the kind of silent mistake this screen exists to catch. Grouped by category, the same grouping Your Machines uses - if a batch already shares real equipment, resolve the whole batch at once instead of one at a time.</div>
+      <div class="small" style="padding:8px 18px 14px 18px; color:var(--slate); line-height:1.55;">These exercises predate location tagging and were never explicitly asked - their current tag below is whatever it happened to end up as, which is very often already correct. If it looks right, <b style="color:var(--good);">Accept</b> it as-is with no changes. If it's wrong, or you're not sure, <b style="color:var(--chalk);">Resolve</b> it to pick the real answer. Grouped by category, the same grouping Your Machines uses.</div>
       <div id="unconfirmedTopAction" style="display:none; margin:0 18px 16px 18px;">
-        <button class="btn-primary" id="resolveAllBtn" style="width:100%; background:var(--panel); color:var(--chalk); border:1px solid var(--line);">Resolve All <span id="resolveAllCount"></span></button>
+        <div style="display:flex; gap:8px;">
+          <button class="btn-primary" id="acceptAllBtn" style="flex:1; background:rgba(143,191,122,0.12); color:var(--good); border:1px solid rgba(143,191,122,0.35); font-size:12.5px;">Accept All As Shown</button>
+          <button class="btn-primary" id="resolveAllBtn" style="flex:1; background:var(--panel); color:var(--chalk); border:1px solid var(--line); font-size:12.5px;">Resolve All <span id="resolveAllCount"></span></button>
+        </div>
       </div>
       <div id="unconfirmedList"><div class="small" style="padding:14px 18px; color:var(--slate);">Checking your library…</div></div>
     </div>`;
@@ -5286,6 +5289,32 @@ async function openUnconfirmedLocationsScreen(){
     if (errors.length) alert(`Resolved, but ${errors.length} failed:\n\n${errors.join('\n')}`);
     invalidateTrackSnapshots();
     warmInvalidate();
+  }
+
+  // Marks a batch confirmed WITHOUT touching location_ids at all - the
+  // direct answer to "it already shows the right gym, why make me re-pick
+  // it". Resolve exists for the exercises that actually need a location
+  // decided or corrected; this is for the (likely much larger) set that's
+  // already sitting there correctly and just needs someone to say so.
+  async function bulkAcceptAsShown(exercises, onDone){
+    const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+    const errors = [];
+    for (const ex of exercises){
+      const realId = ex.masterId || ex.id;
+      const { error } = await supabaseClient.from(table).update({ location_confirmed: true }).eq('id', realId);
+      if (error) errors.push(`${ex.name}: ${error.message}`);
+    }
+    if (errors.length) alert(`Accepted, but ${errors.length} failed:\n\n${errors.join('\n')}`);
+    invalidateTrackSnapshots();
+    warmInvalidate();
+    onDone();
+  }
+  function confirmAcceptAsShown(exercises, scopeLabel, onDone){
+    showConfirmDialog(
+      `Marks ${exercises.length} exercise${exercises.length===1?'':'s'} as confirmed using whatever's already shown for each - nothing about where they're currently tagged changes. Only do this for ones you're actually confident are already right, not ones you haven't looked at.`,
+      () => bulkAcceptAsShown(exercises, onDone),
+      { title: `Accept ${scopeLabel} As Shown?`, confirmLabel: 'Accept' }
+    );
   }
 
   // A small inline Everywhere/location picker used for both the per-group
@@ -5353,6 +5382,7 @@ async function openUnconfirmedLocationsScreen(){
     topAction.style.display = 'block';
     overlay.querySelector('#resolveAllCount').textContent = `(${unconfirmed.length})`;
     overlay.querySelector('#resolveAllBtn').onclick = () => openBulkLocationPicker(unconfirmed, `All ${unconfirmed.length}`, render);
+    overlay.querySelector('#acceptAllBtn').onclick = () => confirmAcceptAsShown(unconfirmed, `All ${unconfirmed.length}`, render);
 
     const locNameById = {};
     allLocations.forEach(l => { locNameById[l.id] = l.name; });
@@ -5365,7 +5395,10 @@ async function openUnconfirmedLocationsScreen(){
       return `
         <div class="section-label" style="display:flex; justify-content:space-between; align-items:center; padding-right:18px;">
           <span>${cat} (${list.length})</span>
-          <button class="loc-act resolve-group-btn" data-cat="${cat}" style="text-transform:none; font-family:'JetBrains Mono',monospace;">Resolve Group</button>
+          <span style="display:flex; gap:6px;">
+            <button class="loc-act accept-group-btn" data-cat="${cat}" style="text-transform:none; font-family:'JetBrains Mono',monospace; color:var(--good); border-color:rgba(143,191,122,0.4);">Accept</button>
+            <button class="loc-act resolve-group-btn" data-cat="${cat}" style="text-transform:none; font-family:'JetBrains Mono',monospace;">Resolve</button>
+          </span>
         </div>
         ${list.map(ex => {
           const tagLabel = (ex.location_ids && ex.location_ids.length)
@@ -5376,6 +5409,7 @@ async function openUnconfirmedLocationsScreen(){
               <div class="ex-name" style="font-size:13.5px;">${ex.name}</div>
               <div class="small" style="color:var(--slate); margin-top:2px;">Currently: ${tagLabel}</div>
             </div>
+            <button class="loc-act accept-row-btn" style="color:var(--good); border-color:rgba(143,191,122,0.4);">Accept</button>
             <button class="loc-act" data-act="review">Review</button>
           </div>`;
         }).join('')}`;
@@ -5384,9 +5418,17 @@ async function openUnconfirmedLocationsScreen(){
     listArea.querySelectorAll('.resolve-group-btn').forEach(btn => {
       btn.onclick = () => openBulkLocationPicker(byCategory[btn.dataset.cat], btn.dataset.cat, render);
     });
+    listArea.querySelectorAll('.accept-group-btn').forEach(btn => {
+      btn.onclick = () => confirmAcceptAsShown(byCategory[btn.dataset.cat], btn.dataset.cat, render);
+    });
     listArea.querySelectorAll('.unconfirmed-row .loc-act[data-act="review"]').forEach(btn => {
       const row = btn.closest('.unconfirmed-row');
       btn.onclick = () => openEditLocationsForm(row.dataset.id, row.dataset.name, render);
+    });
+    listArea.querySelectorAll('.unconfirmed-row .accept-row-btn').forEach(btn => {
+      const row = btn.closest('.unconfirmed-row');
+      const ex = unconfirmed.find(e => (e.masterId || e.id) === row.dataset.id);
+      btn.onclick = () => confirmAcceptAsShown([ex], row.dataset.name, render);
     });
   }
   render();
