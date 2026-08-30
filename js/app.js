@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.232';
+const APP_VERSION = 'Beta 5.233';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -4788,9 +4788,17 @@ function attachSuggestionHandlers(){
 function showExerciseActionsMenu(exerciseId, exerciseName){
   removeSideIndex();
   const overlay = document.createElement('div');
-  overlay.style = 'position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:20; display:flex; align-items:center; justify-content:center;';
+  overlay.style = 'position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:20; display:flex; align-items:center; justify-content:center; padding:24px 0;';
+  // This list has grown to nine items across this session alone (Edit
+  // Category, How It's Measured and Locations were all added recently) with
+  // no scrolling on the container at all - on a shorter screen the bottom
+  // items, including the newest ones, could overflow past the visible
+  // viewport with no way to reach them. max-height plus overflow-y ensures
+  // every item stays reachable regardless of screen size or how many more
+  // get added later, rather than silently regressing every time this menu
+  // grows.
   overlay.innerHTML = `
-    <div style="background:var(--panel); border-radius:16px; padding:10px 0; width:280px;">
+    <div style="background:var(--panel); border-radius:16px; padding:10px 0; width:280px; max-height:100%; overflow-y:auto;">
       <div style="padding:12px 18px; font-family:'Oswald', sans-serif; font-size:14px; color:var(--slate); border-bottom:1px solid var(--line);">${exerciseName}</div>
       <div class="me-item" id="menuRename" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Rename Exercise</div><div class="chev">›</div></div>
       <div class="me-item" id="menuEditAlt" style="border-bottom:1px solid var(--line); cursor:pointer;"><div>Edit Alt Group</div><div class="chev">›</div></div>
