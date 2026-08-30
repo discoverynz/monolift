@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.234';
+const APP_VERSION = 'Beta 5.235';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -3287,6 +3287,33 @@ const EQUIPMENT_CATEGORIES = [
   { key: 'foam roll', label: 'Foam Roller', dbValues: ['foam roll'] },
   { key: 'other', label: 'Other / Misc', dbValues: ['other'] }
 ];
+
+// Suggests which of the user's locations likely have the right equipment for
+// a newly-named exercise, based on the location's own equipment_tags and the
+// exercise's likely equipment type (looked up via the same public exercise
+// database already used for muscle classification, matched with the same
+// confidence bar used there). This never selects anything automatically -
+// only ever returns a suggestion to present as a shortcut, since the whole
+// point of location_confirmed is that an explicit tap is always required
+// regardless of how confident the guess is.
+async function suggestLocationsForExercise(name, allLocations){
+  if (!name || !name.trim()) return null;
+  const exdb = await loadExerciseDB();
+  const scored = fuzzyMatchExerciseScored(name, exdb);
+  // Same bar used to gate the anatomy-keyword override - below this, a
+  // fuzzy match is treated as too weak to act on. This is exactly what
+  // correctly excludes custom "Banded X" home-gym names, which have no
+  // strong match against standard gym equipment and shouldn't get a
+  // confident-looking suggestion built on a coincidence.
+  if (!scored || scored.score < 0.5) return null;
+  const equipmentValue = (scored.entry.equipment || '').toLowerCase();
+  if (!equipmentValue) return null;
+  const category = EQUIPMENT_CATEGORIES.find(c => c.dbValues.includes(equipmentValue));
+  if (!category) return null;
+  const matches = (allLocations || []).filter(l => (l.equipment_tags || []).includes(category.key));
+  if (!matches.length) return null;
+  return { categoryLabel: category.label, locations: matches };
+}
 
 async function openApproveContributorsScreen(){
   const overlay = document.createElement('div');
@@ -8185,6 +8212,10 @@ async function openNewExerciseForm(opts){
       </div>
       <div class="field-label">Where Is This Available <span class="opt">(required)</span></div>
       <div class="small" style="padding:0 18px 8px 18px; color:var(--slate); line-height:1.5;">Pick Everywhere for anything that isn't tied to specific equipment - bodyweight, bands, most cables. Pick a gym only for something that genuinely only exists there, like a specific machine.</div>
+      <div id="locSuggestArea" style="display:none; margin:0 18px 10px 18px; background:rgba(201,162,39,0.08); border:1px solid rgba(201,162,39,0.3); border-radius:12px; padding:11px 13px;">
+        <div class="small" style="color:var(--brass); margin-bottom:8px;" id="locSuggestLabel"></div>
+        <div class="chip-row" id="locSuggestChipRow" style="padding:0;"></div>
+      </div>
       <div class="chip-row" id="everywhereChipRow"><div class="chip" id="everywhereChip">Everywhere</div></div>
       <div class="chip-row" id="locationChipRow"><div class="small" style="color:var(--slate); padding:8px 0;">Loading…</div></div>
       <div class="small" id="locationRequiredHint" style="padding:0 18px 8px 18px; color:#E8492A; display:none;">Pick Everywhere or at least one location before saving.</div>
@@ -8307,6 +8338,36 @@ async function openNewExerciseForm(opts){
     };
   }
   await renderLocationChips();
+
+  // Equipment-based suggestion: fires once the name is settled, not on every
+  // keystroke. Only ever surfaces a shortcut to tap - selecting it runs
+  // through the exact same code path as tapping a real location chip, so it
+  // can never bypass the requirement to explicitly choose something.
+  document.getElementById('exNameInput').addEventListener('blur', async () => {
+    if (locationIsEverywhere || selectedLocationIds.length) return; // already decided, no need to suggest
+    const nameVal = document.getElementById('exNameInput').value.trim();
+    const locs = await loadLocations();
+    const suggestion = await suggestLocationsForExercise(nameVal, locs);
+    const area = overlay.querySelector('#locSuggestArea');
+    if (!area) return;
+    if (!suggestion){ area.style.display = 'none'; return; }
+    area.style.display = 'block';
+    overlay.querySelector('#locSuggestLabel').textContent =
+      `Looks like a ${suggestion.categoryLabel.toLowerCase()} exercise - these have that:`;
+    const row = overlay.querySelector('#locSuggestChipRow');
+    row.innerHTML = suggestion.locations.map(l => `<div class="chip" data-loc="${l.id}" style="border-color:var(--brass);">${l.name}</div>`).join('');
+    row.querySelectorAll('.chip[data-loc]').forEach(el => {
+      el.onclick = () => {
+        // Same selection this exercise's own location chip would have
+        // triggered - just reached by tapping the suggestion instead of
+        // hunting through the full list.
+        const id = el.dataset.loc;
+        const realChip = overlay.querySelector(`#locationChipRow .chip[data-loc="${id}"]`);
+        if (realChip) realChip.click();
+        area.style.display = 'none';
+      };
+    });
+  });
 
 
   async function renderCategoryChips(){
