@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.252';
+const APP_VERSION = 'Beta 5.253';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -3291,10 +3291,23 @@ async function openWipeAltGroupsScreen(){
   body.querySelector('#confirmWipeBtn').onclick = () => {
     showConfirmDialog(`This clears alt group tags from ${taggedCount} exercises. Nothing else is touched - names, weights, history, all stay exactly as they are.`, async () => {
       await withButtonLoading(body.querySelector('#confirmWipeBtn'), 'Wiping…', async () => {
-        const useMaster = getUseExerciseMasterFlag();
-        const table = useMaster ? 'exercise_master' : 'exercises';
-        await supabaseClient.from(table).update({ alt_group_id: null }).eq('user_id', uid).not('alt_group_id', 'is', null);
-        await supabaseClient.from('alt_groups').delete().eq('user_id', uid);
+        const table = exerciseTable();
+        // Clear the references before deleting the groups, and only delete
+        // if that clear genuinely succeeded - otherwise every exercise keeps
+        // an alt_group_id pointing at a group that no longer exists.
+        const cleared = await withBulkRetry(() => withTimeout(
+          supabaseClient.from(table).update({ alt_group_id: null }).eq('user_id', uid).not('alt_group_id', 'is', null), 20000));
+        if (cleared && cleared.error){
+          alert("Couldn't clear the alt-group tags, so no groups were deleted - nothing was changed. Usually a dropped connection; try again.");
+          return;
+        }
+        const wiped = await withBulkRetry(() => withTimeout(
+          supabaseClient.from('alt_groups').delete().eq('user_id', uid), 20000));
+        if (wiped && wiped.error){
+          alert("Alt-group tags were cleared, but the empty groups themselves couldn't be removed. Nothing is broken - run this again to finish the cleanup.");
+        }
+        invalidateTrackSnapshots();
+        warmInvalidate();
         overlay.remove();
         alert(`Wiped. Go to each day and use Auto-Group Alts (long-press any exercise) to rebuild, one day at a time.`);
         if (state.currentTab === 'track') renderTrack();
@@ -3851,11 +3864,35 @@ async function openManageLocationsScreen(){
           const userData = { user: await getCurrentUser() };
           const table = exerciseTable();
           const exResult = await withTimeout(supabaseClient.from(table).select('id, location_ids').eq('user_id', userData.user.id), 15000);
+          // If this read fails, (exResult.data || []) is an empty list - which
+          // looks identical to "no exercise uses this location" and would
+          // sail straight through to deleting it, leaving EVERY tagged
+          // exercise pointing at a row that no longer exists. An exercise
+          // tagged only to that location then matches no real gym and
+          // disappears from the app entirely. Never infer "nothing affected"
+          // from a failed read.
+          if (exResult.__timeout || exResult.error){
+            alert("Couldn't check which exercises use this location, so nothing was deleted. Usually a dropped connection; try again.");
+            return;
+          }
           const affected = (exResult.data || []).filter(ex => (ex.location_ids || []).includes(btn.dataset.id));
+          const failed = [];
           for (const ex of affected){
-            await supabaseClient.from(table).update({ location_ids: ex.location_ids.filter(id => id !== btn.dataset.id) }).eq('id', ex.id);
+            const r = await withBulkRetry(() => withTimeout(
+              supabaseClient.from(table).update({ location_ids: ex.location_ids.filter(id => id !== btn.dataset.id) }).eq('id', ex.id), 20000));
+            if (r && r.error) failed.push(ex.id);
+          }
+          // Same rule as everywhere else destructive in this app: don't run
+          // the irreversible step if the step that makes it safe didn't
+          // fully succeed.
+          if (failed.length){
+            alert(`Couldn't untag ${failed.length} exercise${failed.length===1?'':'s'} from this location, so the location was NOT deleted - nothing is left in a broken state. Usually a dropped connection; try again.`);
+            render();
+            return;
           }
           await withBulkRetry(() => withTimeout(supabaseClient.from('locations').delete().eq('id', btn.dataset.id), 20000));
+          invalidateTrackSnapshots();
+          warmInvalidate();
           render();
         }, { title: `Delete "${btn.dataset.name}"?`, danger: true, confirmLabel: 'Delete' });
       };
@@ -7537,7 +7574,12 @@ async function createPlanBackup(name){
   // reorganization) alongside weekday and every other tag.
   exercises = exercises.map(ex => ({
     id: ex.masterId || ex.id, name: ex.name, category: ex.category, weekday: ex.weekday,
-    alt_group_id: ex.alt_group_id, push_pull: ex.push_pull, upper_lower: ex.upper_lower, location_ids: ex.location_ids
+    alt_group_id: ex.alt_group_id, push_pull: ex.push_pull, upper_lower: ex.upper_lower, location_ids: ex.location_ids,
+    // location_confirmed travels WITH location_ids deliberately. Restoring a
+    // location without whether it was ever actually confirmed is what makes
+    // a stale tag masquerade as a reviewed one - see the restore path below
+    // for why that matters and how pre-existing backups are handled.
+    location_confirmed: ex.location_confirmed
   }));
 
   // The insert can genuinely fail at the network level on mobile (not just
@@ -7588,13 +7630,31 @@ async function restorePlanBackup(backup){
     let restored = 0, skipped = 0;
     for (const ex of backup.snapshot){
       if (!currentIds.has(ex.id)){ skipped++; continue; }
-      await supabaseClient.from('exercise_master').update({
+      // A backup taken before location tagging existed has location_ids but
+      // no location_confirmed. Restoring those locations while leaving the
+      // exercise marked confirmed would silently replace real, reviewed
+      // location data with a stale snapshot AND suppress every mechanism
+      // built to catch exactly that - no prompt on next log, nothing in the
+      // Unconfirmed screen. The whole library would quietly go wrong.
+      //
+      // So: restore the location, but carry the snapshot's own confirmed
+      // state with it, and treat a snapshot that never had one as
+      // unconfirmed. Worst case the user is asked to re-confirm something
+      // that was already right, which is recoverable in seconds. The
+      // alternative is silently wrong data that looks reviewed.
+      const payload = {
         category: ex.category, alt_group_id: ex.alt_group_id,
-        push_pull: ex.push_pull, upper_lower: ex.upper_lower, location_ids: ex.location_ids
-      }).eq('id', ex.id);
+        push_pull: ex.push_pull, upper_lower: ex.upper_lower, location_ids: ex.location_ids,
+        location_confirmed: 'location_confirmed' in ex ? !!ex.location_confirmed : false
+      };
+      const r = await withBulkRetry(() => withTimeout(
+        supabaseClient.from('exercise_master').update(payload).eq('id', ex.id), 20000));
+      if (r && r.error){ skipped++; continue; }
       await moveExerciseToDay({ masterId: ex.id, ids: [] }, ex.weekday, false);
       restored++;
     }
+    invalidateTrackSnapshots();
+    warmInvalidate();
     return { restored, skipped };
   }
   const currentResult = await withTimeout(
@@ -7605,12 +7665,16 @@ async function restorePlanBackup(backup){
   let restored = 0, skipped = 0;
   for (const ex of backup.snapshot){
     if (!currentIds.has(ex.id)){ skipped++; continue; }
-    await supabaseClient.from('exercises').update({
+    const r = await withBulkRetry(() => withTimeout(supabaseClient.from('exercises').update({
       category: ex.category, weekday: ex.weekday, alt_group_id: ex.alt_group_id,
-      push_pull: ex.push_pull, upper_lower: ex.upper_lower, location_ids: ex.location_ids
-    }).eq('id', ex.id);
+      push_pull: ex.push_pull, upper_lower: ex.upper_lower, location_ids: ex.location_ids,
+      location_confirmed: 'location_confirmed' in ex ? !!ex.location_confirmed : false
+    }).eq('id', ex.id), 20000));
+    if (r && r.error){ skipped++; continue; }
     restored++;
   }
+  invalidateTrackSnapshots();
+  warmInvalidate();
   return { restored, skipped };
 }
 
@@ -8610,9 +8674,22 @@ async function pickAltGroup(container, onPicked){
           const memberTable = exerciseTable();
           // Clear the reference on every exercise pointing at this group first, so
           // nothing is left referencing a group that no longer exists.
-          await supabaseClient.from(memberTable).update({ alt_group_id: null }).eq('user_id', userData.user.id).eq('alt_group_id', btn.dataset.id);
-          const { error } = await supabaseClient.from('alt_groups').delete().eq('id', btn.dataset.id);
-          if (error){ alert(error.message); return; }
+          //
+          // That ordering only actually guarantees anything if the clear is
+          // CHECKED. Unverified, a failed clear followed by a successful
+          // delete leaves exercises pointing at a group id that no longer
+          // exists - the exact state this ordering exists to prevent, with
+          // no error shown. So the delete is now conditional on the clear
+          // having genuinely succeeded.
+          const cleared = await withBulkRetry(() => withTimeout(
+            supabaseClient.from(memberTable).update({ alt_group_id: null }).eq('user_id', userData.user.id).eq('alt_group_id', btn.dataset.id), 15000));
+          if (cleared && cleared.error){
+            alert("Couldn't unlink the exercises from this group, so the group was left alone - nothing was changed. Usually a dropped connection; try again.");
+            return;
+          }
+          const { error } = await withBulkRetry(() => withTimeout(
+            supabaseClient.from('alt_groups').delete().eq('id', btn.dataset.id), 15000));
+          if (error){ alert(error.message || error); return; }
           const idx = groups.findIndex(g => g.id === btn.dataset.id);
           if (idx !== -1) groups.splice(idx, 1);
           renderAlt(container.querySelector('#altSearch').value);
@@ -10523,10 +10600,31 @@ async function openMyBandsScreen(){
         // Swap sort_order with the neighbour. Writing both explicitly keeps
         // the ordering stable rather than relying on implicit index maths.
         const a = bands[idx], b = bands[swapWith];
-        await Promise.all([
-          supabaseClient.from('bands').update({ sort_order: b.sort_order }).eq('id', a.id),
-          supabaseClient.from('bands').update({ sort_order: a.sort_order }).eq('id', b.id)
-        ]);
+        // Sequential with rollback, not Promise.all. A swap is two writes
+        // that are only correct together: if the first lands and the second
+        // doesn't, both bands end up sharing a sort_order. That's not a
+        // cosmetic ordering glitch - this order is precisely what tells the
+        // app which band is a step up, so a collision corrupts band
+        // progression nudges and the levelled-up detection, silently and
+        // with no visible sign anything went wrong.
+        const first = await withBulkRetry(() => withTimeout(
+          supabaseClient.from('bands').update({ sort_order: b.sort_order }).eq('id', a.id), 15000));
+        if (first && first.error){
+          alert("Couldn't reorder - nothing was changed. Usually a dropped connection; try again.");
+          return;
+        }
+        const second = await withBulkRetry(() => withTimeout(
+          supabaseClient.from('bands').update({ sort_order: a.sort_order }).eq('id', b.id), 15000));
+        if (second && second.error){
+          // Put the first one back rather than leaving two bands claiming
+          // the same position.
+          await withBulkRetry(() => withTimeout(
+            supabaseClient.from('bands').update({ sort_order: a.sort_order }).eq('id', a.id), 15000));
+          alert("Couldn't reorder - the original order was restored. Usually a dropped connection; try again.");
+          warmInvalidate('bands');
+          render();
+          return;
+        }
         warmInvalidate('bands');
         render();
       };
