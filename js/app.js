@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.245';
+const APP_VERSION = 'Beta 5.246';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -4821,7 +4821,7 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
       ${starters.map(s => `<div class="pick-row starter-add" data-name="${s.name}" data-cat="${s.category}"><div class="ex-name">${s.name}</div><div class="chev" style="color:var(--flame); font-size:20px;">+</div></div>`).join('')}
       <div style="padding:14px 18px;"><button class="btn-primary" id="emptyAddBtn">+ Add a Different Exercise</button></div>
       <div style="padding:0 18px 8px 18px;"><button class="btn-primary" id="browseIdeasBtn" style="width:100%; background:var(--brass); color:var(--ink);">Browse workout ideas</button></div>
-      <div style="padding:0 18px 14px 18px;"><button class="btn-primary" id="logOffPlanBtn" style="width:100%; background:var(--panel); color:var(--chalk); border:1px solid var(--line);">Log something off-plan</button></div>`;
+`;
   } else if (visibleExercises.length === 0 && currentLocationId){
     // The user HAS exercises on this day, but every one of them is tagged
     // for a different location so they all got filtered out. Without this
@@ -4834,7 +4834,7 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
     listHtml = `<div class="empty-state" style="padding:24px 18px; text-align:center;">
       <div style="font-size:14px; color:var(--chalk); margin-bottom:6px;">All ${hiddenCount} of your ${dayLabelOf(state.selectedDay)} exercises are tagged for another location.</div>
       <div style="font-size:12px; color:var(--slate); margin-bottom:14px;">They're not gone - just filtered out because you're currently at <span style="color:var(--flame);">${currentLocationName || 'a specific location'}</span>.</div>
-      <button class="btn-primary" id="logOffPlanBtn" style="max-width:240px; margin:0 auto 8px auto;">Log what's here</button>
+      <button class="btn-primary" id="logSomethingElseBtn" style="max-width:240px; margin:0 auto 8px auto;">Log something else</button>
       <button class="btn-primary" id="clearLocationBtn" style="max-width:240px; margin:0 auto; background:var(--panel); color:var(--chalk); border:1px solid var(--line);">Show exercises from anywhere</button>
     </div>`;
   }
@@ -5030,8 +5030,8 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   if (retryBtn) retryBtn.onclick = () => { state.exercises = []; renderTrack(); };
   const clearLocBtn = document.getElementById('clearLocationBtn');
   if (clearLocBtn) clearLocBtn.onclick = () => openLocationPicker(allLocations, currentLocationId);
-  const offPlanBtn = document.getElementById('logOffPlanBtn');
-  if (offPlanBtn) offPlanBtn.onclick = () => openPicker('offplan');
+  const logSomethingElseBtn = document.getElementById('logSomethingElseBtn');
+  if (logSomethingElseBtn) logSomethingElseBtn.onclick = () => openPicker();
   const browseIdeasBtn = document.getElementById('browseIdeasBtn');
   if (browseIdeasBtn) browseIdeasBtn.onclick = () => openPicker('ideas');
   document.querySelectorAll('.starter-add').forEach(el => {
@@ -6327,9 +6327,18 @@ async function ensureExerciseExistsUnattached(uid, name, category){
 }
 
 async function openPicker(initialTab, jumpToMuscle){
-  // 'offplan' means log against an exercise WITHOUT attaching it to a
-  // weekday - used for holiday/random-gym sessions. It's a logging mode,
-  // not a separate screen, so the picker itself is unchanged.
+  // DEPRECATED. Off-plan created exercises with no weekday link at all - an
+  // unusual state most of this app's queries quietly assume can't happen,
+  // and the source of a disproportionate share of its bugs. The Anytime day
+  // covers the same need (logging outside the weekday plan) using machinery
+  // the rest of the app already understands, so both entry points into this
+  // mode are gone and nothing new can be created off-plan.
+  //
+  // Everything downstream is deliberately left intact: the off_plan column,
+  // the flag being set on save, and every read path. Existing off-plan sets
+  // are real logged history and must keep displaying correctly. This is a
+  // deprecation, not a data removal - the creation machinery can be deleted
+  // in a later pass once nothing is observed to depend on it.
   let offPlanMode = initialTab === 'offplan';
   if (offPlanMode) initialTab = null;
   if (jumpToMuscle) setPickerGroupByPref('muscle');
@@ -6337,13 +6346,6 @@ async function openPicker(initialTab, jumpToMuscle){
   overlay.className = 'overlay-screen';
   overlay.innerHTML = `
     <div class="form-header"><button id="closePicker">✕</button><h1 id="pickerTitle">${offPlanMode ? 'Log Off-Plan' : 'Log a Set'}</h1><div style="width:18px;"></div></div>
-    <div class="offplan-toggle-row">
-      <div style="flex:1;">
-        <div class="offplan-toggle-title">Log off-plan</div>
-        <div class="offplan-toggle-sub">Log this without adding it to ${dayNameOf(state.selectedDay)} — for improvised sessions or a gym you're only at once.</div>
-      </div>
-      <button class="switch ${offPlanMode ? '' : 'off'}" id="offPlanSwitch"></button>
-    </div>
     <div style="display:flex; padding:0 18px; border-bottom:1px solid var(--line);">
       <div class="picker-toptab" data-tab="mine" style="flex:1; text-align:center; padding:10px 0; font-family:'Oswald',sans-serif; font-size:12px; text-transform:uppercase; letter-spacing:0.5px; color:var(--slate); border-bottom:2px solid transparent; cursor:pointer;">Your Exercises</div>
       <div class="picker-toptab" data-tab="database" style="flex:1; text-align:center; padding:10px 0; font-family:'Oswald',sans-serif; font-size:12px; text-transform:uppercase; letter-spacing:0.5px; color:var(--slate); border-bottom:2px solid transparent; cursor:pointer;">Database</div>
@@ -6352,13 +6354,6 @@ async function openPicker(initialTab, jumpToMuscle){
     <div class="overlay-scroll" id="pickerBody"></div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#closePicker').onclick = () => { removeSideIndex(); overlay.remove(); };
-  const offPlanSwitch = overlay.querySelector('#offPlanSwitch');
-  if (offPlanSwitch) offPlanSwitch.onclick = () => {
-    offPlanMode = !offPlanMode;
-    offPlanSwitch.classList.toggle('off', !offPlanMode);
-    const title = overlay.querySelector('#pickerTitle');
-    if (title) title.textContent = offPlanMode ? 'Log Off-Plan' : 'Log a Set';
-  };
 
   const userData = { user: await getCurrentUser() };
   const all = await fetchAllExercisesCompat(userData.user.id);
