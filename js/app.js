@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.253';
+const APP_VERSION = 'Beta 5.254';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -5366,6 +5366,73 @@ function openEditMuscleForm(exerciseId, exerciseName){
 // genuine server-side rejection, so it's worth retrying briefly before
 // counting it as a real failure. Small, fixed backoff rather than anything
 // elaborate - this only needs to survive a brief blip, not a real outage.
+// ---------- OFFLINE SET OUTBOX ----------
+// A set logged without signal used to be lost outright: the insert was bare,
+// so a hotel gym's dead wifi produced a raw "TypeError: Load failed" and the
+// reps were simply gone. Losing work someone actually did is the worst thing
+// this app can do, so sets now go to the phone first and sync after.
+const OUTBOX_KEY = 'zealift_set_outbox';
+function readOutbox(){
+  try { return JSON.parse(localStorage.getItem(OUTBOX_KEY) || '[]'); } catch(e){ return []; }
+}
+function writeOutbox(list){
+  try { localStorage.setItem(OUTBOX_KEY, JSON.stringify(list)); } catch(e){}
+}
+function queueSetLocally(payload){
+  const list = readOutbox();
+  // A local id so the UI has something stable to reference before the real
+  // row exists, and so a set can be identified if it needs removing again.
+  const localId = 'local_' + Date.now() + '_' + Math.random().toString(36).slice(2,7);
+  list.push({ localId, payload, queuedAt: new Date().toISOString() });
+  writeOutbox(list);
+  updateOutboxIndicator();
+  return localId;
+}
+let __outboxFlushing = false;
+async function flushOutbox(){
+  if (__outboxFlushing) return;
+  const list = readOutbox();
+  if (!list.length){ updateOutboxIndicator(); return; }
+  __outboxFlushing = true;
+  const remaining = [];
+  for (const item of list){
+    const r = await withBulkRetry(() => withTimeout(
+      supabaseClient.from('sets').insert(item.payload).select(), 15000), 2);
+    // Only drop it from the queue on a genuine success. Anything else -
+    // error, timeout, thrown fetch - keeps it queued for the next attempt,
+    // because dropping an unconfirmed set is the exact data loss this
+    // whole mechanism exists to prevent.
+    if (r && !r.error && !r.__timeout) continue;
+    remaining.push(item);
+  }
+  writeOutbox(remaining);
+  __outboxFlushing = false;
+  updateOutboxIndicator();
+  if (remaining.length < list.length){
+    invalidateTrackSnapshots();
+    warmInvalidate();
+    if (state.currentTab === 'track') renderTrack();
+  }
+}
+function updateOutboxIndicator(){
+  const n = readOutbox().length;
+  let el = document.getElementById('outboxIndicator');
+  if (!n){ if (el) el.remove(); return; }
+  if (!el){
+    el = document.createElement('div');
+    el.id = 'outboxIndicator';
+    el.style = "position:fixed; top:calc(6px + env(safe-area-inset-top,0px)); left:50%; transform:translateX(-50%); z-index:40; background:var(--panel); border:1px solid rgba(201,162,39,0.4); color:var(--brass); border-radius:20px; padding:5px 13px; font-size:11px; font-family:'JetBrains Mono',monospace; box-shadow:0 4px 14px rgba(0,0,0,0.4);";
+    el.onclick = () => flushOutbox();
+    document.body.appendChild(el);
+  }
+  el.textContent = `${n} set${n===1?'':'s'} waiting to sync`;
+}
+// Flush whenever connectivity plausibly returns, and periodically as a
+// backstop - the online event alone is unreliable on mobile, where a phone
+// can regain a usable connection without ever firing it.
+window.addEventListener('online', () => flushOutbox());
+setInterval(() => { if (navigator.onLine !== false) flushOutbox(); }, 45000);
+
 async function withBulkRetry(fn, attempts){
   let lastError = null;
   for (let i = 0; i < (attempts || 3); i++){
@@ -9369,6 +9436,14 @@ async function loadExerciseGuide(overlay, exerciseName){
 }
 
 // ---------- PR CELEBRATION ----------
+function showQueuedSetToast(){
+  const t = document.createElement('div');
+  t.style = "position:fixed; bottom:100px; left:50%; transform:translateX(-50%); max-width:90%; background:var(--panel); border:1px solid rgba(201,162,39,0.45); border-radius:12px; padding:13px 16px; display:flex; align-items:center; gap:11px; z-index:30; box-shadow:0 8px 24px rgba(0,0,0,0.45);";
+  t.innerHTML = `<span style="font-size:19px;">📥</span><div><div style="font-size:12.5px; color:var(--chalk);">Saved on this phone</div><div style="font-size:11px; color:var(--slate); margin-top:1px;">No connection — it'll upload by itself.</div></div>`;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 3800);
+}
+
 // ---------- BAND LEVEL-UP CELEBRATION ----------
 // The natural completion of the progression nudge (detectBandProgressionReady)
 // - that nudge suggests moving up; this acknowledges it when someone actually
@@ -9759,8 +9834,25 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
     }
     insertPayload[idField] = exerciseId;
     invalidateTrackSnapshots(); // logged set changes done-flags and header stats
-    const { data, error } = await supabaseClient.from('sets').insert(insertPayload).select();
-    if (error){ alert(error.message); return null; }
+    let data = null, error = null;
+    try {
+      const r = await withTimeout(supabaseClient.from('sets').insert(insertPayload).select(), 12000);
+      if (r.__timeout) error = { message: 'timed out' };
+      else { data = r.data; error = r.error; }
+    } catch(e){
+      // A thrown fetch (Safari's "Load failed") never reaches Supabase's own
+      // error handling, so it has to be caught separately or it escapes as
+      // an unhandled rejection and the set vanishes silently.
+      error = { message: e.message || 'network' };
+    }
+    if (error){
+      // Queue rather than lose it. The set is genuinely saved - on this
+      // phone - and the user is told exactly that rather than shown a raw
+      // network error for something they did nothing wrong to cause.
+      queueSetLocally(insertPayload);
+      showQueuedSetToast();
+      return 'queued';
+    }
     // Celebrate a new PR: strictly greater than the prior best, and there must be a prior best.
     if (priorBest !== null && weight > priorBest + 0.01){
       celebratePR(exerciseName, weight, unit, priorBest);
@@ -9777,7 +9869,10 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
     if (insertedId){
       overlay.remove();
       if (state.currentTab === 'track') renderTrack();
-      showUndoLastLogToast(insertedId);
+      // A queued set has no server row yet, so there's nothing for Undo to
+      // delete - offering it would fail against an id that doesn't exist.
+      // The queued toast already told the user what happened.
+      if (insertedId !== 'queued') showUndoLastLogToast(insertedId);
     }
   }
 
@@ -13205,31 +13300,61 @@ function todaysGymWisdom(){
   return GYM_WISDOM[dayIndex];
 }
 
-// Current streak = consecutive days up to and including today or yesterday
-// (a rest day today doesn't break a streak still "in progress"). Longest
-// streak scans the whole window for the best run.
+// A streak survives a single rest day, because training every single day
+// without one isn't a goal worth encouraging - a week with a rest day in it
+// is a better week, and a streak that punishes rest quietly pushes toward
+// the wrong behaviour. Two rest days in a row is a genuine break and does
+// end it.
+//
+// MAX_STREAK_GAP_DAYS is the distance between consecutive TRAINING days, so
+// 2 means "trained Monday, next was Wednesday" still counts - exactly one
+// rest day between them.
+const MAX_STREAK_GAP_DAYS = 2;
+
+// Counts distinct training days in the current run, not calendar days
+// spanned - so a Mon/Wed/Fri week reads as 3, which is what someone
+// actually did rather than a padded 5.
 function computeConsistencyStreak(sets){
   const daysWithSets = new Set(sets.map(s => s.logged_at));
-  let current = 0;
-  const todayD = new Date(); todayD.setHours(0,0,0,0);
-  let cursor = new Date(todayD);
-  // If today has nothing logged yet, start counting from yesterday instead -
-  // still "today" in streak terms until the day actually ends.
-  if (!daysWithSets.has(cursor.toISOString().slice(0,10))) cursor.setDate(cursor.getDate()-1);
-  while (daysWithSets.has(cursor.toISOString().slice(0,10))){
-    current++;
-    cursor.setDate(cursor.getDate()-1);
+  if (!daysWithSets.size) return { current: 0, longest: 0, restDayUsed: false };
+
+  // Local date strings throughout. The previous version compared
+  // toISOString() (UTC) against logged_at (local), which in any timezone
+  // ahead of UTC resolves local midnight to the PREVIOUS calendar day -
+  // silently shifting every comparison by one and under-counting the
+  // streak. todayStr/addDaysToDate are the app's existing local-safe
+  // helpers and are used here for exactly that reason.
+  const today = todayStr();
+  const sortedDesc = [...daysWithSets].sort().reverse();
+
+  const daysBetween = (laterStr, earlierStr) =>
+    Math.round((new Date(laterStr + 'T00:00:00') - new Date(earlierStr + 'T00:00:00')) / 86400000);
+
+  // The run must still be live: the most recent training day has to be
+  // within the allowed gap of today, or the streak has already lapsed.
+  const mostRecent = sortedDesc[0];
+  let current = 0, restDayUsed = false;
+  if (daysBetween(today, mostRecent) <= MAX_STREAK_GAP_DAYS){
+    current = 1;
+    if (daysBetween(today, mostRecent) === MAX_STREAK_GAP_DAYS) restDayUsed = true;
+    for (let i = 1; i < sortedDesc.length; i++){
+      const gap = daysBetween(sortedDesc[i-1], sortedDesc[i]);
+      if (gap <= MAX_STREAK_GAP_DAYS){
+        current++;
+        if (gap === MAX_STREAK_GAP_DAYS) restDayUsed = true;
+      } else break;
+    }
   }
-  const sortedDays = [...daysWithSets].sort();
-  let longest = 0, run = 0, prevDate = null;
-  sortedDays.forEach(dateStr => {
-    const d = new Date(dateStr + 'T00:00:00');
-    if (prevDate && (d - prevDate) === 86400000) run++;
+
+  const sortedAsc = [...daysWithSets].sort();
+  let longest = 0, run = 0, prev = null;
+  sortedAsc.forEach(dateStr => {
+    if (prev && daysBetween(dateStr, prev) <= MAX_STREAK_GAP_DAYS) run++;
     else run = 1;
     longest = Math.max(longest, run);
-    prevDate = d;
+    prev = dateStr;
   });
-  return { current, longest };
+  return { current, longest, restDayUsed };
 }
 
 // GitHub-style activity grid: one cell per day over the window, intensity by
