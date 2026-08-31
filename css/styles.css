@@ -397,3 +397,56 @@ input:focus, button:focus{ outline:none; }
 
 /* Edit Set form reuses .stepper-row/.stepper-btn/.stepper-value and
    .band-pick-row/.band-pick already defined elsewhere - no new classes needed. */
+
+/* ---------- MOTION & REWARD ----------
+   Everything here is decorative. All of it is disabled wholesale under
+   prefers-reduced-motion at the bottom of this block - animation that can't
+   be turned off stops being a nice touch the moment someone needs it off. */
+
+@keyframes ml-rise { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
+@keyframes ml-pop { 0% { transform:scale(.86); opacity:0; } 60% { transform:scale(1.04); } 100% { transform:scale(1); opacity:1; } }
+@keyframes ml-float-up { 0% { opacity:1; transform:translateY(0) scale(1); } 100% { opacity:0; transform:translateY(-46px) scale(1.3); } }
+@keyframes ml-shimmer { 0% { background-position:-260px 0; } 100% { background-position:260px 0; } }
+
+.greeting-line{
+  font-family:'Bebas Neue', sans-serif; font-size:26px; letter-spacing:2px; line-height:1.1;
+  background:linear-gradient(100deg,#FF8A42,#E8492A,#FF8A42); background-size:260px 100%;
+  -webkit-background-clip:text; background-clip:text; color:transparent;
+  animation: ml-shimmer 3s linear infinite, ml-rise .5s ease both;
+  margin-bottom:2px;
+}
+
+/* Floating volume number on save - the weight you just added, made visible. */
+.volume-float{
+  position:fixed; z-index:35; pointer-events:none;
+  font-family:'Oswald',sans-serif; font-size:17px; color:var(--good);
+  text-shadow:0 2px 8px rgba(0,0,0,.6);
+  animation: ml-float-up 1.4s ease-out forwards;
+}
+
+/* Session complete */
+.session-done-stat{ flex:1; text-align:center; background:var(--panel); border-radius:13px; padding:14px 8px; animation: ml-rise .5s ease both; }
+.session-done-stat .n{ font-family:'Bebas Neue',sans-serif; font-size:27px; line-height:1; }
+.session-done-stat .l{ font-size:10.5px; color:var(--slate); margin-top:3px; }
+.session-done-hero{
+  font-family:'Bebas Neue',sans-serif; font-size:32px; letter-spacing:2px;
+  background:linear-gradient(100deg,#FF8A42,#E8492A,#FF8A42); background-size:260px 100%;
+  -webkit-background-clip:text; background-clip:text; color:transparent;
+  animation: ml-shimmer 2.8s linear infinite, ml-rise .5s ease both;
+}
+.milestone-card{ animation: ml-pop .45s cubic-bezier(.2,1.5,.4,1) both; }
+
+/* Cards settle in rather than appearing all at once. Capped at 8 so a long
+   day's list doesn't take a visibly long time to finish arriving. */
+.ex-card{ animation: ml-rise .34s ease both; }
+.ex-card:nth-child(1){animation-delay:0s} .ex-card:nth-child(2){animation-delay:.03s}
+.ex-card:nth-child(3){animation-delay:.06s} .ex-card:nth-child(4){animation-delay:.09s}
+.ex-card:nth-child(5){animation-delay:.12s} .ex-card:nth-child(6){animation-delay:.15s}
+.ex-card:nth-child(7){animation-delay:.18s} .ex-card:nth-child(n+8){animation-delay:.21s}
+
+@media (prefers-reduced-motion: reduce){
+  .greeting-line, .session-done-hero, .session-done-stat, .milestone-card, .ex-card, .volume-float{
+    animation:none !important;
+  }
+  .greeting-line, .session-done-hero{ color:var(--flame); -webkit-text-fill-color:var(--flame); }
+}

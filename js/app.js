@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.254';
+const APP_VERSION = 'Beta 5.255';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -719,6 +719,37 @@ const QUOTES = [
   {t:"He will win who knows when to fight and when not to fight.", a:"Sun Tzu"},
   {t:"Far better it is to dare mighty things than to rank with those poor spirits who neither enjoy nor suffer much.", a:"Theodore Roosevelt"}
 ];
+
+// A greeting that reacts to the time of day and to whether there's a streak
+// running - the same words every morning stop registering within a week.
+// The name comes from the profile if it's set; without one the greeting
+// still reads naturally rather than saying "Hi, undefined".
+const GREETINGS_MORNING = ['GOOD MORNING', 'MORNING', 'UP AND AT IT', 'EARLY START'];
+const GREETINGS_DAY     = ['GET AFTER IT', "LET'S MOVE", 'BACK AT IT', 'TIME TO WORK'];
+const GREETINGS_EVENING = ['EVENING SESSION', 'FINISH STRONG', 'LAST PUSH', 'ONE MORE'];
+function getDisplayName(){
+  try {
+    const saved = localStorage.getItem('zealift_display_name');
+    if (saved && saved.trim()) return saved.trim();
+  } catch(e){}
+  return null;
+}
+function setDisplayName(v){
+  try {
+    if (v && v.trim()) localStorage.setItem('zealift_display_name', v.trim());
+    else localStorage.removeItem('zealift_display_name');
+  } catch(e){}
+}
+function buildGreeting(name){
+  const h = new Date().getHours();
+  const pool = h < 11 ? GREETINGS_MORNING : (h < 17 ? GREETINGS_DAY : GREETINGS_EVENING);
+  // Rotates by day so it varies without flickering on every re-render, which
+  // it would do if this were random per call.
+  const d = new Date();
+  const idx = Math.floor((d - new Date(d.getFullYear(), 0, 0)) / 86400000);
+  const word = pool[idx % pool.length];
+  return name ? `${word}, ${String(name).toUpperCase()}` : word;
+}
 
 function todayQuote(){
   const d = new Date();
@@ -4940,6 +4971,7 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
           </div>` : '')}
         <div class="day-strip">${dayChips}</div>
         <div class="header">
+          ${headerStats.targetDateIsToday ? `<div class="greeting-line">${buildGreeting(getDisplayName())}</div>` : ''}
           <div class="eyebrow">${dayLabelOf(state.selectedDay).toUpperCase()}</div>
           <h1 id="dayTypeHeader" style="cursor:pointer;${dayTypeUnavailable ? ' color:#E8A33D;' : ''}">${effectiveDayTypeLabel}</h1>
           <div class="quote">"${q.t}" — ${q.a}</div>
@@ -9436,6 +9468,67 @@ async function loadExerciseGuide(overlay, exerciseName){
 }
 
 // ---------- PR CELEBRATION ----------
+// The volume just added, floating up from where the tap happened. Cheap,
+// silent, and tied to something real - the actual kg this set contributed -
+// rather than a generic confirmation animation.
+function floatVolumeGain(kg, x, y){
+  if (!kg || kg <= 0) return;
+  const el = document.createElement('div');
+  el.className = 'volume-float';
+  el.textContent = `+${Math.round(kg).toLocaleString()}kg`;
+  el.style.left = (x || window.innerWidth / 2) + 'px';
+  el.style.top = (y || window.innerHeight * 0.55) + 'px';
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 1500);
+}
+
+// Fires when the last remaining exercise on a day gets logged. The app has
+// never had an ending - you just stop tapping - so this is the natural place
+// for a bit of ceremony, and the only place in the app where it's earned.
+function maybeShowSessionComplete(){
+  const list = (state.exercises || []).filter(ex => isAvailableOnSelectedDay(ex));
+  if (list.length < 2) return; // a one-exercise "session" isn't a session
+  const done = list.filter(ex => ex.loggedToday || ex.completeVia);
+  if (done.length !== list.length) return;
+  // Only once per day per weekday - reopening the tab shouldn't replay it.
+  const key = `zealift_session_done_${todayStr()}_${state.selectedDay}`;
+  try { if (localStorage.getItem(key)) return; localStorage.setItem(key, '1'); } catch(e){}
+  showSessionCompleteScreen(list);
+}
+
+async function showSessionCompleteScreen(list){
+  const stats = await fetchTrackHeaderStats().catch(() => null);
+  const volume = stats ? stats.volumeKg : 0;
+  const setsToday = stats ? stats.setsToday : 0;
+  const streak = stats ? stats.streak : 0;
+  const prCount = list.filter(ex => ex.showPr).length;
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="overlay-scroll" style="padding-top:calc(40px + env(safe-area-inset-top,0px));">
+      <div style="padding:0 18px;">
+        <div class="session-done-hero">SESSION DONE</div>
+        <div class="small" style="color:var(--slate); margin-top:4px; animation:ml-rise .5s ease both; animation-delay:.1s;">
+          ${dayLabelOf(state.selectedDay)} · ${list.length} exercise${list.length===1?'':'s'} complete
+        </div>
+        <div style="display:flex; gap:9px; margin-top:18px;">
+          <div class="session-done-stat" style="animation-delay:.2s;"><div class="n" style="color:var(--flame);">${volume.toLocaleString()}</div><div class="l">kg moved</div></div>
+          <div class="session-done-stat" style="animation-delay:.3s;"><div class="n" style="color:var(--good);">${setsToday}</div><div class="l">sets</div></div>
+          <div class="session-done-stat" style="animation-delay:.4s;"><div class="n" style="color:var(--brass);">${streak}</div><div class="l">day streak</div></div>
+        </div>
+        ${prCount ? `<div class="milestone-card" style="margin-top:12px; background:linear-gradient(150deg,rgba(255,107,26,0.16),rgba(232,73,42,0.04)); border:1px solid rgba(255,107,26,0.4); border-radius:13px; padding:14px;">
+          <div style="font-family:'Oswald',sans-serif; font-size:14px; color:var(--flame);">🏆 ${prCount} personal record${prCount===1?'':'s'} today</div>
+        </div>` : ''}
+        <div style="margin-top:12px; background:var(--panel); border-radius:13px; padding:14px; animation:ml-rise .5s ease both; animation-delay:.5s;">
+          <div class="small" style="color:var(--chalk); line-height:1.6;">Everything on ${dayLabelOf(state.selectedDay)} is logged. Nothing left to chase today.</div>
+        </div>
+        <button class="btn-primary" id="sessionDoneClose" style="width:100%; margin:20px 0 24px 0;">Done</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#sessionDoneClose').onclick = () => overlay.remove();
+}
+
 function showQueuedSetToast(){
   const t = document.createElement('div');
   t.style = "position:fixed; bottom:100px; left:50%; transform:translateX(-50%); max-width:90%; background:var(--panel); border:1px solid rgba(201,162,39,0.45); border-radius:12px; padding:13px 16px; display:flex; align-items:center; gap:11px; z-index:30; box-shadow:0 8px 24px rgba(0,0,0,0.45);";
@@ -10149,8 +10242,21 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
       saveEntry(weight, unit, weightType, repsVal ? parseInt(repsVal,10) : null, setsVal ? parseInt(setsVal,10) : null, notesVal)
     );
     if (insertedId){
+      // Volume added by this set, floated from where the button actually is
+      // so it reads as coming from the tap rather than appearing at random.
+      const w = parseFloat(weightRaw) || 0;
+      const reps = parseInt(repsVal, 10) || 0;
+      const sets = parseInt(setsVal, 10) || 1;
+      if (w > 0 && reps > 0){
+        const kg = (unit === 'lb' ? w * 0.453592 : w) * reps * sets * (weightType === 'per' ? 2 : 1);
+        const btnRect = overlay.querySelector('#saveSetBtn').getBoundingClientRect();
+        floatVolumeGain(kg, btnRect.left + btnRect.width / 2, btnRect.top);
+      }
       overlay.remove();
       if (state.currentTab === 'track') renderTrack();
+      // Checked after the re-render so it sees the freshly-updated done
+      // flags rather than the state from before this set landed.
+      setTimeout(() => maybeShowSessionComplete(), 700);
     }
   }
   overlay.querySelector('#saveSetBtn').onclick = handleSaveClick;
@@ -14732,6 +14838,10 @@ async function renderMe(){
           <div class="avatar">${initial}</div>
           <div><div class="account-email">${email}</div><div class="account-tag">● Signed in</div></div>
         </div>
+        <div class="me-item" id="displayNameBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+          <div><div>Your Name</div><div class="small" style="color:var(--slate); margin-top:2px;">${getDisplayName() ? `Greeting you as "${getDisplayName()}"` : 'Add one to personalise your daily greeting'}</div></div>
+          <div class="chev" style="margin-top:2px;">›</div>
+        </div>
         <div class="me-item" id="replayTourBtn"><div>How MonoLift Works</div><div class="chev">›</div></div>
         <div class="me-item" id="backupPlanBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
           <div><div>Backup Plan</div><div class="small" style="color:var(--slate); margin-top:2px;">Save a snapshot before you shake things up</div></div>
@@ -14768,6 +14878,13 @@ async function renderMe(){
       ${renderTabbar()}
     </div>`;
   attachShellHandlers();
+  const dnBtn = document.getElementById('displayNameBtn');
+  if (dnBtn) dnBtn.onclick = () => {
+    promptText({
+      title: 'Your Name', placeholder: 'e.g. Joel', initialValue: getDisplayName() || '',
+      onConfirm: (v) => { setDisplayName(v); renderMe(); }
+    });
+  };
   document.getElementById('replayTourBtn').onclick = () => showOnboarding('teach');
   document.getElementById('backupPlanBtn').onclick = openBackupPlanScreen;
   document.getElementById('locationSubPageBtn').onclick = () => openLocationSubPage();
