@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.248';
+const APP_VERSION = 'Beta 5.249';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -29,7 +29,7 @@ function addCustomCategory(name){
 // created on another device that this one hasn't cached yet).
 async function getAllCategories(){
   const userData = { user: await getCurrentUser() };
-  const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+  const table = exerciseTable();
   const result = await withTimeout(
     supabaseClient.from(table).select('category').eq('user_id', userData.user.id),
     15000
@@ -59,7 +59,7 @@ async function ensureBandCategoryMerged(){
   try {
     const u = await getCurrentUser();
     if (!u) return;
-    const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+    const table = exerciseTable();
     const result = await supabaseClient.from(table).update({ category: 'Bands' }).eq('user_id', u.id).eq('category', 'Band').select();
     const customs = getCustomCategories().filter(c => c !== 'Band');
     localStorage.setItem(CUSTOM_CATEGORIES_KEY, JSON.stringify(customs));
@@ -189,6 +189,14 @@ function getSplitSubGroupPref(){ return localStorage.getItem('zealift_split_subg
 // Turning this off again requires no code push - it's just a local setting.
 function getUseExerciseMasterFlag(){ return localStorage.getItem('zealift_use_exercise_master') === 'true'; }
 function setUseExerciseMasterFlag(v){ localStorage.setItem('zealift_use_exercise_master', v ? 'true' : 'false'); }
+// The exercise table and set-linking column both depend on which schema is
+// active. That ternary was written out inline 27 and 6 times respectively -
+// meaning the eventual removal of the legacy path is a 33-site edit rather
+// than a two-line one, and every one of those sites is a chance to get the
+// pairing wrong (right table, wrong ID column, silently writing a row
+// nothing can read back). One definition each, used everywhere.
+function exerciseTable(){ return getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises'; }
+function setExerciseIdField(){ return getUseExerciseMasterFlag() ? 'exercise_master_id' : 'exercise_id'; }
 // Self-heals the master flag from the database - if localStorage was wiped
 // (a known iOS PWA behavior), the flag would silently read as 'false' and
 // the app would start querying the OLD exercises table instead of the
@@ -2007,7 +2015,7 @@ async function showAltGroupHistory(groupId, groupName){
   document.body.appendChild(overlay);
   overlay.querySelector('#closeAltHist').onclick = () => overlay.remove();
 
-  const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+  const table = exerciseTable();
   const exResult = await withTimeout(
     supabaseClient.from(table).select('id, name').eq('alt_group_id', groupId),
     15000
@@ -2020,7 +2028,7 @@ async function showAltGroupHistory(groupId, groupName){
   }
   const memberIds = members.map(m => m.id);
   const nameById = Object.fromEntries(members.map(m => [m.id, m.name]));
-  const idField = getUseExerciseMasterFlag() ? 'exercise_master_id' : 'exercise_id';
+  const idField = setExerciseIdField();
   const setsResult = await withTimeout(
     supabaseClient.from('sets').select('id, exercise_id, exercise_master_id, weight, weight_unit, weight_type, reps, num_sets, notes, logged_at, measurement_type, band_snapshot, band_resistance, band_resistance_unit')
       .in(idField, memberIds).order('logged_at', { ascending: false }).limit(60),
@@ -2049,7 +2057,7 @@ async function quickSaveSet(exerciseId, exerciseName, best){
   await awaitMasterFlagHealed();
   const userData = { user: await getCurrentUser() };
   const useMaster = getUseExerciseMasterFlag();
-  const idField = useMaster ? 'exercise_master_id' : 'exercise_id';
+  const idField = setExerciseIdField();
   const weight = best.weight, unit = best.weight_unit, weightType = best.weight_type || 'total';
 
   let priorBest = null;
@@ -2448,9 +2456,9 @@ function openRebuildToolsSubPage(){
     </div>`;
     toggleArea.querySelector('#masterFlagOff').onclick = () => {
       showConfirmDialog(
-        'Turning this off makes Track read and write from the OLD exercises table. Any data you have in the new exercise_master tables will not be visible until you turn it back on. Only do this if you know what you are doing.',
+        'This makes the app read and write the OLD exercises table instead. Everything created since migrating - every exercise, location tag, band setup and door anchor - lives in the new tables and will vanish from the app until this is switched back on. Nothing is deleted, but the app will look like most of your library is gone, and anything logged while it is off lands in the old table where the new one cannot see it. The flag also self-heals back on when the app next detects data in the new tables, so this will not even stay off reliably. There is no real reason to use this.',
         () => { setUseExerciseMasterFlag(false); renderMasterFlagToggle(); if (state.currentTab === 'track') renderTrack(); },
-        { title: 'Switch off new structure?', danger: true, confirmLabel: 'Switch off' }
+        { title: 'Switch off new structure?', danger: true, confirmLabel: 'Switch off anyway' }
       );
     };
     toggleArea.querySelector('#masterFlagOn').onclick = () => { setUseExerciseMasterFlag(true); renderMasterFlagToggle(); if (state.currentTab === 'track') renderTrack(); };
@@ -3250,7 +3258,7 @@ async function openWipeAltGroupsScreen(){
 
   const [groupsResult, exResult] = await Promise.all([
     withTimeout(supabaseClient.from('alt_groups').select('id, name').eq('user_id', uid), 15000),
-    withTimeout(supabaseClient.from(getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises').select('id').eq('user_id', uid).not('alt_group_id', 'is', null), 15000)
+    withTimeout(supabaseClient.from(exerciseTable()).select('id').eq('user_id', uid).not('alt_group_id', 'is', null), 15000)
   ]);
   const groups = groupsResult.__timeout || groupsResult.error ? [] : (groupsResult.data || []);
   const taggedCount = exResult.__timeout || exResult.error ? 0 : (exResult.data || []).length;
@@ -3711,7 +3719,7 @@ function openEditLocationEquipmentScreen(locationId, locationName, currentTags, 
         alert(`Could not save: ${error.message}\n\nIf this mentions a missing column, the equipment_tags migration needs to be run first.`);
         return false;
       }
-      const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+      const table = exerciseTable();
       const errors = [];
       for (const key of pendingIds){
         const ex = myExercises.find(e => exKey(e) === key);
@@ -3821,7 +3829,7 @@ async function openManageLocationsScreen(){
           // Clear this location from every exercise's location_ids first, so
           // nothing points at a deleted row.
           const userData = { user: await getCurrentUser() };
-          const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+          const table = exerciseTable();
           const exResult = await withTimeout(supabaseClient.from(table).select('id, location_ids').eq('user_id', userData.user.id), 15000);
           const affected = (exResult.data || []).filter(ex => (ex.location_ids || []).includes(btn.dataset.id));
           for (const ex of affected){
@@ -4987,7 +4995,7 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
         onConfirm: async (newName) => {
           if (newName === oldName) return;
           const userData = { user: await getCurrentUser() };
-          const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+          const table = exerciseTable();
           const { error } = await supabaseClient.from(table)
             .update({ category: newName }).eq('user_id', userData.user.id).eq('category', oldName);
           if (error){ alert(error.message); return; }
@@ -5352,7 +5360,7 @@ async function openUnconfirmedLocationsScreen(){
   // else a bulk location action exists in this app; Everywhere replaces
   // outright, since it's strictly broader than any specific list.
   async function bulkResolve(exercises, isEverywhere, locationIds){
-    const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+    const table = exerciseTable();
     const errors = [];
     for (const ex of exercises){
       const realId = ex.masterId || ex.id;
@@ -5372,7 +5380,7 @@ async function openUnconfirmedLocationsScreen(){
   // decided or corrected; this is for the (likely much larger) set that's
   // already sitting there correctly and just needs someone to say so.
   async function bulkAcceptAsShown(exercises, onDone){
-    const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+    const table = exerciseTable();
     const errors = [];
     for (const ex of exercises){
       const realId = ex.masterId || ex.id;
@@ -5525,7 +5533,7 @@ function openEditLocationsForm(exerciseId, exerciseName, onSaved){
   overlay.querySelector('#closeLocEdit').onclick = () => overlay.remove();
 
   (async () => {
-    const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+    const table = exerciseTable();
     // Fetched fresh from the database, not from whatever's sitting in local
     // state - the whole point is to show the real, current, authoritative
     // answer rather than something that could itself be stale.
@@ -5550,7 +5558,7 @@ function openEditLocationsForm(exerciseId, exerciseName, onSaved){
 
   overlay.querySelector('#saveLocEditBtn').onclick = async () => {
     await withButtonLoading(overlay.querySelector('#saveLocEditBtn'), 'Saving…', async () => {
-      const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+      const table = exerciseTable();
       // An explicit save here means exactly what's checked, full stop - no
       // union, no merge. Empty selection is stored as null (available
       // everywhere), matching how every other untagged exercise behaves.
@@ -5628,7 +5636,7 @@ function openEditMeasurementForm(exerciseId, exerciseName){
   });
 
   (async () => {
-    const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+    const table = exerciseTable();
     const r = await withTimeout(
       supabaseClient.from(table).select('measurement_type, uses_door_anchor, door_anchor_level').eq('id', exerciseId).maybeSingle(), 15000);
     if (!r.__timeout && !r.error && r.data){
@@ -5642,7 +5650,7 @@ function openEditMeasurementForm(exerciseId, exerciseName){
 
   overlay.querySelector('#saveMeasBtn').onclick = async () => {
     await withButtonLoading(overlay.querySelector('#saveMeasBtn'), 'Saving…', async () => {
-      const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+      const table = exerciseTable();
       const payload = {
         measurement_type: selectedType === 'weight' ? null : selectedType,
         uses_door_anchor: selectedType === 'band' ? usesDoorAnchor : false,
@@ -5676,7 +5684,7 @@ function openEditCategoryForm(exerciseId, exerciseName){
   (async () => {
     const [cats, exResult] = await Promise.all([
       getAllCategories(),
-      withTimeout(supabaseClient.from(getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises').select('category').eq('id', exerciseId).maybeSingle(), 15000)
+      withTimeout(supabaseClient.from(exerciseTable()).select('category').eq('id', exerciseId).maybeSingle(), 15000)
     ]);
     selectedCategory = (exResult.__timeout || exResult.error || !exResult.data) ? null : exResult.data.category;
     const row = overlay.querySelector('#editCatChipRow');
@@ -5747,7 +5755,7 @@ function openEditTagsForm(exerciseId, exerciseName){
   let pushPull = null, upperLower = null, locationIds = [];
   (async () => {
     const [exResult, locs] = await Promise.all([
-      withTimeout(supabaseClient.from(getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises').select('push_pull, upper_lower, location_ids').eq('id', exerciseId).maybeSingle(), 15000),
+      withTimeout(supabaseClient.from(exerciseTable()).select('push_pull, upper_lower, location_ids').eq('id', exerciseId).maybeSingle(), 15000),
       loadLocations()
     ]);
     const data = exResult.__timeout || exResult.error || !exResult.data ? {} : exResult.data;
@@ -5790,7 +5798,7 @@ function openEditTagsForm(exerciseId, exerciseName){
   }
 
   overlay.querySelector('#saveTagsBtn').onclick = async () => { await withButtonLoading(overlay.querySelector('#saveTagsBtn'), 'Saving…', async () => {
-    const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+    const table = exerciseTable();
     await supabaseClient.from(table).update({ push_pull: pushPull, upper_lower: upperLower, location_ids: locationIds }).eq('id', exerciseId);
     overlay.remove();
     if (state.currentTab === 'track') renderTrack();
@@ -5815,7 +5823,7 @@ function openEditLocationForm(exerciseId, exerciseName){
   (async () => {
     const [locs, exResult] = await Promise.all([
       loadLocations(),
-      withTimeout(supabaseClient.from(getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises').select('location_ids').eq('id', exerciseId).maybeSingle(), 15000)
+      withTimeout(supabaseClient.from(exerciseTable()).select('location_ids').eq('id', exerciseId).maybeSingle(), 15000)
     ]);
     selectedIds = (exResult.__timeout || exResult.error || !exResult.data) ? [] : (exResult.data.location_ids || []);
     renderChips(locs);
@@ -5845,7 +5853,7 @@ function openEditLocationForm(exerciseId, exerciseName){
   }
 
   overlay.querySelector('#saveLocBtn').onclick = async () => { await withButtonLoading(overlay.querySelector('#saveLocBtn'), 'Saving…', async () => {
-    const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+    const table = exerciseTable();
     await supabaseClient.from(table).update({ location_ids: selectedIds }).eq('id', exerciseId);
     overlay.remove();
     if (state.currentTab === 'track') renderTrack();
@@ -7320,7 +7328,7 @@ async function openSplitTagReview(){
       const btn = body.querySelector('#confirmSplitBtn');
       btn.textContent = 'Applying…';
       const toApply = proposals.filter(p => p.included && (p.pushPull || p.upperLower));
-      const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+      const table = exerciseTable();
       let successCount = 0;
       const errors = [];
       for (const p of toApply){
@@ -7439,7 +7447,7 @@ async function openBulkLocationAssign(){
           const was = originallyChecked.has(n);
           if (isChecked === was) continue; // unchanged, nothing to write
           const item = byName[n];
-          const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+          const table = exerciseTable();
           for (const id of item.ids){
             const exRow = all.find(e => (e.masterId || e.id) === id);
             const existing = (exRow && exRow.location_ids) || [];
@@ -8008,7 +8016,7 @@ async function openPlanReorganizer(){
     const protectedDayNames = new Set();
     try {
       const useMaster = getUseExerciseMasterFlag();
-      const idField = useMaster ? 'exercise_master_id' : 'exercise_id';
+      const idField = setExerciseIdField();
       const setsResult = await withTimeout(
         supabaseClient.from('sets').select(`${idField}, logged_at`).eq('user_id', userData.user.id),
         15000
@@ -8552,7 +8560,7 @@ async function pickAltGroup(container, onPicked){
         e.stopPropagation();
         showConfirmDialog(`Exercises in "${btn.dataset.name}" will keep their names but lose the alt-group link.`, async () => {
           const userData = { user: await getCurrentUser() };
-          const memberTable = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+          const memberTable = exerciseTable();
           // Clear the reference on every exercise pointing at this group first, so
           // nothing is left referencing a group that no longer exists.
           await supabaseClient.from(memberTable).update({ alt_group_id: null }).eq('user_id', userData.user.id).eq('alt_group_id', btn.dataset.id);
@@ -8933,7 +8941,7 @@ async function openNewExerciseForm(opts){
           door_anchor_level: (usesDoorAnchor && selectedAnchorLevel) ? `Level ${selectedAnchorLevel}` : null
         });
         if (Object.keys(reuseUpdates).length){
-          const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+          const table = exerciseTable();
           await supabaseClient.from(table).update(reuseUpdates).eq('id', existingMatch.id);
           invalidateTrackSnapshots();
         }
@@ -9418,7 +9426,7 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
     let confirmed = exInState ? exInState.location_confirmed : undefined;
     let currentLocIds = exInState ? exInState.location_ids : undefined;
     if (confirmed === undefined){
-      const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+      const table = exerciseTable();
       const r = await withTimeout(
         supabaseClient.from(table).select('location_confirmed, location_ids').eq('id', exerciseId).maybeSingle(), 10000);
       if (!r.__timeout && !r.error && r.data){ confirmed = r.data.location_confirmed; currentLocIds = r.data.location_ids; }
@@ -9513,7 +9521,7 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
   // hits first. So when state doesn't know, ask the database.
   if (!exInState){
     (async () => {
-      const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+      const table = exerciseTable();
       const r = await withTimeout(
         supabaseClient.from(table).select('measurement_type, uses_door_anchor, door_anchor_level').eq('id', exerciseId).maybeSingle(), 10000);
       if (r.__timeout || r.error || !r.data) return;
@@ -9544,7 +9552,7 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
     await awaitMasterFlagHealed();
     const userData = { user: await getCurrentUser() };
     const useMaster = getUseExerciseMasterFlag();
-    const idField = useMaster ? 'exercise_master_id' : 'exercise_id';
+    const idField = setExerciseIdField();
     // Capture prior best BEFORE inserting, for PR detection (weight-based only).
     // Look at every same-name sibling exercise record's sets - otherwise a
     // duplicate row (which we know can exist) would hide real historic best
@@ -9652,7 +9660,7 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
   async function loadHistory(){
     const userData = { user: await getCurrentUser() };
     const useMaster = getUseExerciseMasterFlag();
-    const idField = useMaster ? 'exercise_master_id' : 'exercise_id';
+    const idField = setExerciseIdField();
     let idsToQuery = [exerciseId];
     // Look up every record for this user sharing this exercise's name and
     // merge all their sets. In the LEGACY schema this is required because
@@ -9721,7 +9729,7 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
     // Chart in one standard unit so mixed kg/lb entries plot coherently:
     // lb for Plate-Loaded (most common there), kg for everything else.
     const exResult = await withTimeout(
-      supabaseClient.from(getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises').select('category').eq('id', exerciseId).maybeSingle(),
+      supabaseClient.from(exerciseTable()).select('category').eq('id', exerciseId).maybeSingle(),
       15000
     );
     const category = (exResult.__timeout || exResult.error || !exResult.data) ? '' : exResult.data.category;
@@ -9838,7 +9846,7 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
   (async () => {
     const [result, allLocations] = await Promise.all([
       withTimeout(
-        supabaseClient.from(getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises').select('category, push_pull, upper_lower, location_ids').eq('id', exerciseId).maybeSingle(),
+        supabaseClient.from(exerciseTable()).select('category, push_pull, upper_lower, location_ids').eq('id', exerciseId).maybeSingle(),
         15000
       ),
       loadLocations()
@@ -9897,7 +9905,7 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
       return;
     }
     if (needsLocationConfirm){
-      const table = getUseExerciseMasterFlag() ? 'exercise_master' : 'exercises';
+      const table = exerciseTable();
       await supabaseClient.from(table).update({
         location_ids: pendingLocationIsEverywhere ? null : pendingLocationIds,
         location_confirmed: true
@@ -14266,7 +14274,7 @@ async function getDayStats(weekday){
   let setCount = 0;
   if (exercises.length > 0){
     const ids = exercises.map(e => useMaster ? e.masterId : e.id);
-    const idField = useMaster ? 'exercise_master_id' : 'exercise_id';
+    const idField = setExerciseIdField();
     const setResult = await withTimeout(
       supabaseClient.from('sets').select('id', { count: 'exact', head: true }).in(idField, ids),
       15000
