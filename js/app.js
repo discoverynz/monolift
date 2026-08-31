@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.246';
+const APP_VERSION = 'Beta 5.247';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -161,11 +161,9 @@ async function quickAddStarter(name, category, weekday){
   // Same evidence-based default as the database-search add flows - these
   // starter names (Bench Press, Lat Pulldown...) match the public database
   // just as confidently as anything found through search.
-  const suggestion = await suggestLocationsForExercise(name, await loadLocations());
   const { error } = await createExerciseForToday({
     user_id: userData.user.id, name, category, weekday, alt_group_id: null,
-    location_ids: suggestion ? suggestion.locations.map(l => l.id) : null,
-    location_confirmed: true
+    ...(await resolveCreationLocation(name))
   });
   if (error){ alert(error.message); return; }
   renderTrack();
@@ -3358,6 +3356,22 @@ const EQUIPMENT_CATEGORIES = [
 // only ever returns a suggestion to present as a shortcut, since the whole
 // point of location_confirmed is that an explicit tap is always required
 // regardless of how confident the guess is.
+// The location decision every "created from a known exercise name" path
+// makes, in one place. This exact four-line pattern was copy-pasted across
+// five separate creation sites, and this session has already proven twice
+// over what happens to duplicated logic here - the Your Machines dedup bug
+// and the two independent reuse-check paths both came from exactly this.
+// A location rule that lives in one function changes once; five copies
+// change four times and diverge on the fifth.
+async function resolveCreationLocation(name, allLocations){
+  const locs = allLocations || await loadLocations();
+  const suggestion = await suggestLocationsForExercise(name, locs);
+  return {
+    location_ids: suggestion ? suggestion.locations.map(l => l.id) : null,
+    location_confirmed: true
+  };
+}
+
 async function suggestLocationsForExercise(name, allLocations){
   if (!name || !name.trim()) return null;
   const exdb = await loadExerciseDB();
@@ -3710,18 +3724,18 @@ function openEditLocationEquipmentScreen(locationId, locationName, currentTags, 
         // confirmation prompt right after being explicitly reviewed here.
         if (shouldHave === already){
           if (!ex.location_confirmed){
-            await supabaseClient.from(table).update({ location_confirmed: true }).eq('id', realId);
+            await withBulkRetry(() => supabaseClient.from(table).update({ location_confirmed: true }).eq('id', realId));
           }
           continue;
         }
         const nextIds = shouldHave ? [...new Set([...current, locationId])] : current.filter(id => id !== locationId);
-        const { error: exErr } = await supabaseClient.from(table)
-          .update({ location_ids: nextIds.length ? nextIds : null, location_confirmed: true }).eq('id', realId);
-        if (exErr) errors.push(`${ex.name}: ${exErr.message}`);
+        const { error: exErr } = await withBulkRetry(() => supabaseClient.from(table)
+          .update({ location_ids: nextIds.length ? nextIds : null, location_confirmed: true }).eq('id', realId));
+        if (exErr) errors.push(`${ex.name}: ${exErr.message || exErr}`);
       }
       invalidateTrackSnapshots();
       warmInvalidate();
-      if (errors.length) alert(`Saved, but ${errors.length} exercise${errors.length===1?'':'s'} failed to update:\n\n${errors.join('\n')}`);
+      if (errors.length) alert(`Saved, but ${errors.length} exercise${errors.length===1?'':'s'} didn't go through - likely a dropped connection mid-batch. Your equipment selections were saved; reopen this screen to retry the rest:\n\n${errors.join('\n')}`);
       overlay.remove();
       if (onSaved) onSaved();
       return true;
@@ -4422,11 +4436,9 @@ async function openSuggestionPreview(name, category, navList){
       openLogForm(existingMatch.masterId || existingMatch.id, name);
       return;
     }
-    const suggestion = await suggestLocationsForExercise(name, await loadLocations());
     const { error } = await createExerciseForToday({
       user_id: userData.user.id, name, category, weekday: targetDay, alt_group_id: null,
-      location_ids: suggestion ? suggestion.locations.map(l => l.id) : null,
-      location_confirmed: true
+      ...(await resolveCreationLocation(name))
     });
     if (error){ alert(error.message); return; }
     overlay.remove();
@@ -6702,12 +6714,10 @@ async function openPicker(initialTab, jumpToMuscle){
           // location is tagged with, that's a real, evidence-based signal,
           // not a guess. Falls back to Everywhere when no confident match
           // exists, same as picking Everywhere manually would.
-          const suggestion = await suggestLocationsForExercise(picked.name, await loadLocations());
           const { data: inserted, error } = await createExerciseForToday({
             user_id: userData.user.id, name: picked.name, category: picked.category,
             weekday: targetDay, alt_group_id: null,
-            location_ids: suggestion ? suggestion.locations.map(l => l.id) : null,
-            location_confirmed: true
+            ...(await resolveCreationLocation(picked.name))
           });
           if (error){ alert(error.message); return; }
           openLogForm(inserted[0].id, picked.name, true);
@@ -6728,13 +6738,11 @@ async function openPicker(initialTab, jumpToMuscle){
             for (const item of items){
               const alreadyToday = all.find(ex => ex.weekday === targetDay && ex.name.toLowerCase() === item.name.toLowerCase());
               if (alreadyToday) continue; // already there, nothing to do
-              const suggestion = await suggestLocationsForExercise(item.name, allLocs);
-              const { error } = await createExerciseForToday({
+              const created = await withBulkRetry(async () => createExerciseForToday({
                 user_id: userData.user.id, name: item.name, category: item.category || 'Other', weekday: targetDay, alt_group_id: null,
-                location_ids: suggestion ? suggestion.locations.map(l => l.id) : null,
-                location_confirmed: true
-              });
-              if (error) errors.push(`${item.name}: ${error.message}`);
+                ...(await resolveCreationLocation(item.name, allLocs))
+              }));
+              if (created.error) errors.push(`${item.name}: ${created.error.message || created.error}`);
             }
             overlay.remove();
             state.currentTab = 'track';
@@ -6978,13 +6986,11 @@ async function openPicker(initialTab, jumpToMuscle){
             for (const item of items){
               const alreadyToday = todayNames.has(item.name.toLowerCase());
               if (alreadyToday) continue;
-              const suggestion = await suggestLocationsForExercise(item.name, allLocs);
-              const { error } = await createExerciseForToday({
+              const created = await withBulkRetry(async () => createExerciseForToday({
                 user_id: userData.user.id, name: item.name, category: item.category, weekday: state.selectedDay, alt_group_id: null,
-                location_ids: suggestion ? suggestion.locations.map(l => l.id) : null,
-                location_confirmed: true
-              });
-              if (error) errors.push(`${item.name}: ${error.message}`);
+                ...(await resolveCreationLocation(item.name, allLocs))
+              }));
+              if (created.error) errors.push(`${item.name}: ${created.error.message || created.error}`);
             }
             overlay.remove();
             state.currentTab = 'track';
