@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.251';
+const APP_VERSION = 'Beta 5.252';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -2355,7 +2355,7 @@ function openLocationSubPage(){
           promptText({ title: 'Rename Location', placeholder: 'Name', initialValue: name,
             onConfirm: async (newName) => {
               if (!newName || newName === name) return;
-              await supabaseClient.from('locations').update({ name: newName }).eq('id', id);
+              await withBulkRetry(() => withTimeout(supabaseClient.from('locations').update({ name: newName }).eq('id', id), 20000));
               warmInvalidate();
               renderList();
             } });
@@ -2364,7 +2364,7 @@ function openLocationSubPage(){
         showConfirmDialog(
           `Delete "${name}"? Sets already logged there keep their record — only the location itself is removed.`,
           async () => {
-            await supabaseClient.from('locations').delete().eq('id', id);
+            await withBulkRetry(() => withTimeout(supabaseClient.from('locations').delete().eq('id', id), 20000));
             warmInvalidate();
             renderList();
           }, { title: 'Delete Location?', danger: true, confirmLabel: 'Delete' });
@@ -3129,8 +3129,8 @@ async function openMergeDuplicateExercisesScreen(){
             const duplicates = sorted.slice(1);
             for (const dup of duplicates){
               try {
-                await supabaseClient.from('sets').update({ exercise_id: survivor.id }).eq('exercise_id', dup.id);
-                await supabaseClient.from('exercises').update({ active: false }).eq('id', dup.id);
+                await withBulkRetry(() => withTimeout(supabaseClient.from('sets').update({ exercise_id: survivor.id }).eq('exercise_id', dup.id), 20000));
+                await withBulkRetry(() => withTimeout(supabaseClient.from('exercises').update({ active: false }).eq('id', dup.id), 20000));
                 mergedCount++;
               } catch(e){
                 errors.push(`${dup.name}: ${e.message}`);
@@ -3209,29 +3209,44 @@ async function openMergeDuplicateExercisesScreen(){
               // duplicate's row is deleted - otherwise that configuration
               // has no other record anywhere and is gone permanently.
               if (!survivorHasRealSetup && dup.measurement_type){
-                await supabaseClient.from('exercise_master').update({
+                await withBulkRetry(() => withTimeout(supabaseClient.from('exercise_master').update({
                   measurement_type: dup.measurement_type,
                   uses_door_anchor: !!dup.uses_door_anchor,
                   door_anchor_level: dup.door_anchor_level || null
-                }).eq('id', survivor.id);
+                }).eq('id', survivor.id), 20000));
                 survivorHasRealSetup = true;
               }
               // Reassign this duplicate's logged sets onto the survivor - this is
               // the actual history, so it has to move, not just get dropped.
-              await supabaseClient.from('sets').update({ exercise_master_id: survivor.id }).eq('exercise_master_id', dup.id);
+              //
+              // ORDER MATTERS AND IS LOAD-BEARING: the sets must be safely
+              // reassigned BEFORE the duplicate's master row is deleted. If
+              // this reassign fails and the delete below still ran, those
+              // sets would point at a row that no longer exists - real
+              // logged history, invisible in the app but still counted in
+              // totals, unrecoverable without manual database surgery. So
+              // this is not just retried, it's checked, and a failure
+              // abandons this duplicate entirely rather than proceeding to
+              // the destructive step on the assumption it worked.
+              const setsMove = await withBulkRetry(() => withTimeout(
+                supabaseClient.from('sets').update({ exercise_master_id: survivor.id }).eq('exercise_master_id', dup.id), 20000));
+              if (setsMove && setsMove.error){
+                errors.push(`${dup.name}: couldn't move logged sets, so nothing was deleted - safe to retry (${setsMove.error.message || setsMove.error})`);
+                continue;
+              }
               // Reassign day-links, but only where the survivor doesn't already
               // have that day (would hit the unique constraint otherwise) -
               // in that case the duplicate's link is just deleted instead.
               const dupDays = daysByMaster[dup.id] || [];
               for (const dayLink of dupDays){
                 if (survivorDayweekdays.has(dayLink.weekday)){
-                  await supabaseClient.from('exercise_days').delete().eq('id', dayLink.id);
+                  await withBulkRetry(() => withTimeout(supabaseClient.from('exercise_days').delete().eq('id', dayLink.id), 20000));
                 } else {
-                  await supabaseClient.from('exercise_days').update({ exercise_master_id: survivor.id }).eq('id', dayLink.id);
+                  await withBulkRetry(() => withTimeout(supabaseClient.from('exercise_days').update({ exercise_master_id: survivor.id }).eq('id', dayLink.id), 20000));
                   survivorDayweekdays.add(dayLink.weekday);
                 }
               }
-              await supabaseClient.from('exercise_master').delete().eq('id', dup.id);
+              await withBulkRetry(() => withTimeout(supabaseClient.from('exercise_master').delete().eq('id', dup.id), 20000));
               mergedCount++;
             } catch(e){
               errors.push(`${dup.name}: ${e.message}`);
@@ -3840,7 +3855,7 @@ async function openManageLocationsScreen(){
           for (const ex of affected){
             await supabaseClient.from(table).update({ location_ids: ex.location_ids.filter(id => id !== btn.dataset.id) }).eq('id', ex.id);
           }
-          await supabaseClient.from('locations').delete().eq('id', btn.dataset.id);
+          await withBulkRetry(() => withTimeout(supabaseClient.from('locations').delete().eq('id', btn.dataset.id), 20000));
           render();
         }, { title: `Delete "${btn.dataset.name}"?`, danger: true, confirmLabel: 'Delete' });
       };
