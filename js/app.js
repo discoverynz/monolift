@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.249';
+const APP_VERSION = 'Beta 5.250';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -5876,9 +5876,13 @@ async function deleteExerciseEntirelyNow(exerciseName){
     if (!masterResult.__timeout && !masterResult.error && masterResult.data && masterResult.data.length){
       const ids = masterResult.data.map(r => r.id);
       for (const id of ids){
-        await supabaseClient.from('sets').delete().eq('exercise_master_id', id);
-        await supabaseClient.from('exercise_days').delete().eq('exercise_master_id', id);
-        await supabaseClient.from('exercise_master').delete().eq('id', id);
+        // Bounded and retried. A permanent delete that half-completes leaves
+        // orphaned sets pointing at an exercise row that no longer exists -
+        // invisible in the app but still counted in totals - and an
+        // unbounded request that hangs gives no indication anything failed.
+        await withBulkRetry(() => withTimeout(supabaseClient.from('sets').delete().eq('exercise_master_id', id), 20000));
+        await withBulkRetry(() => withTimeout(supabaseClient.from('exercise_days').delete().eq('exercise_master_id', id), 20000));
+        await withBulkRetry(() => withTimeout(supabaseClient.from('exercise_master').delete().eq('id', id), 20000));
       }
     }
   } else {
@@ -5888,8 +5892,8 @@ async function deleteExerciseEntirelyNow(exerciseName){
     );
     const ids = (exResult.__timeout || exResult.error ? [] : exResult.data || []).map(e => e.id);
     for (const id of ids){
-      await supabaseClient.from('sets').delete().eq('exercise_id', id);
-      await supabaseClient.from('exercises').delete().eq('id', id);
+      await withBulkRetry(() => withTimeout(supabaseClient.from('sets').delete().eq('exercise_id', id), 20000));
+      await withBulkRetry(() => withTimeout(supabaseClient.from('exercises').delete().eq('id', id), 20000));
     }
   }
 }
@@ -5900,7 +5904,9 @@ function confirmDeleteExerciseEntirely(exerciseName, onDeleted){
   overlay.innerHTML = `
     <div style="background:var(--panel); border-radius:16px; padding:22px; width:300px; text-align:center;">
       <div style="font-family:'Oswald', sans-serif; font-size:16px; margin-bottom:8px;">Delete Permanently?</div>
-      <div style="font-size:13px; color:var(--slate); margin-bottom:18px;">"${exerciseName}" will be removed from every day, and all logged history for it will be deleted. Cannot be undone.</div>
+      <div style="font-size:13px; color:var(--slate); margin-bottom:8px;">"${exerciseName}" will be removed from every day, and all logged history for it will be deleted. Cannot be undone.</div>
+      <div id="dupeScopeWarning" style="display:none; font-size:12px; color:#E8A33D; background:rgba(232,163,61,0.1); border:1px solid rgba(232,163,61,0.3); border-radius:9px; padding:9px 11px; margin-bottom:14px; line-height:1.5; text-align:left;"></div>
+      <div style="height:10px;"></div>
       <div style="display:flex; gap:10px;">
         <button id="cancelDeleteEntire" style="flex:1; padding:11px; border-radius:10px; background:var(--ink); color:var(--chalk); font-size:13px;">Cancel</button>
         <button id="confirmDeleteEntire" style="flex:1; padding:11px; border-radius:10px; background:#E8492A; color:white; font-weight:600; font-size:13px;">Delete</button>
@@ -5908,6 +5914,27 @@ function confirmDeleteExerciseEntirely(exerciseName, onDeleted){
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#cancelDeleteEntire').onclick = () => overlay.remove();
+  // This deletes by NAME across the whole account, not by the specific row
+  // that was tapped - which is deliberate for the shared structure, but the
+  // dialog previously described it as deleting one exercise. Same-name
+  // duplicates demonstrably do occur in real accounts, so if more than one
+  // record actually matches, say so plainly BEFORE the user commits rather
+  // than silently deleting more history than they agreed to.
+  (async () => {
+    try {
+      const uid = (await getCurrentUser()).id;
+      const r = await withTimeout(
+        supabaseClient.from(exerciseTable()).select('id').eq('user_id', uid).ilike('name', exerciseName), 10000);
+      if (r.__timeout || r.error || !r.data) return;
+      if (r.data.length > 1){
+        const warn = overlay.querySelector('#dupeScopeWarning');
+        if (warn){
+          warn.style.display = 'block';
+          warn.textContent = `Heads up: ${r.data.length} separate records share this exact name in your library. This deletes all ${r.data.length} and every set logged against any of them.`;
+        }
+      }
+    } catch(e){ /* the warning is a bonus - never block the dialog on it */ }
+  })();
   overlay.querySelector('#confirmDeleteEntire').onclick = async () => {
     overlay.remove();
     await deleteExerciseEntirelyNow(exerciseName);
