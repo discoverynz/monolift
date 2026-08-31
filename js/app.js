@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.247';
+const APP_VERSION = 'Beta 5.248';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -2902,8 +2902,19 @@ async function openMigrateToMasterScreen(){
     // Idempotent: clear any prior run first so re-running after adding more
     // exercises rebuilds cleanly from the current source of truth, rather
     // than accumulating stale duplicates in the new tables.
-    await supabaseClient.from('exercise_days').delete().eq('user_id', userData.user.id);
-    await supabaseClient.from('exercise_master').delete().eq('user_id', userData.user.id);
+    // These two deletes wipe the entire rebuilt library before anything is
+    // written back. That's recoverable in principle - the legacy 'exercises'
+    // table is the source of truth here and is never touched, so re-running
+    // rebuilds cleanly - but an unbounded request that simply hangs would
+    // strand the user mid-migration with their library already deleted and
+    // no indication of what happened. Bounded and retried like every other
+    // batch write in the app.
+    const delDays = await withBulkRetry(() => withTimeout(supabaseClient.from('exercise_days').delete().eq('user_id', userData.user.id), 20000));
+    const delMasters = await withBulkRetry(() => withTimeout(supabaseClient.from('exercise_master').delete().eq('user_id', userData.user.id), 20000));
+    if ((delDays && delDays.error) || (delMasters && delMasters.error)){
+      body.innerHTML = `<div class="small" style="padding:14px 18px; color:#E8492A; line-height:1.6;">Couldn't clear the previous migration attempt, so nothing was changed - your exercises are exactly as they were. This is almost always a dropped connection; try again.</div>`;
+      return;
+    }
 
     let created = 0, dayLinks = 0, errors = [];
     for (const g of groups){
@@ -2913,20 +2924,20 @@ async function openMigrateToMasterScreen(){
       // silently reset an entire already-reviewed library back to
       // unconfirmed - re-prompting for every exercise the user had already
       // explicitly answered for, with no indication anything had been lost.
-      const { data: inserted, error } = await supabaseClient.from('exercise_master').insert({
+      const { data: inserted, error } = await withBulkRetry(() => withTimeout(supabaseClient.from('exercise_master').insert({
         user_id: userData.user.id, name: t.name, category: t.category, alt_group_id: t.alt_group_id,
         push_pull: t.push_pull, upper_lower: t.upper_lower, muscle_override: t.muscle_override, location_ids: t.location_ids,
         location_confirmed: !!t.location_confirmed,
         measurement_type: t.measurement_type || null,
         uses_door_anchor: !!t.uses_door_anchor,
         door_anchor_level: t.door_anchor_level || null
-      }).select();
+      }).select(), 20000));
       if (error || !inserted || !inserted[0]){ errors.push(`${t.name}: ${error ? error.message : 'no row returned'}`); continue; }
       created++;
       for (const weekday of g.weekdays){
-        const { error: dayError } = await supabaseClient.from('exercise_days').insert({
+        const { error: dayError } = await withBulkRetry(() => withTimeout(supabaseClient.from('exercise_days').insert({
           user_id: userData.user.id, exercise_master_id: inserted[0].id, weekday
-        });
+        }), 20000));
         if (dayError) errors.push(`${t.name} (${dayNameOf(weekday)}): ${dayError.message}`);
         else dayLinks++;
       }
@@ -5295,8 +5306,17 @@ async function withBulkRetry(fn, attempts){
   for (let i = 0; i < (attempts || 3); i++){
     try {
       const result = await fn();
-      if (!result.error) return result;
-      lastError = result.error;
+      // withTimeout resolves {__timeout:true} on expiry, which carries NO
+      // error property - without this check that reads as success, and a
+      // request that never completed would be treated as one that did.
+      // Anything wrapping withTimeout inside this helper depends on it.
+      if (result && result.__timeout){
+        lastError = { message: 'Timed out' };
+      } else if (!result || !result.error){
+        return result;
+      } else {
+        lastError = result.error;
+      }
     } catch(e){
       lastError = e;
     }
