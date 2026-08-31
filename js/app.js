@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.250';
+const APP_VERSION = 'Beta 5.251';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -2420,7 +2420,7 @@ function openRebuildToolsSubPage(){
     <div class="overlay-scroll">
       <div class="small" style="padding:0 18px 14px 18px; color:var(--slate); line-height:1.5;">Tools for the exercise_master migration. Stage 2 is a one-time seed migration - re-running it after Stage 4c is ON will WIPE current new-table data and rebuild from the old exercises table snapshot.</div>
       <div class="me-item" id="subMigrateMasterBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
-        <div><div>Migrate to Exercise Master</div><div class="small" style="color:var(--slate); margin-top:2px;">Stage 2 - one-time seed from old exercises table. Refuses to wipe if new schema is in active use.</div></div>
+        <div><div>Migrate to Exercise Master</div><div class="small" style="color:var(--slate); margin-top:2px;">Stage 2 - one-time seed from old exercises table. Already done. If the new schema is in use it warns hard and requires typing MIGRATE, but it does not outright refuse - there is no reason to run this again.</div></div>
         <div class="chev" style="margin-top:2px;">›</div>
       </div>
       <div class="me-item" id="subExportBackupBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
@@ -2662,8 +2662,13 @@ async function openLinkSetsToMasterScreen(){
     let linked = 0;
     const errors = [];
     for (const { setId, masterId } of toLink){
-      const { error } = await supabaseClient.from('sets').update({ exercise_master_id: masterId }).eq('id', setId);
-      if (error) errors.push({ setId, message: error.message });
+      // This loop can span every set in the account. Unbounded and
+      // unretried, one dropped connection mid-run leaves an arbitrary
+      // subset of sets linked and the rest not - and a request that simply
+      // hangs stalls the whole repair with no indication why.
+      const { error } = await withBulkRetry(() => withTimeout(
+        supabaseClient.from('sets').update({ exercise_master_id: masterId }).eq('id', setId), 20000));
+      if (error) errors.push({ setId, message: error.message || error });
       else linked++;
     }
     if (errors.length){
