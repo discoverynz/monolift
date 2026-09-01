@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.260';
+const APP_VERSION = 'Beta 5.261';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -859,7 +859,21 @@ function formatLoggedDate(dateStr){
 }
 
 const app = document.getElementById('app');
-let state = { selectedDay: todayWeekday(), exercises: [], session: null, currentTab: 'track', trackScrollY: 0, renderGeneration: 0 };
+// Opening day. During a trip set to "Anytime every day", that IS the plan -
+// opening onto a weekday the user has deliberately stepped away from would
+// undo the choice on every single launch.
+function openingDay(){
+  try {
+    const raw = localStorage.getItem('zealift_trip_mode');
+    if (raw){
+      const t = JSON.parse(raw);
+      const stillRunning = !t.endDate || todayStr() <= t.endDate;
+      if (stillRunning && t.planMode === 'any') return ANY_DAY;
+    }
+  } catch(e){}
+  return todayWeekday();
+}
+let state = { selectedDay: openingDay(), exercises: [], session: null, currentTab: 'track', trackScrollY: 0, renderGeneration: 0 };
 
 const ICON_TRACK = `<svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="4" width="4" height="16" rx="1.2"/><rect x="17" y="4" width="4" height="16" rx="1.2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>`;
 const ICON_SCALE = `<svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="4" width="18" height="17" rx="3"/><circle cx="12" cy="12.5" r="5"/><line x1="12" y1="12.5" x2="15" y2="10"/></svg>`;
@@ -4683,7 +4697,29 @@ async function fetchTrackHeaderStats(){
     volumeKg += kgWeight * perSideMultiplier * repsNum * (Number(s.num_sets) || 1);
   });
   const streak = computeConsistencyStreak(streakSets);
-  return { volumeKg: Math.round(volumeKg), setsToday, streak: streak.current, targetDateIsToday, targetWeekday, targetIsFuture };
+  // Same weekday, one week back - what you're actually racing. Computed from
+  // the streak query's own window rather than a second fetch, since that
+  // query already pulled the dates and this only needs volume for one of
+  // them. Null when there's no comparable session rather than zero, so the
+  // UI can tell "didn't train" apart from "trained and moved nothing".
+  let lastWeekVolumeKg = null;
+  try {
+    const lastWeekStr = addDaysToDate(targetDateStr, -7);
+    const lwResult = await withTimeout(
+      supabaseClient.from('sets').select('weight, weight_unit, weight_type, reps, num_sets')
+        .eq('user_id', userData.user.id).eq('logged_at', lastWeekStr), 10000);
+    if (!lwResult.__timeout && !lwResult.error && lwResult.data && lwResult.data.length){
+      let v = 0;
+      lwResult.data.forEach(s => {
+        const w = Number(s.weight);
+        if (!isFinite(w) || w <= 0) return;
+        const kg = s.weight_unit === 'lb' ? w * 0.453592 : w;
+        v += kg * (s.weight_type === 'per' ? 2 : 1) * (Number(s.reps) || 1) * (Number(s.num_sets) || 1);
+      });
+      lastWeekVolumeKg = Math.round(v);
+    }
+  } catch(e){ /* a missing comparison is not worth failing the header over */ }
+  return { volumeKg: Math.round(volumeKg), setsToday, streak: streak.current, targetDateIsToday, targetWeekday, targetIsFuture, lastWeekVolumeKg };
 }
 
 // Suggestions markup, shared by the inline (cached) render and the
@@ -4911,7 +4947,7 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   const dayTypeUnavailable = dayTypeLabel && typeof dayTypeLabel === 'object' && dayTypeLabel.__unavailable;
   const effectiveDayTypeLabel = (typeof dayTypeLabel === 'string' && dayTypeLabel)
     ? dayTypeLabel
-    : (dayTypeUnavailable ? '—' : (isAnyDay(state.selectedDay) ? ANY_DAY_LABEL : dayNameOf(state.selectedDay)));
+    : (dayTypeUnavailable ? '—' : (isAnyDay(state.selectedDay) ? 'Full Body' : dayNameOf(state.selectedDay)));
 
   // Coerce a load-failed null into an empty array for the intermediate
   // computations (progress, muscles, sorting) so nothing crashes. The load
@@ -5081,7 +5117,12 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   // picked to match whatever this day is meant to train. Only when the day
   // is genuinely empty - if there's already band work scheduled, that IS the
   // plan and doesn't need suggestions on top of it.
-  const tripIdeasHtml = (isTripActive() && visibleExercises.length === 0)
+  // Also on an empty Anytime tab, trip or not. Anytime is the improvised /
+  // band / travel slot by definition, so an empty one is the single most
+  // obvious place in the app for ideas - and it was showing nothing at all,
+  // because the normal suggestion engine needs existing exercises to work
+  // from and an empty day has none.
+  const tripIdeasHtml = ((isTripActive() || isAnyDay(state.selectedDay)) && visibleExercises.length === 0)
     ? buildTripIdeasHtml(effectiveDayTypeLabel) : '';
 
   app.innerHTML = `
@@ -5098,6 +5139,7 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
           <h1 id="dayTypeHeader" style="cursor:pointer;${dayTypeUnavailable ? ' color:#E8A33D;' : ''}">
             <span style="color:var(--slate); font-weight:400;">${dayLabelOf(state.selectedDay)}</span>${effectiveDayTypeLabel ? ` <span style="color:var(--slate); font-weight:400;">—</span> ${effectiveDayTypeLabel}` : ''}
           </h1>
+          ${buildVolumeRaceHtml(headerStats)}
           <div class="quote">"${q.t}" — ${q.a}</div>
         </div>
         <div style="display:flex; margin:14px 18px 0 18px; border-radius:14px; overflow:hidden;
@@ -8835,7 +8877,7 @@ async function openPlanReorganizer(){
       }
 
       overlay.remove();
-      state.selectedDay = todayWeekday();
+      state.selectedDay = openingDay();
       state.currentTab = 'track';
       renderTrack();
 
@@ -9754,6 +9796,10 @@ async function showSessionCompleteScreen(list){
         ${prCount ? `<div class="milestone-card" style="margin-top:12px; background:linear-gradient(150deg,rgba(255,107,26,0.16),rgba(232,73,42,0.04)); border:1px solid rgba(255,107,26,0.4); border-radius:13px; padding:14px;">
           <div style="font-family:'Oswald',sans-serif; font-size:14px; color:var(--flame);">🏆 ${prCount} personal record${prCount===1?'':'s'} today</div>
         </div>` : ''}
+        ${detectMilestones(stats, list).map((m, i) => `
+          <div class="milestone-card" style="margin-top:9px; background:var(--panel); border:1px solid rgba(201,162,39,0.3); border-radius:13px; padding:13px 14px; animation-delay:${0.55 + i * 0.12}s;">
+            <div style="font-family:'Oswald',sans-serif; font-size:13.5px; color:var(--brass);">${m.icon} ${m.text}</div>
+          </div>`).join('')}
         <div style="margin-top:12px; background:var(--panel); border-radius:13px; padding:14px; animation:ml-rise .5s ease both; animation-delay:.5s;">
           <div class="small" style="color:var(--chalk); line-height:1.6;">Everything on ${dayLabelOf(state.selectedDay)} is logged. Nothing left to chase today.</div>
         </div>
@@ -15142,6 +15188,65 @@ async function showTripDebrief(trip){
 // Picks ideas matching the day's intent - a Legs day away from home should
 // surface leg work, not a random slice of the library. Falls back to a
 // spread across categories when the day type gives nothing to match on.
+// A live target instead of a passive total. Comparing against the same
+// weekday last week is the only fair comparison - a Tuesday legs session
+// against a Thursday arms one would be meaningless.
+// A broken streak after time away is not a failure worth rubbing in. If
+// someone's been gone and has come back, the useful response is to name the
+// return, not to show a zero where a number used to be.
+function buildComebackHtml(hs, daysSinceLast){
+  if (!hs || !hs.targetDateIsToday) return '';
+  if (!daysSinceLast || daysSinceLast < 5) return '';
+  return `
+    <div class="milestone-card" style="margin:10px 18px 0 18px; background:linear-gradient(150deg,rgba(143,191,122,0.14),transparent); border:1px solid rgba(143,191,122,0.35); border-radius:13px; padding:13px 14px;">
+      <div style="font-family:'Oswald',sans-serif; font-size:13.5px; color:var(--good);">Welcome back</div>
+      <div class="small" style="color:var(--slate); margin-top:3px; line-height:1.55;">${daysSinceLast} days since your last session. Starting again is the hard part and you've done it — go a bit lighter than you think today.</div>
+    </div>`;
+}
+
+// Milestones worth interrupting someone for. The bar is rarity: these should
+// land a few times a year, not a few times a week, or they stop meaning
+// anything - the same rule the PR celebration follows.
+function detectMilestones(stats, list){
+  const out = [];
+  const vol = stats ? stats.volumeKg : 0;
+  if (vol >= 1000) out.push({ icon:'📦', text:`One tonne moved today — ${vol.toLocaleString()}kg` });
+  if (vol >= 5000) out.push({ icon:'🗿', text:'Five tonnes in a single session' });
+  const streak = stats ? stats.streak : 0;
+  if (streak > 0 && streak % 10 === 0) out.push({ icon:'🔥', text:`${streak} sessions without a real break` });
+  const prs = (list || []).filter(ex => ex.showPr).length;
+  if (prs >= 3) out.push({ icon:'🏆', text:`${prs} personal records in one session` });
+  return out;
+}
+
+function buildVolumeRaceHtml(hs){
+  if (!hs || !hs.targetDateIsToday) return '';
+  const last = hs.lastWeekVolumeKg;
+  const now = hs.volumeKg || 0;
+  // Nothing to race against. Say so plainly rather than inventing a target
+  // out of a week where nothing was logged.
+  if (last === null || last <= 0){
+    if (now <= 0) return '';
+    return `<div style="margin-top:8px; font-size:11.5px; color:var(--slate);">${now.toLocaleString()}kg today — first time on this day, so this becomes the mark to beat.</div>`;
+  }
+  const pct = Math.min(100, Math.round((now / last) * 100));
+  const beaten = now >= last;
+  const remaining = Math.max(0, last - now);
+  return `
+    <div style="margin-top:10px;">
+      <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:5px;">
+        <span style="font-size:11.5px; color:${beaten ? 'var(--good)' : 'var(--slate)'};">
+          ${beaten ? `Beat last week by ${(now - last).toLocaleString()}kg` : `${remaining.toLocaleString()}kg to beat last week`}
+        </span>
+        <span style="font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--slate);">${pct}%</span>
+      </div>
+      <div style="height:7px; background:var(--ink); border-radius:4px; overflow:hidden;">
+        <div style="height:100%; width:${pct}%; border-radius:4px; transition:width .8s cubic-bezier(.2,.8,.3,1);
+          background:${beaten ? 'linear-gradient(90deg,var(--good),#B4D89C)' : 'linear-gradient(90deg,var(--flame),#FF9A5A)'};"></div>
+      </div>
+    </div>`;
+}
+
 function buildTripIdeasHtml(dayTypeLabel){
   const label = (dayTypeLabel || '').toLowerCase();
   const wants = [];
@@ -15204,6 +15309,12 @@ async function openTripModeScreen(){
         <div class="chip-row" id="tripLocRow" style="padding:0 18px 10px 18px;">
           ${locs.map(l => `<div class="chip" data-loc="${l.id}">${l.name}</div>`).join('') || '<div class="small" style="color:var(--slate);">No locations yet - add one under Me → Location first.</div>'}
         </div>
+        <div class="field-label">While away, show me</div>
+        <div class="chip-row" id="tripPlanRow" style="padding:0 18px 8px 18px;">
+          <div class="chip active" data-plan="week">My Mon–Sun plan</div>
+          <div class="chip" data-plan="any">Anytime every day</div>
+        </div>
+        <div class="small" style="padding:0 18px 14px 18px; color:var(--slate); line-height:1.55;">Anytime every day drops the weekday structure entirely and opens straight onto one improvised full-body slot - usually what you actually want when you're living out of a bag.</div>
         <div class="field-label">Coming back <span class="opt">optional</span></div>
         <div class="field-card"><input class="field-input" id="tripEnd" type="date" style="font-size:15px;"></div>
         <div class="small" style="padding:0 18px 14px 18px; color:var(--slate); line-height:1.55;">Set this and Trip Mode ends itself on that date. Leave it blank and you'll turn it off yourself.</div>
@@ -15234,6 +15345,14 @@ async function openTripModeScreen(){
     if (state.currentTab === 'track') renderTrack();
     if (finished) showTripDebrief(finished);
   };
+  let planMode = 'week';
+  overlay.querySelectorAll('#tripPlanRow .chip[data-plan]').forEach(c => {
+    c.onclick = () => {
+      planMode = c.dataset.plan;
+      overlay.querySelectorAll('#tripPlanRow .chip').forEach(x => x.classList.remove('active'));
+      c.classList.add('active');
+    };
+  });
   overlay.querySelectorAll('#tripLocRow .chip[data-loc]').forEach(c => {
     c.onclick = () => {
       pickedLoc = c.dataset.loc;
@@ -15245,7 +15364,10 @@ async function openTripModeScreen(){
   if (startBtn) startBtn.onclick = () => {
     if (!pickedLoc){ alert('Pick where you\'ll be training first.'); return; }
     const endVal = overlay.querySelector('#tripEnd').value;
-    setTripMode({ locationId: pickedLoc, startDate: todayStr(), endDate: endVal || null });
+    setTripMode({ locationId: pickedLoc, startDate: todayStr(), endDate: endVal || null, planMode });
+    // Land on Anytime straight away rather than making the first open after
+    // setup still show the weekday plan the user just said they didn't want.
+    if (planMode === 'any') state.selectedDay = ANY_DAY;
     // Clear any stale explicit pick so the trip default actually takes
     // effect immediately rather than on the next midnight reset.
     setCurrentLocationId(pickedLoc);
