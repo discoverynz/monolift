@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.265';
+const APP_VERSION = 'Beta 5.266';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -14057,15 +14057,25 @@ const REGION_BROAD = {
   'Lower Back':'lower back','Glutes':'glutes','Hamstrings':'hamstrings'
 };
 
-// Least to most: dull yellow, gold, amber, orange, red - with the glow
-// growing alongside. Two channels carrying the same ranking, so it reads
-// from hue or from brightness alone, and survives colour blindness.
+// Least to most: yellow through gold, amber and orange to red, with the glow
+// widening alongside. Two channels carrying the same ranking, so it reads
+// from hue or from brightness alone and survives colour blindness.
+//
+// Nothing on the body is grey. An untouched muscle is the dimmest yellow
+// rather than near-black, so the whole figure stays warm and every region
+// is legible - the old near-black made untrained muscles recede into the
+// background exactly when they were the thing worth noticing.
+//
+// The step between untouched and barely-trained is deliberately the largest
+// jump on the scale, in both brightness and glow, because "never trained"
+// and "trained a little" need different responses and must not be mistaken
+// for each other now that both are yellow.
 function heatStep(t){
-  if (t <= 0) return null;
-  if (t < 0.22) return { f:'#7A6A1E', s:'#A08C28', g:0 };
-  if (t < 0.45) return { f:'#C9A227', s:'#E8C24A', g:9 };
-  if (t < 0.68) return { f:'#E8A33D', s:'#FFC46B', g:20 };
-  if (t < 0.86) return { f:'#FF6B1A', s:'#FF9040', g:34 };
+  if (t <= 0) return { f:'#4A431A', s:'#6B6026', g:0 };
+  if (t < 0.22) return { f:'#9C8A22', s:'#C4AE30', g:9 };
+  if (t < 0.45) return { f:'#C9A227', s:'#E8C24A', g:20 };
+  if (t < 0.68) return { f:'#E8A33D', s:'#FFC46B', g:28 };
+  if (t < 0.86) return { f:'#FF6B1A', s:'#FF9040', g:40 };
   return { f:'#E8261A', s:'#FF5C4A', g:56 };
 }
 
@@ -14086,13 +14096,12 @@ function heatmapCounts(sets){
 }
 
 function heatmapBodySvg(regions, counts, mx, pid){
-  const blurs = [9,20,34,56].map(g =>
+  const blurs = [9,20,28,40,56].map(g =>
     `<filter id="${pid}-b${g}" x="-70%" y="-70%" width="240%" height="240%"><feGaussianBlur stdDeviation="${g/10}" result="x"/><feMerge><feMergeNode in="x"/><feMergeNode in="x"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`).join('');
   const paths = regions.map(([name, d]) => {
     const n = counts[name] || 0;
     const h = heatStep(mx > 0 ? n / mx : 0);
     const common = `class="hm-region" data-region="${name}" data-sets="${n}" style="cursor:pointer;"`;
-    if (!h) return `<path d="${d}" fill="#191B1E" stroke="#33363B" stroke-width="0.7" ${common}></path>`;
     const fl = h.g ? ` filter="url(#${pid}-b${h.g})"` : '';
     return `<path d="${d}" fill="${h.f}" stroke="${h.s}" stroke-width="0.9"${fl} ${common}></path>`;
   }).join('\n  ');
