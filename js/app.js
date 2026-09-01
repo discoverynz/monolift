@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.270';
+const APP_VERSION = 'Beta 5.271';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -5159,6 +5159,19 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   // obvious place in the app for ideas - and it was showing nothing at all,
   // because the normal suggestion engine needs existing exercises to work
   // from and an empty day has none.
+  // Sits directly above the toolbar. Only offered on today - guiding someone
+  // through a day they're merely browsing makes no sense - and only when
+  // there's something left to do.
+  const remaining = visibleExercises.filter(ex => !ex.loggedToday && !ex.completeVia);
+  const resumable = readSession();
+  const sessionStartHtml = (headerStats.targetDateIsToday && remaining.length >= 2)
+    ? `<div style="padding:10px 18px 0 18px;">
+        <button class="btn-primary" id="startSessionBtn" style="width:100%; display:flex; align-items:center; justify-content:center; gap:8px;">
+          <span style="font-family:'Bebas Neue',sans-serif; font-size:16px; letter-spacing:0.8px;">${resumable ? 'RESUME SESSION' : 'START SESSION'}</span>
+          <span style="font-size:11.5px; opacity:0.75;">${resumable ? `${resumable.idx + 1} of ${resumable.order.length}` : `${remaining.length} exercises`}</span>
+        </button>
+      </div>`
+    : '';
   const ghostRaceHtml = buildGhostRaceHtml(headerStats, visibleExercises);
   const mainEventHtml = buildMainEventHtml(visibleExercises);
   // Session heat needs per-set timestamps, which only the live header fetch
@@ -5204,6 +5217,7 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
             <div style="font-size:8.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px; margin-top:2px;">Sets ${headerStats.targetDateIsToday ? 'Today' : dayLabelOf(headerStats.targetWeekday)}</div>
           </div>
         </div>
+        ${sessionStartHtml}
         <div style="padding:8px 18px 0 18px; display:flex; gap:8px; flex-wrap:wrap;">
           ${isAnyDay(state.selectedDay) && workingExercises.length > 0 ? `<button id="toolbarClearAnyBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:var(--panel); border:1px solid var(--line); color:var(--slate);">
             <span style="font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px;">CLEAR</span>
@@ -5374,6 +5388,11 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   if (retryBtn) retryBtn.onclick = () => { state.exercises = []; renderTrack(); };
   const clearLocBtn = document.getElementById('clearLocationBtn');
   if (clearLocBtn) clearLocBtn.onclick = () => openLocationPicker(allLocations, currentLocationId);
+  const startSessBtn = document.getElementById('startSessionBtn');
+  if (startSessBtn) startSessBtn.onclick = () => {
+    if (readSession()) renderSessionScreen();
+    else startSession(visibleExercises);
+  };
   const mainCard = document.getElementById('mainEventCard');
   if (mainCard) mainCard.onclick = () => openLogForm(mainCard.dataset.exId, mainCard.dataset.exName);
   document.querySelectorAll('.trip-idea-add').forEach(btn => {
@@ -9830,7 +9849,7 @@ function maybeShowSessionComplete(){
   showSessionCompleteScreen(list);
 }
 
-async function showSessionCompleteScreen(list){
+async function showSessionCompleteScreen(list, elapsedMins){
   const stats = await fetchTrackHeaderStats().catch(() => null);
   const volume = stats ? stats.volumeKg : 0;
   const setsToday = stats ? stats.setsToday : 0;
@@ -9843,7 +9862,7 @@ async function showSessionCompleteScreen(list){
       <div style="padding:0 18px;">
         <div class="session-done-hero">SESSION DONE</div>
         <div class="small" style="color:var(--slate); margin-top:4px; animation:ml-rise .5s ease both; animation-delay:.1s;">
-          ${dayLabelOf(state.selectedDay)} · ${list.length} exercise${list.length===1?'':'s'} complete
+          ${dayLabelOf(state.selectedDay)}${elapsedMins ? ` · ${elapsedMins} min` : ''} · ${list.length} exercise${list.length===1?'':'s'} complete
         </div>
         <div style="display:flex; gap:9px; margin-top:18px;">
           <div class="session-done-stat" style="animation-delay:.2s;"><div class="n" style="color:var(--flame);">${volume.toLocaleString()}</div><div class="l">kg moved</div></div>
@@ -15657,6 +15676,264 @@ function buildChargeCellsHtml(recovery){
 // session was at the same point. Every gym app tells you how it went
 // afterwards, when nothing can be done - this makes the middle of a session
 // have stakes.
+// ---------- SESSION MODE ----------
+// A guided run through the day, as an alternative to the list rather than a
+// replacement for it. Every set writes immediately through the normal save
+// path, so the session is only a wrapper - close the app mid-workout and
+// nothing is lost, and quitting drops you back to the list with everything
+// already logged. That property is what stops a guided flow becoming a cage
+// the first time something interrupts it.
+const SESSION_KEY = 'zealift_active_session';
+function readSession(){
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const sess = JSON.parse(raw);
+    // A session belongs to the day it started. Finding yesterday's still
+    // open means it was abandoned, not paused.
+    if (sess.date !== todayStr()){ localStorage.removeItem(SESSION_KEY); return null; }
+    return sess;
+  } catch(e){ return null; }
+}
+function writeSession(sess){
+  try {
+    if (sess) localStorage.setItem(SESSION_KEY, JSON.stringify(sess));
+    else localStorage.removeItem(SESSION_KEY);
+  } catch(e){}
+}
+
+// Rest length from the exercise itself, not one global setting. A heavy
+// compound genuinely needs three minutes and a cable fly does not - using
+// one number for both is how rest timers end up ignored.
+function restSecondsFor(ex){
+  const s = ex && (ex.lastSet || ex.maxSet);
+  const w = s ? Number(s.weight) : 0;
+  if (!isFinite(w) || w <= 0) return 75;
+  const kg = (s.weight_unit === 'lb' ? w * 0.453592 : w) * (s.weight_type === 'per' ? 2 : 1);
+  if (kg >= 100) return 180;
+  if (kg >= 60) return 150;
+  if (kg >= 30) return 105;
+  return 75;
+}
+
+function startSession(list){
+  const items = (list || []).filter(ex => !ex.loggedToday && !ex.completeVia);
+  if (!items.length) return;
+  writeSession({
+    date: todayStr(),
+    weekday: state.selectedDay,
+    startedAt: new Date().toISOString(),
+    order: items.map(ex => ({ id: ex.id, name: ex.name })),
+    idx: 0,
+    setsDone: {},          // exerciseId -> count logged this session
+    targetSets: {}         // exerciseId -> how many planned
+  });
+  renderSessionScreen();
+}
+
+function endSession(){
+  writeSession(null);
+  state.currentTab = 'track';
+  renderTrack();
+}
+
+async function renderSessionScreen(){
+  const sess = readSession();
+  if (!sess) return endSession();
+  const cur = sess.order[sess.idx];
+  if (!cur) return finishSession(sess);
+  const ex = (state.exercises || []).find(e => e.id === cur.id);
+  // The exercise vanished - removed from the day, or a stale session from
+  // before an edit. Skip rather than stalling the whole run on it.
+  if (!ex){ sess.idx++; writeSession(sess); return renderSessionScreen(); }
+
+  const target = sess.targetSets[cur.id] || (ex.lastSet && Number(ex.lastSet.num_sets)) || 3;
+  const done = sess.setsDone[cur.id] || 0;
+  const last = ex.lastSet ? formatSetValue(ex.lastSet) : null;
+  const total = sess.order.length;
+
+  const app = document.getElementById('app');
+  app.innerHTML = `
+    <div class="app-shell">
+      <div class="overlay-scroll" style="padding:calc(14px + env(safe-area-inset-top,0px)) 0 40px 0;">
+        <div style="display:flex; gap:4px; padding:0 18px 14px 18px;">
+          ${sess.order.map((_, i) => `<div style="flex:1; height:4px; border-radius:2px; background:${i < sess.idx ? 'var(--good)' : i === sess.idx ? 'var(--flame)' : '#26282c'};"></div>`).join('')}
+        </div>
+        <div style="padding:0 18px;">
+          <div class="small" style="color:var(--slate);">Exercise ${sess.idx + 1} of ${total}</div>
+          <div style="font-family:'Bebas Neue',sans-serif; font-size:30px; line-height:1; margin:2px 0 4px 0;">${ex.name}</div>
+          <div class="small" style="color:var(--slate); margin-bottom:14px;">${last ? `Last time: ${last}` : 'No history yet'}</div>
+          ${Array.from({length: Math.max(target, done)}, (_, i) => {
+            const isDone = i < done, isNow = i === done;
+            return `<div style="display:flex; align-items:center; gap:10px; padding:11px 12px; border-radius:11px; margin-bottom:7px;
+              background:${isDone ? 'rgba(143,191,122,0.09)' : isNow ? 'rgba(255,107,26,0.1)' : 'var(--panel)'};
+              border:1px solid ${isDone ? 'rgba(143,191,122,0.28)' : isNow ? 'rgba(255,107,26,0.4)' : 'transparent'};">
+              <span style="width:20px; font-family:'Bebas Neue',sans-serif; font-size:17px; color:var(--slate);">${i+1}</span>
+              <span style="flex:1; font-size:14px; color:${isDone ? 'var(--chalk)' : 'var(--slate)'};">${isDone ? 'Logged' : isNow ? `Set ${i+1} of ${target}` : '—'}</span>
+              ${isDone ? '<span style="color:var(--good); font-size:15px;">✓</span>' : ''}
+            </div>`;
+          }).join('')}
+          <div style="display:flex; gap:8px; margin:14px 0;">
+            <div style="flex:1; background:var(--panel); border:1px solid var(--line); border-radius:11px; padding:10px 12px;">
+              <div style="font-size:10px; color:var(--slate);">Weight</div>
+              <input id="sessWeight" inputmode="decimal" value="${ex.lastSet && ex.lastSet.weight != null ? ex.lastSet.weight : ''}"
+                style="width:100%; background:none; border:none; color:var(--chalk); font-family:'Bebas Neue',sans-serif; font-size:25px; padding:0;">
+            </div>
+            <div style="flex:1; background:var(--panel); border:1px solid var(--line); border-radius:11px; padding:10px 12px;">
+              <div style="font-size:10px; color:var(--slate);">Reps</div>
+              <input id="sessReps" inputmode="numeric" value="${ex.lastSet && ex.lastSet.reps != null ? ex.lastSet.reps : ''}"
+                style="width:100%; background:none; border:none; color:var(--chalk); font-family:'Bebas Neue',sans-serif; font-size:25px; padding:0;">
+            </div>
+          </div>
+          <button class="btn-primary" id="sessLogBtn" style="width:100%;">Log set ${done + 1}</button>
+          <div style="display:flex; gap:8px; margin-top:9px;">
+            <button class="btn-primary" id="sessSkipBtn" style="flex:1; background:var(--panel); color:var(--slate); border:1px solid var(--line); font-size:13px;">Skip exercise</button>
+            <button class="btn-primary" id="sessDoneEarlyBtn" style="flex:1; background:var(--panel); color:var(--slate); border:1px solid var(--line); font-size:13px;">Done with this</button>
+          </div>
+          <button class="btn-primary" id="sessQuitBtn" style="width:100%; margin-top:9px; background:none; color:var(--slate); border:none; font-size:12.5px;">Quit to list — keeps everything logged</button>
+        </div>
+      </div>
+    </div>`;
+
+  document.getElementById('sessLogBtn').onclick = async () => {
+    const w = document.getElementById('sessWeight').value;
+    const r = document.getElementById('sessReps').value;
+    const btn = document.getElementById('sessLogBtn');
+    btn.textContent = 'Saving…';
+    const ok = await sessionLogSet(ex, w, r);
+    if (!ok){ btn.textContent = `Log set ${done + 1}`; return; }
+    sess.setsDone[cur.id] = done + 1;
+    sess.targetSets[cur.id] = target;
+    writeSession(sess);
+    if (done + 1 >= target) renderExerciseComplete(sess, ex);
+    else renderRestOverlay(sess, ex, restSecondsFor(ex));
+  };
+  document.getElementById('sessSkipBtn').onclick = () => { sess.idx++; writeSession(sess); renderSessionScreen(); };
+  document.getElementById('sessDoneEarlyBtn').onclick = () => renderExerciseComplete(sess, ex);
+  document.getElementById('sessQuitBtn').onclick = () => endSession();
+}
+
+// Writes through the same path a normal log does, so nothing about the
+// stored set differs because it came from a session.
+async function sessionLogSet(ex, weightRaw, repsRaw){
+  const userData = { user: await getCurrentUser() };
+  if (!userData.user) return false;
+  const idField = setExerciseIdField();
+  const unit = (ex.lastSet && ex.lastSet.weight_unit) || 'kg';
+  const payload = {
+    user_id: userData.user.id,
+    weight: weightRaw ? parseFloat(weightRaw) : null,
+    weight_unit: unit,
+    weight_type: (ex.lastSet && ex.lastSet.weight_type) || 'total',
+    reps: repsRaw ? parseInt(repsRaw, 10) : ASSUMED_REPS,
+    num_sets: 1,
+    logged_at: todayStr(),
+    location_id: effectiveLocationId()
+  };
+  payload[idField] = ex.id;
+  invalidateTrackSnapshots();
+  let error = null;
+  try {
+    const res = await withTimeout(supabaseClient.from('sets').insert(payload).select(), 12000);
+    if (res.__timeout) error = { message: 'timed out' };
+    else error = res.error;
+  } catch(e){ error = { message: e.message || 'network' }; }
+  if (error){
+    // Same offline protection as everywhere else - a session set is not
+    // more disposable than any other.
+    queueSetLocally(payload);
+    showQueuedSetToast();
+  }
+  celebrateLoggedSet(document.getElementById('sessLogBtn'), payload.weight, unit, payload.weight_type, payload.reps, 1);
+  return true;
+}
+
+function renderRestOverlay(sess, ex, seconds){
+  const endAt = Date.now() + seconds * 1000;
+  const ov = document.createElement('div');
+  ov.className = 'overlay-screen';
+  ov.style.zIndex = '45';
+  const done = sess.setsDone[ex.id] || 0;
+  const target = sess.targetSets[ex.id] || 3;
+  ov.innerHTML = `
+    <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:26px; text-align:center;">
+      <div style="width:172px; height:172px; border-radius:50%; border:3px solid #26282c; display:flex; align-items:center; justify-content:center; margin-bottom:18px;">
+        <div id="restClock" style="font-family:'Bebas Neue',sans-serif; font-size:52px; line-height:1;">${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')}</div>
+      </div>
+      <div class="small" style="color:var(--slate); margin-bottom:22px; line-height:1.55;">
+        Next up<br><b style="color:var(--chalk);">${ex.name} — set ${done + 1} of ${target}</b>
+      </div>
+      <button class="btn-primary" id="restSkip" style="max-width:220px; width:100%;">Skip rest</button>
+      <button class="btn-primary" id="restAdd" style="max-width:220px; width:100%; margin-top:9px; background:var(--panel); color:var(--chalk); border:1px solid var(--line); font-size:13px;">+30 sec</button>
+    </div>`;
+  document.body.appendChild(ov);
+  let target_ms = endAt;
+  // Wall-clock, so locking the phone mid-rest doesn't pause it - the same
+  // fix the standalone timer needed.
+  const tick = setInterval(() => {
+    const left = Math.max(0, Math.ceil((target_ms - Date.now()) / 1000));
+    const el = document.getElementById('restClock');
+    if (el) el.textContent = `${Math.floor(left/60)}:${String(left%60).padStart(2,'0')}`;
+    if (left <= 0){
+      clearInterval(tick);
+      if (!document.hidden) playTimerSound();
+      ov.remove();
+      renderSessionScreen();
+    }
+  }, 250);
+  const close = () => { clearInterval(tick); ov.remove(); renderSessionScreen(); };
+  ov.querySelector('#restSkip').onclick = close;
+  ov.querySelector('#restAdd').onclick = () => { target_ms += 30000; };
+}
+
+// Confirms rather than silently advancing, because finishing an exercise is
+// exactly when someone decides to add a set or cut one - and no app asks.
+function renderExerciseComplete(sess, ex){
+  const done = sess.setsDone[ex.id] || 0;
+  const nextName = sess.order[sess.idx + 1] ? sess.order[sess.idx + 1].name : null;
+  const app = document.getElementById('app');
+  app.innerHTML = `
+    <div class="app-shell">
+      <div class="overlay-scroll" style="padding:calc(14px + env(safe-area-inset-top,0px)) 0 40px 0;">
+        <div style="display:flex; gap:4px; padding:0 18px 14px 18px;">
+          ${sess.order.map((_, i) => `<div style="flex:1; height:4px; border-radius:2px; background:${i <= sess.idx ? 'var(--good)' : '#26282c'};"></div>`).join('')}
+        </div>
+        <div style="text-align:center; padding:22px 18px 6px 18px;">
+          <div style="font-size:30px;">✓</div>
+          <div style="font-family:'Bebas Neue',sans-serif; font-size:26px; margin-top:6px;">${ex.name} done</div>
+          <div class="small" style="color:var(--slate);">${done} set${done===1?'':'s'} logged</div>
+        </div>
+        <div style="padding:14px 18px 0 18px;">
+          <button class="btn-primary" id="sessNextBtn" style="width:100%;">${nextName ? `Next: ${nextName}` : 'Finish session'}</button>
+          <button class="btn-primary" id="sessAddSetBtn" style="width:100%; margin-top:9px; background:var(--panel); color:var(--chalk); border:1px solid var(--line); font-size:13px;">Add another set</button>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById('sessNextBtn').onclick = () => {
+    sess.idx++;
+    writeSession(sess);
+    if (sess.idx >= sess.order.length) finishSession(sess);
+    else renderSessionScreen();
+  };
+  document.getElementById('sessAddSetBtn').onclick = () => {
+    sess.targetSets[ex.id] = (sess.targetSets[ex.id] || done) + 1;
+    writeSession(sess);
+    renderSessionScreen();
+  };
+}
+
+async function finishSession(sess){
+  const mins = Math.max(1, Math.round((Date.now() - new Date(sess.startedAt)) / 60000));
+  writeSession(null);
+  await loadExercises();
+  const list = (state.exercises || []).filter(ex => isAvailableOnSelectedDay(ex));
+  state.currentTab = 'track';
+  renderTrack();
+  // Reuses the existing session-complete screen, now firing because the
+  // session genuinely ended rather than because a checkbox happened to tick.
+  setTimeout(() => showSessionCompleteScreen(list, mins), 350);
+}
+
 function buildGhostRaceHtml(hs, list){
   if (!hs || !hs.targetDateIsToday) return '';
   const last = hs.lastWeekVolumeKg;
