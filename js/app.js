@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.268';
+const APP_VERSION = 'Beta 5.269';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -5161,7 +5161,12 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   // from and an empty day has none.
   const ghostRaceHtml = buildGhostRaceHtml(headerStats, visibleExercises);
   const mainEventHtml = buildMainEventHtml(visibleExercises);
-  const sessionHeatHtml = buildSessionHeatHtml(computeSessionHeat(state.todaysSetsRaw || []));
+  // Session heat needs per-set timestamps, which only the live header fetch
+  // provides - the snapshot path renders from cached aggregate stats and
+  // never populates them. Suppressed there rather than shown from whatever
+  // happens to be left in state, which on a cold open is either empty or
+  // yesterday's session. It appears on the repaint a moment later.
+  const sessionHeatHtml = fromSnapshot ? '' : buildSessionHeatHtml(computeSessionHeat(state.todaysSetsRaw || []));
   const tripIdeasHtml = ((isTripActive() || isAnyDay(state.selectedDay)) && visibleExercises.length === 0)
     ? buildTripIdeasHtml(effectiveDayTypeLabel) : '';
 
@@ -14912,6 +14917,11 @@ async function renderBalance(mode, view){
     ? ((tally && tally._fineSets) || [])
     : ((weeks && weeks.length) ? weeks[weeks.length-1].sets : []);
   const heatmapHtml = (view === 'muscle') ? buildMuscleHeatmapHtml(heatmapSets, mode) : '';
+  // Charge cells sit above the recovery clock: the batteries answer "where
+  // should I train today" at a glance, the clock below gives the exact days
+  // for anyone who wants them. Logged mode only - a plan has no history to
+  // recover from.
+  const chargeCellsHtml = (mode === 'logged' && view === 'muscle') ? buildChargeCellsHtml(recoveryClock) : '';
   const recoveryClockHtml = recoveryClock ? `
     <div class="section-label">Recovery Clock</div>
     <div class="small" style="padding:0 18px 8px 18px; color:var(--slate);">When each muscle is next due, based on its usual training rhythm - not just days since last worked.</div>
@@ -15209,6 +15219,7 @@ async function renderBalance(mode, view){
         </div>
         ${balanceHeroHtml(tally, prevTally, mode)}
         ${heatmapHtml}
+        ${chargeCellsHtml}
         ${recoveryClockHtml}
         ${badgesHtml}
         ${scoreAndVarietyHtml}
@@ -15656,6 +15667,11 @@ function buildGhostRaceHtml(hs, list){
   // you're finished the session summary is the right place for the verdict.
   if (done === 0 || done >= total || total < 2) return '';
   const now = hs.volumeKg || 0;
+  // A day with real work but no measurable volume - bodyweight, bands, timed
+  // holds - would read as 0 against last week and look like total failure
+  // when the session is actually going fine. Volume simply isn't the right
+  // yardstick there, so don't pretend it is.
+  if (now <= 0) return '';
   // Where last week stood at this same fraction of the session, which is the
   // only fair comparison - comparing a part-done session against a whole one
   // would always read as losing.
