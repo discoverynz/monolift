@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.276';
+const APP_VERSION = 'Beta 5.277';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -5287,13 +5287,6 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
           <button class="btn-primary" id="addMoreTodayBtn" style="flex-shrink:0; width:auto; padding:9px 14px; font-size:12.5px;">Add exercise</button>
         </div>
       </div>`
-    : remaining.length >= 2
-    ? `<div style="padding:10px 18px 0 18px;">
-        <button class="btn-primary" id="startSessionBtn" style="width:100%; display:flex; align-items:center; justify-content:center; gap:8px;">
-          <span style="font-family:'Bebas Neue',sans-serif; font-size:16px; letter-spacing:0.8px;">${resumable ? '■ END SESSION' : '▶ START SESSION'}</span>
-          <span style="font-size:11.5px; opacity:0.75;">${resumable ? `${resumable.idx + 1} of ${resumable.order.length}` : `${remaining.length} exercises`}</span>
-        </button>
-      </div>`
     : '';
   const ghostRaceHtml = buildGhostRaceHtml(headerStats, visibleExercises);
   const mainEventHtml = buildMainEventHtml(visibleExercises);
@@ -5357,6 +5350,9 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
         <div style="padding:8px 18px 0 18px; display:flex; gap:8px; flex-wrap:wrap;">
           ${isAnyDay(state.selectedDay) && workingExercises.length > 0 ? `<button id="toolbarClearAnyBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:var(--panel); border:1px solid var(--line); color:var(--slate);">
             <span style="font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px;">CLEAR</span>
+          </button>` : ''}
+          ${remaining.length >= 2 || resumable ? `<button id="startSessionBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:${resumable ? 'var(--flame)' : 'rgba(255,107,26,0.10)'}; border:1px solid ${resumable ? 'var(--flame)' : 'rgba(255,107,26,0.45)'}; color:${resumable ? 'var(--ink)' : 'var(--flame)'};">
+            <span style="font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px;">${resumable ? `END · ${resumable.idx + 1}/${resumable.order.length}` : 'START'}</span>
           </button>` : ''}
           <button id="toolbarTimerBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:rgba(255,107,26,0.10); border:1px solid rgba(255,107,26,0.45); color:var(--flame);">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg>

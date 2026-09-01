@@ -1,10 +1,5 @@
-const CACHE_NAME = 'monolift-v327';
-const SHELL = ['./', './index.html', './css/styles.css?v=327', './js/app.js?v=327', './js/supabase-client.js?v=327', './manifest.json'];
-
-// True until this worker has served one navigation. A newly-activated worker
-// means a deploy just happened, and the HTML sitting in the old cache points
-// at the previous build's versioned assets.
-let FIRST_RUN_AFTER_UPDATE = true;
+const CACHE_NAME = 'monolift-v328';
+const SHELL = ['./', './index.html', './css/styles.css?v=328', './js/app.js?v=328', './js/supabase-client.js?v=328', './manifest.json'];
 
 self.addEventListener('install', (event) => {
   self.skipWaiting(); // don't wait for old tabs to close — take over immediately
@@ -51,8 +46,6 @@ self.addEventListener('fetch', (event) => {
   const isVersioned = url.searchParams.has('v');
 
   if (isNavigation){
-    const wasFirst = FIRST_RUN_AFTER_UPDATE;
-    FIRST_RUN_AFTER_UPDATE = false;
     // STALE-WHILE-REVALIDATE, not network-first. Network-first meant every
     // single app open paid a full round trip for the HTML before a single
     // script could even begin downloading - the whole app sat behind it.
@@ -63,31 +56,26 @@ self.addEventListener('fetch', (event) => {
     // can offer a reload. The user gets an instant open AND still learns
     // about new versions, just one open later instead of blocking every open
     // forever to catch the rare deploy.
+    // NETWORK-FIRST for the HTML, with cache only as an offline fallback.
+    //
+    // Serving cached HTML was the root of a bug that cost real hours: the
+    // HTML names versioned assets (app.js?v=328), so stale HTML boots stale
+    // JavaScript no matter how correct the deployed files are. Every fix for
+    // that was itself trapped behind the stale worker that caused it - the
+    // update could never arrive because the thing needing updating was what
+    // blocked it.
+    //
+    // Stale-while-revalidate bought an instant open at the cost of always
+    // running one version behind. That trade is wrong for an app that ships
+    // often: the HTML is a couple of KB and one round trip is cheap, while
+    // silently running an old build is not. Offline still works - the cache
+    // is the fallback, just no longer the default.
     event.respondWith(
-      caches.match(req).then((cached) => {
-        const networkPromise = fetch(req).then((response) => {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(req, copy));
-          if (cached){
-            // Compare bodies to see whether a deploy actually happened.
-            Promise.all([cached.clone().text(), response.clone().text()]).then(([oldText, newText]) => {
-              if (oldText !== newText){
-                self.clients.matchAll().then((clients) => {
-                  clients.forEach((c) => c.postMessage({ type: 'APP_UPDATE_AVAILABLE' }));
-                });
-              }
-            }).catch(() => {});
-          }
-          return response;
-        }).catch(() => cached);
-        // If the cached HTML was stored by an OLDER worker version, serving
-        // it means booting the previous build's app.js - which is exactly
-        // how a deploy can land correctly and still show nothing new. A
-        // freshly-installed worker has no HTML of its own yet, so on the
-        // first navigation after an update we wait for the network rather
-        // than serving the last version's shell.
-        return cached && !wasFirst ? cached : (networkPromise.then(r => r || cached));
-      })
+      fetch(req).then((response) => {
+        const copy = response.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(req, copy));
+        return response;
+      }).catch(() => caches.match(req))
     );
     return;
   }
