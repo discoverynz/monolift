@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.264';
+const APP_VERSION = 'Beta 5.265';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -14117,7 +14117,8 @@ function buildMuscleHeatmapHtml(sets, mode){
   if (!top) reading = mode === 'plan' ? 'Nothing in your plan yet.' : 'Nothing logged yet this week.';
   else {
     const verb = mode === 'plan' ? 'takes the most room in your plan' : 'took the most work';
-    reading = `<b>${top}</b> ${verb}, ${counts[top]} set${counts[top]===1?'':'s'}.` +
+    const unit = mode === 'plan' ? 'slot' : 'set';
+    reading = `<b>${top}</b> ${verb}, ${counts[top]} ${unit}${counts[top]===1?'':'s'}.` +
       (gaps.length === 0 ? ' Nothing untouched.'
         : gaps.length <= 3 ? ` Nothing for ${gaps.join(', ')}.`
         : ` ${gaps.length} regions untouched, including ${gaps[0]} and ${gaps[1]}.`);
@@ -14130,7 +14131,7 @@ function buildMuscleHeatmapHtml(sets, mode){
       </div>
       <div style="display:flex; align-items:baseline; gap:8px; margin:14px 0 2px 0;">
         <span style="font-family:'Bebas Neue',sans-serif; font-size:38px; line-height:0.9;">${total}</span>
-        <span class="small" style="color:var(--slate);">${mode === 'plan' ? 'sets across your full plan' : 'sets logged this week'}</span>
+        <span class="small" style="color:var(--slate);">${mode === 'plan' ? 'exercise slots in your weekly plan' : 'sets logged this week'}</span>
       </div>
       <div style="margin:6px 0 4px 0;">${heatmapBodySvg(regions, counts, mx, 'hm' + side)}</div>
       <div id="heatmapDetail" style="min-height:22px; margin-top:10px;"></div>
@@ -14142,7 +14143,8 @@ function buildMuscleHeatmapHtml(sets, mode){
 // Wired after render. Tapping a region names it, gives its set count, and
 // offers a way through to your own exercises for it - the map becomes
 // something to act on rather than only look at.
-function wireHeatmapInteractions(sets){
+function wireHeatmapInteractions(sets, mode){
+  const isPlan = mode === 'plan';
   const counts = heatmapCounts(sets);
   const lastTrained = {};
   (sets || []).forEach(s => {
@@ -14170,7 +14172,7 @@ function wireHeatmapInteractions(sets){
         <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; background:rgba(255,255,255,0.03); border-radius:10px; padding:10px 12px;">
           <div style="min-width:0;">
             <div style="font-family:'Oswald',sans-serif; font-size:13.5px;">${name}</div>
-            <div class="small" style="color:var(--slate); margin-top:2px;">${n === 0 ? 'Nothing logged this week' : `${n} set${n===1?'':'s'} this week`}${ago !== null ? ` · last ${ago === 0 ? 'today' : ago === 1 ? 'yesterday' : ago + ' days ago'}` : ''}</div>
+            <div class="small" style="color:var(--slate); margin-top:2px;">${n === 0 ? (isPlan ? 'Not in your plan' : 'Nothing logged this week') : (isPlan ? `${n} slot${n===1?'':'s'} in your plan` : `${n} set${n===1?'':'s'} this week`)}${(!isPlan && ago !== null) ? ` · last ${ago === 0 ? 'today' : ago === 1 ? 'yesterday' : ago + ' days ago'}` : ''}</div>
           </div>
           <button class="hm-jump" data-broad="${REGION_BROAD[name] || ''}" style="flex-shrink:0; background:rgba(255,107,26,0.12); border:1px solid rgba(255,107,26,0.3); color:var(--flame); border-radius:9px; padding:7px 11px; font-size:11.5px;">Exercises</button>
         </div>`;
@@ -14516,6 +14518,7 @@ async function tallyFullPlan(){
   const exercises = allExercises.filter(ex => ex.weekday !== null && ex.weekday !== undefined);
 
   const tally = {};
+  const planFine = [];
   BALANCE_MUSCLES.forEach(m => tally[m] = 0);
   // Alt-group siblings are interchangeable options for one slot, not separate
   // planned volume - counting all of them would make a muscle look far more
@@ -14530,7 +14533,19 @@ async function tallyFullPlan(){
     const m = matchExercise(ex.name, db);
     const muscle = m && m.primaryMuscles && m.primaryMuscles[0];
     if (muscle && tally.hasOwnProperty(muscle)) tally[muscle] += 1;
+    // Fine-grained too, for the heat map. The bars need broad totals, but a
+    // map that draws front and rear delts separately is useless fed only
+    // "shoulders" - it would light both identically and hide exactly the
+    // imbalance it exists to reveal. Carried alongside rather than instead,
+    // so nothing that reads the broad tally changes.
+    if (muscle){
+      const fine = fineMuscleCategory(muscle, ex.name);
+      planFine.push({ _fine: fine, _muscle: muscle, num_sets: 1 });
+    }
   });
+  // Attached as a non-enumerable property so BALANCE_MUSCLES-shaped consumers
+  // iterating the tally never trip over it.
+  Object.defineProperty(tally, '_fineSets', { value: planFine, enumerable: false });
   return tally;
 }
 
@@ -14855,7 +14870,13 @@ async function renderBalance(mode, view){
   // asks what your week even includes - and a muscle that's hot on the plan
   // while cold on logged is the single most useful thing this screen can
   // surface, which only works if both draw the same figure.
-  const heatmapSets = (weeks && weeks.length) ? weeks[weeks.length-1].sets : [];
+  // Plan mode has no logged sets at all - extended data is deliberately not
+  // fetched for it - so reading `weeks` there produced an empty map showing
+  // "0 sets across your full plan". The plan's own tally is the correct
+  // source, carrying one entry per planned slot.
+  const heatmapSets = mode === 'plan'
+    ? ((tally && tally._fineSets) || [])
+    : ((weeks && weeks.length) ? weeks[weeks.length-1].sets : []);
   const heatmapHtml = (view === 'muscle') ? buildMuscleHeatmapHtml(heatmapSets, mode) : '';
   const recoveryClockHtml = recoveryClock ? `
     <div class="section-label">Recovery Clock</div>
@@ -15198,7 +15219,7 @@ async function renderBalance(mode, view){
   });
   state.balanceMode = mode;
   state.balanceView = view;
-  if (heatmapHtml) wireHeatmapInteractions(heatmapSets);
+  if (heatmapHtml) wireHeatmapInteractions(heatmapSets, mode);
   document.querySelectorAll('.muscle-jump').forEach(btn => {
     btn.onclick = (e) => {
       e.stopPropagation();
