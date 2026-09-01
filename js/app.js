@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.256';
+const APP_VERSION = 'Beta 5.257';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -10460,30 +10460,50 @@ function openTimer(){
     startPauseBtn.textContent = _timerState.running ? 'Pause' : (r<=0 ? 'Start' : (r<_timerState.total ? 'Resume' : 'Start'));
   };
 
-  const tick = () => {
-    _timerState.interval = setInterval(() => {
-      _timerState.remaining--;
-      paint();
-      if (_timerState.remaining <= 0){
-        clearInterval(_timerState.interval); _timerState.interval = null;
-        _timerState.running = false;
-        playTimerSound();
-        paint();
-      }
-    }, 1000);
+  // Wall-clock, not tick-counting. The old version decremented a counter once
+  // per setInterval fire, which browsers throttle hard or suspend outright
+  // when the phone locks or the app backgrounds - so a 90 second rest with
+  // the screen off came back still showing a minute left. Between sets that's
+  // exactly when the screen IS off. Storing an absolute end time means the
+  // remaining value is derived from real elapsed time and is correct however
+  // many ticks were missed.
+  const syncFromClock = () => {
+    if (!_timerState.running || !_timerState.endAt) return;
+    _timerState.remaining = Math.max(0, Math.ceil((_timerState.endAt - Date.now()) / 1000));
+    if (_timerState.remaining <= 0){
+      if (_timerState.interval){ clearInterval(_timerState.interval); _timerState.interval = null; }
+      _timerState.running = false;
+      _timerState.endAt = null;
+      // Only sound if we're actually present to hear it land, rather than
+      // firing on return from a lock for something that finished minutes ago.
+      if (!document.hidden) playTimerSound();
+    }
   };
+  const tick = () => {
+    _timerState.endAt = Date.now() + _timerState.remaining * 1000;
+    _timerState.interval = setInterval(() => { syncFromClock(); paint(); }, 250);
+  };
+  // Coming back to the app recomputes immediately rather than waiting for the
+  // next tick, so the display is never briefly showing a stale value.
+  const onVisible = () => { if (!document.hidden){ syncFromClock(); paint(); } };
+  document.addEventListener('visibilitychange', onVisible);
+  overlay.addEventListener('remove', () => document.removeEventListener('visibilitychange', onVisible));
 
   const setTime = (sec) => {
     if (_timerState.interval){ clearInterval(_timerState.interval); _timerState.interval = null; }
     _timerState.total = sec; _timerState.remaining = sec; _timerState.running = false;
+    _timerState.endAt = null;
     setTimerDefault(sec);
     paint();
   };
 
   startPauseBtn.onclick = () => {
     if (_timerState.running){
+      // Pausing must freeze the remaining value at what the clock actually
+      // says right now, not whatever the last tick happened to leave behind.
+      syncFromClock();
       clearInterval(_timerState.interval); _timerState.interval = null;
-      _timerState.running = false; paint();
+      _timerState.running = false; _timerState.endAt = null; paint();
     } else {
       if (_timerState.remaining <= 0){ _timerState.remaining = _timerState.total; }
       if (_timerState.remaining <= 0) return;
@@ -14872,6 +14892,68 @@ async function performDaySwap(dayA, dayB){
   }
 }
 
+// An honest read on what a trip actually cost, shown when it ends. The point
+// is not congratulation - it's telling someone which lifts to walk back up
+// carefully, and giving them permission to not read a drop in pull volume as
+// failure when it's the arithmetic outcome of two weeks without a bar.
+async function showTripDebrief(trip){
+  const userData = { user: await getCurrentUser() };
+  if (!userData.user) return;
+  const start = trip.startDate || todayStr();
+  const days = Math.max(1, Math.round((new Date(todayStr()+'T00:00:00') - new Date(start+'T00:00:00')) / 86400000));
+  // Compare the trip window against an equal-length window immediately
+  // before it, so the two are the same size and the comparison means
+  // something rather than being a fixed-window artefact.
+  const priorStart = addDaysToDate(start, -days);
+  const r = await withTimeout(
+    supabaseClient.from('sets').select('logged_at, weight, weight_unit, reps, num_sets')
+      .eq('user_id', userData.user.id).gte('logged_at', priorStart), 15000);
+  if (r.__timeout || r.error || !r.data) return;
+  const volOf = (rows) => rows.reduce((sum, s) => {
+    const w = Number(s.weight);
+    if (!isFinite(w) || w <= 0) return sum;
+    const kg = s.weight_unit === 'lb' ? w * 0.453592 : w;
+    return sum + kg * (Number(s.reps) || 1) * (Number(s.num_sets) || 1);
+  }, 0);
+  const during = r.data.filter(s => s.logged_at >= start);
+  const before = r.data.filter(s => s.logged_at < start);
+  const sessionDays = new Set(during.map(s => s.logged_at)).size;
+  const vDuring = volOf(during), vBefore = volOf(before);
+  const pct = vBefore > 0 ? Math.round((vDuring / vBefore) * 100) : null;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="overlay-scroll" style="padding-top:calc(40px + env(safe-area-inset-top,0px));">
+      <div style="padding:0 18px;">
+        <div class="session-done-hero">WELCOME BACK</div>
+        <div class="small" style="color:var(--slate); margin-top:4px;">${days} day${days===1?'':'s'} away · ${sessionDays} session${sessionDays===1?'':'s'} logged</div>
+        <div style="display:flex; gap:9px; margin-top:18px;">
+          <div class="session-done-stat" style="animation-delay:.15s;"><div class="n" style="color:var(--flame);">${sessionDays}</div><div class="l">sessions</div></div>
+          <div class="session-done-stat" style="animation-delay:.25s;"><div class="n" style="color:var(--good);">${Math.round(vDuring).toLocaleString()}</div><div class="l">kg moved</div></div>
+          ${pct !== null ? `<div class="session-done-stat" style="animation-delay:.35s;"><div class="n" style="color:var(--brass);">${pct}%</div><div class="l">of usual</div></div>` : ''}
+        </div>
+        <div style="margin-top:12px; background:var(--panel); border-radius:13px; padding:14px;">
+          <div class="small" style="color:var(--chalk); line-height:1.65;">
+            ${sessionDays === 0
+              ? `Nothing logged while you were away. That's genuinely fine - a real break is a real break, and your plan is exactly where you left it.`
+              : (pct !== null && pct >= 80
+                  ? `You held ${pct}% of your usual volume with packed kit. That's maintenance, which is the whole goal on a trip - not a shortfall.`
+                  : `Volume was lower than at home, which is the expected arithmetic of training without your machines - not a failure.`)}
+          </div>
+        </div>
+        <div style="margin-top:9px; background:var(--panel); border-radius:13px; padding:14px;">
+          <div class="small" style="color:var(--chalk); line-height:1.65;">
+            <b>Easing back in.</b> Open your first session back at roughly <b style="color:var(--flame);">90% of your last pre-trip weight</b> rather than straight to a PR attempt. The movement pattern is fresh; the loading isn't.
+          </div>
+        </div>
+        <button class="btn-primary" id="tripDebriefClose" style="width:100%; margin:20px 0 24px 0;">Back to training</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#tripDebriefClose').onclick = () => overlay.remove();
+}
+
 async function openTripModeScreen(){
   const trip = getTripMode();
   const locs = await loadLocations();
@@ -14916,11 +14998,13 @@ async function openTripModeScreen(){
   document.body.appendChild(overlay);
   overlay.querySelector('#closeTrip').onclick = () => overlay.remove();
   const endBtn = overlay.querySelector('#endTripBtn');
-  if (endBtn) endBtn.onclick = () => {
+  if (endBtn) endBtn.onclick = async () => {
+    const finished = getTripMode();
     setTripMode(null);
     overlay.remove();
     renderMe();
     if (state.currentTab === 'track') renderTrack();
+    if (finished) showTripDebrief(finished);
   };
   overlay.querySelectorAll('#tripLocRow .chip[data-loc]').forEach(c => {
     c.onclick = () => {
