@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.257';
+const APP_VERSION = 'Beta 5.258';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -2302,6 +2302,7 @@ function exerciseRow(ex){
       <div class="ex-name">${ex.name}${splitTag}${mechTag}</div>
       ${anchorTag}
       ${subtitle}
+      ${ex.substituteFor ? `<div style="font-size:10.5px; color:var(--brass); margin-top:8px; display:flex; align-items:flex-start; gap:5px;"><span>↔</span><span>Standing in for ${ex.substituteFor}, which isn't available here</span></div>` : ''}
       ${stagnantNote}
       ${bandReadyNote}
     </div>
@@ -3715,6 +3716,11 @@ function openEditLocationEquipmentScreen(locationId, locationName, currentTags, 
     <div class="form-header"><button id="closeEditEnvEquip">✕</button><h1>${locationName}</h1><div style="width:18px;"></div></div>
     <div class="overlay-scroll">
       <div class="small" style="padding:8px 18px 10px 18px; color:var(--slate);">Select everything actually available at this location. Leave everything unselected to skip filtering here entirely.</div>
+      <div class="small" style="padding:0 18px 6px 18px; color:var(--slate); font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:1px; text-transform:uppercase;">Notes</div>
+      <div class="field-card" style="margin-bottom:6px;">
+        <input class="field-input" id="locNotes" type="text" style="font-size:14px;" placeholder="e.g. 2nd floor, no rope attachment">
+      </div>
+      <div class="small" style="padding:0 18px 16px 18px; color:var(--slate); line-height:1.5;">Anything the equipment tags don't capture - which floor, what's actually broken, whether the cable stack has the attachment you need.</div>
       <div class="small" style="padding:0 18px 14px 18px; color:var(--slate); font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:1px; text-transform:uppercase;">Standard Equipment</div>
       <div id="envEquipChips" style="display:flex; flex-wrap:wrap; gap:8px; padding:0 18px;">
         ${EQUIPMENT_CATEGORIES.map(c => `<div class="chip env-equip-chip ${selected.has(c.key)?'active':''}" data-key="${c.key}">${c.label}</div>`).join('')}
@@ -3818,6 +3824,14 @@ function openEditLocationEquipmentScreen(locationId, locationName, currentTags, 
   (async () => {
     const userData = { user: await getCurrentUser() };
     if (!userData.user) return;
+    // Notes load independently of the exercise list - a failure to read one
+    // shouldn't blank the other, and the column may not exist yet if the
+    // migration hasn't been run.
+    withTimeout(supabaseClient.from('locations').select('notes').eq('id', locationId).maybeSingle(), 10000)
+      .then(r => {
+        const el = overlay.querySelector('#locNotes');
+        if (el && r && !r.__timeout && !r.error && r.data && r.data.notes) el.value = r.data.notes;
+      }).catch(() => {});
     myExercises = dedupeByMasterId(await fetchAllExercisesCompat(userData.user.id));
     renderMachines();
   })();
@@ -3825,7 +3839,17 @@ function openEditLocationEquipmentScreen(locationId, locationName, currentTags, 
   overlay.querySelector('#saveEnvEquipBtn').onclick = async () => {
     const pendingIds = Object.keys(pending);
     const doSave = async () => {
-      const { error } = await supabaseClient.from('locations').update({ equipment_tags: [...selected] }).eq('id', locationId);
+      const notesEl = overlay.querySelector('#locNotes');
+      const updatePayload = { equipment_tags: [...selected] };
+      if (notesEl) updatePayload.notes = notesEl.value.trim() || null;
+      let { error } = await supabaseClient.from('locations').update(updatePayload).eq('id', locationId);
+      // If the notes column doesn't exist yet, don't let that block saving
+      // the equipment tags - retry without it rather than failing the whole
+      // save for a field the migration may not have added.
+      if (error && /notes/i.test(error.message || '')){
+        const retry = await supabaseClient.from('locations').update({ equipment_tags: [...selected] }).eq('id', locationId);
+        error = retry.error;
+      }
       if (error){
         alert(`Could not save: ${error.message}\n\nIf this mentions a missing column, the equipment_tags migration needs to be run first.`);
         return false;
@@ -4921,6 +4945,27 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   const visibleExercises = workingExercises.filter(ex =>
     ex.locationAvailable && (!hideCompleted || !(ex.loggedToday || ex.completeVia))
   );
+  // SUBSTITUTE INTELLIGENCE. Alt groups already model "these exercises are
+  // interchangeable". Read backwards - given the machine version is filtered
+  // out at this location, which alt IS available - that same relationship
+  // answers "what am I standing in for", so a trip doesn't read as a hole in
+  // the log. Purely presentational: it annotates rows that are already
+  // showing rather than changing what's visible or how anything is stored.
+  const substituteFor = {};
+  if (currentLocationId){
+    const unavailableByGroup = {};
+    workingExercises.forEach(ex => {
+      if (!ex.locationAvailable && ex.alt_group_id){
+        (unavailableByGroup[ex.alt_group_id] = unavailableByGroup[ex.alt_group_id] || []).push(ex.name);
+      }
+    });
+    visibleExercises.forEach(ex => {
+      const missing = ex.alt_group_id ? unavailableByGroup[ex.alt_group_id] : null;
+      if (missing && missing.length) substituteFor[ex.id] = missing[0];
+    });
+    visibleExercises.forEach(ex => { ex.substituteFor = substituteFor[ex.id] || null; });
+  }
+
   const { grouped, orderedKeys } = await groupExercisesByChoice(visibleExercises, groupBy);
 
   let suggestions = [];
