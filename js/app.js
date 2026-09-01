@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.274';
+const APP_VERSION = 'Beta 5.275';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -2640,6 +2640,10 @@ function openPlanSubPage(){
         <div><div style="color:#E8492A;">Clear a Day</div><div class="small" style="color:var(--slate); margin-top:2px;">Remove every exercise from one day - history is kept</div></div>
         <div class="chev" style="margin-top:2px;">›</div>
       </div>
+      <div class="me-item" id="subDeleteTodayLogBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+        <div><div style="color:#E8492A;">Delete Today's Logged Sets</div><div class="small" style="color:var(--slate); margin-top:2px;">Erases today's sets from your history permanently - for things logged by mistake</div></div>
+        <div class="chev" style="margin-top:2px;">›</div>
+      </div>
       <div class="me-item" id="subMergeDupesBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
         <div><div style="color:#E8492A;">Merge Duplicates</div><div class="small" style="color:var(--slate); margin-top:2px;">Fix exercises that ended up as separate records with the same name</div></div>
         <div class="chev" style="margin-top:2px;">›</div>
@@ -2665,6 +2669,7 @@ function openPlanSubPage(){
   overlay.querySelector('#subRebuildToolsBtn').onclick = openRebuildToolsSubPage;
   overlay.querySelector('#subWipeAltsBtn').onclick = openWipeAltGroupsScreen;
   overlay.querySelector('#subClearDayBtn').onclick = openClearDayScreen;
+  overlay.querySelector('#subDeleteTodayLogBtn').onclick = () => openResetDayLogging(todayStr(), 'today');
   overlay.querySelector('#subMergeDupesBtn').onclick = openMergeDuplicateExercisesScreen;
   overlay.querySelector('#subSimulateDayChangeBtn').onclick = simulateDayChange;
   const subRevertBtn = overlay.querySelector('#subRevertReorgBtn');
@@ -3469,7 +3474,9 @@ async function openResetDayLogging(dateStr, label){
   const count = (r.data || []).length;
   if (!count){ alert(`Nothing is logged on ${label}.`); return; }
   showConfirmDialog(
-    `Deletes ${count} set${count===1?'':'s'} logged on ${label}. The exercises stay on your plan - only the logged sets go, and this can't be undone.`,
+    `PERMANENTLY DELETES ${count} logged set${count===1?'':'s'} from ${label}.\n\n` +
+    `This is real training history, not a display setting. That volume, any PRs set that day, and its contribution to your streak and heat map all go with it. There is no undo and no backup.\n\n` +
+    `Only do this if the sets were genuinely logged by mistake.`,
     async () => {
       const del = await withBulkRetry(() => withTimeout(
         supabaseClient.from('sets').delete().eq('user_id', userData.user.id).eq('logged_at', dateStr), 20000));
@@ -5200,7 +5207,22 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   // Thursday's plan on a Wednesday is normal, and sets are recorded against
   // the real date either way - so the only thing that matters is whether
   // there's anything left to do on the plan you're looking at.
-  const sessionStartHtml = remaining.length >= 2
+  // A finished day shows a way back in rather than nothing. Wanting to add
+  // more after completing the plan is normal - and it should never require
+  // deleting real history to make the app usable again, which is what a
+  // "reset the day" button quietly encourages.
+  const dayAlreadyDone = remaining.length === 0 && visibleExercises.length > 0;
+  const sessionStartHtml = dayAlreadyDone
+    ? `<div style="padding:10px 18px 0 18px;">
+        <div style="background:var(--panel); border:1px solid rgba(143,191,122,0.3); border-radius:13px; padding:13px 14px; display:flex; justify-content:space-between; align-items:center; gap:10px;">
+          <div style="min-width:0;">
+            <div style="font-family:'Oswald',sans-serif; font-size:13.5px; color:var(--good);">Everything logged</div>
+            <div class="small" style="color:var(--slate); margin-top:2px;">Add more if you're not done.</div>
+          </div>
+          <button class="btn-primary" id="addMoreTodayBtn" style="flex-shrink:0; width:auto; padding:9px 14px; font-size:12.5px;">Add exercise</button>
+        </div>
+      </div>`
+    : remaining.length >= 2
     ? `<div style="padding:10px 18px 0 18px;">
         <button class="btn-primary" id="startSessionBtn" style="width:100%; display:flex; align-items:center; justify-content:center; gap:8px;">
           <span style="font-family:'Bebas Neue',sans-serif; font-size:16px; letter-spacing:0.8px;">${resumable ? 'RESUME SESSION' : 'START SESSION'}</span>
@@ -5258,9 +5280,6 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
         <div style="padding:8px 18px 0 18px; display:flex; gap:8px; flex-wrap:wrap;">
           ${isAnyDay(state.selectedDay) && workingExercises.length > 0 ? `<button id="toolbarClearAnyBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:var(--panel); border:1px solid var(--line); color:var(--slate);">
             <span style="font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px;">CLEAR</span>
-          </button>` : ''}
-          ${headerStats.setsToday > 0 ? `<button id="toolbarResetDayBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:var(--panel); border:1px solid var(--line); color:var(--slate);">
-            <span style="font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px;">RESET DAY</span>
           </button>` : ''}
           <button id="toolbarTimerBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:rgba(255,107,26,0.10); border:1px solid rgba(255,107,26,0.45); color:var(--flame);">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg>
@@ -5428,16 +5447,8 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   if (retryBtn) retryBtn.onclick = () => { state.exercises = []; renderTrack(); };
   const clearLocBtn = document.getElementById('clearLocationBtn');
   if (clearLocBtn) clearLocBtn.onclick = () => openLocationPicker(allLocations, currentLocationId);
-  const resetDayBtn = document.getElementById('toolbarResetDayBtn');
-  if (resetDayBtn) resetDayBtn.onclick = () => {
-    // Targets the date the sets were actually RECORDED against, which for a
-    // future-day plan is today rather than that weekday's date - otherwise
-    // it would try to clear a day nothing was ever written to.
-    const info = targetDateInfo();
-    const dateStr = info.doneDateStr;
-    const label = dateStr === todayStr() ? 'today' : formatLoggedDate(dateStr);
-    openResetDayLogging(dateStr, label);
-  };
+  const addMoreBtn = document.getElementById('addMoreTodayBtn');
+  if (addMoreBtn) addMoreBtn.onclick = () => openPicker();
   const startSessBtn = document.getElementById('startSessionBtn');
   if (startSessBtn) startSessBtn.onclick = () => {
     if (readSession()) renderSessionScreen();
