@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.258';
+const APP_VERSION = 'Beta 5.259';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -2175,8 +2175,22 @@ async function quickSaveSet(exerciseId, exerciseName, best){
   }
   insertPayload[idField] = exerciseId;
   invalidateTrackSnapshots(); // logged set changes done-flags and header stats
-    const { data, error } = await supabaseClient.from('sets').insert(insertPayload).select();
-  if (error || !data || !data.length){ alert(error ? error.message : 'Could not save that set.'); return false; }
+  // Same offline protection as the log form. This is the most-used logging
+  // path in the app and had none of it - a quick-saved set with no signal
+  // was lost exactly the same way, just more often.
+  let data = null, error = null;
+  try {
+    const r = await withTimeout(supabaseClient.from('sets').insert(insertPayload).select(), 12000);
+    if (r.__timeout) error = { message: 'timed out' };
+    else { data = r.data; error = r.error; }
+  } catch(e){
+    error = { message: e.message || 'network' };
+  }
+  if (error || !data || !data.length){
+    queueSetLocally(insertPayload);
+    showQueuedSetToast();
+    return true; // genuinely saved, just not uploaded yet
+  }
   if (priorBest !== null && weight !== null && weight > priorBest + 0.01){
     celebratePR(exerciseName, weight, unit, priorBest);
   }
@@ -5065,8 +5079,9 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
         <div class="header">
           ${headerStats.targetDateIsToday ? `<div class="greeting-line">${buildGreeting(getDisplayName())}</div>` : ''}
           ${isTripActive() ? `<div style="font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--brass); letter-spacing:1px; text-transform:uppercase; margin-bottom:4px;">✈️ Trip Mode · Day ${tripDayCount()}</div>` : ''}
-          <div class="eyebrow">${dayLabelOf(state.selectedDay).toUpperCase()}</div>
-          <h1 id="dayTypeHeader" style="cursor:pointer;${dayTypeUnavailable ? ' color:#E8A33D;' : ''}">${effectiveDayTypeLabel}</h1>
+          <h1 id="dayTypeHeader" style="cursor:pointer;${dayTypeUnavailable ? ' color:#E8A33D;' : ''}">
+            <span style="color:var(--slate); font-weight:400;">${dayLabelOf(state.selectedDay)}</span>${effectiveDayTypeLabel ? ` <span style="color:var(--slate); font-weight:400;">—</span> ${effectiveDayTypeLabel}` : ''}
+          </h1>
           <div class="quote">"${q.t}" — ${q.a}</div>
         </div>
         <div style="display:flex; margin:14px 18px 0 18px; border-radius:14px; overflow:hidden;
@@ -5227,7 +5242,13 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
       el.textContent = 'Saving…';
       const best = (state.trackBestSetById || {})[el.dataset.id];
       const ok = await quickSaveSet(el.dataset.id, el.dataset.name, best);
-      if (ok) renderTrack();
+      if (ok){
+        // Float from the button itself, captured BEFORE the re-render
+        // removes it from the DOM and its position becomes unavailable.
+        if (best) celebrateLoggedSet(el, best.weight, best.weight_unit, best.weight_type, best.reps, best.num_sets);
+        renderTrack();
+        setTimeout(() => maybeShowSessionComplete(), 700);
+      }
       else { el.textContent = originalText; delete el.dataset.saving; }
     };
   });
@@ -6757,6 +6778,7 @@ async function openPicker(initialTab, jumpToMuscle){
               <div class="ex-name" style="font-size:13.5px;">${idea.name}</div>
               ${idea.usesDoorAnchor ? `<div style="font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--brass); margin-top:3px;">🚪 Door anchor — ${idea.anchorLevel}</div>` : ''}
               <div class="small" style="color:var(--slate); margin-top:5px; line-height:1.5;">${idea.hint}</div>
+              <div class="idea-img-slot" data-idea-name="${idea.name.replace(/"/g,'&quot;')}" style="margin-top:8px;"></div>
             </div>
             <button class="idea-add-btn" data-idx="${HOME_GYM_IDEAS.indexOf(idea)}" style="width:30px; height:30px; border-radius:9px; background:rgba(255,107,26,0.15); color:var(--flame); border:1px solid rgba(255,107,26,0.35); font-size:16px; flex-shrink:0;">+</button>
           </div>
@@ -6804,6 +6826,26 @@ async function openPicker(initialTab, jumpToMuscle){
     body.querySelectorAll('.idea-add-btn').forEach(btn => {
       btn.onclick = () => addIdeaExercise(HOME_GYM_IDEAS[parseInt(btn.dataset.idx, 10)]);
     });
+    // Form images from the same public database the exercise guide already
+    // uses. Populated after render so a slow or offline fetch never delays
+    // the list appearing. Many band-specific names have no database entry at
+    // all, so anything below the confidence bar simply shows nothing rather
+    // than a picture of a different exercise - a wrong demonstration is
+    // worse than none when the point is showing someone the movement.
+    (async () => {
+      let exdb = [];
+      try { exdb = await loadExerciseDB(); } catch(e){ return; }
+      if (!exdb || !exdb.length) return;
+      body.querySelectorAll('.idea-img-slot').forEach(slot => {
+        const scored = fuzzyMatchExerciseScored(slot.dataset.ideaName, exdb);
+        if (!scored || scored.score < 0.6) return;
+        const imgs = (scored.entry.images || []).slice(0, 2);
+        if (!imgs.length) return;
+        slot.innerHTML = `<div style="display:grid; grid-template-columns:${imgs.length > 1 ? '1fr 1fr' : '1fr'}; gap:5px;">` +
+          imgs.map(src => `<img src="${EXDB_IMG_BASE}${src}" alt="" loading="lazy" style="width:100%; border-radius:8px; background:#fff; display:block;">`).join('') +
+          `</div>`;
+      });
+    })();
   }
 
   async function addIdeaExercise(idea){
@@ -9565,14 +9607,48 @@ async function loadExerciseGuide(overlay, exerciseName){
 // silent, and tied to something real - the actual kg this set contributed -
 // rather than a generic confirmation animation.
 function floatVolumeGain(kg, x, y){
-  if (!kg || kg <= 0) return;
+  floatSetReward(kg && kg > 0 ? `+${Math.round(kg).toLocaleString()}kg` : null, x, y);
+}
+
+// Every logged set gets something floating up, not just ones with enough
+// numbers to compute volume from. A bodyweight set, a band set and a set
+// logged without reps are all still work done - showing nothing for them
+// made the reward feel arbitrary, appearing only when the maths happened to
+// line up. Volume when there is volume, an acknowledgement otherwise.
+const REWARD_WORDS = ['NICE', 'LOGGED', 'DONE', 'GOOD', 'YES', 'BANKED'];
+function floatSetReward(text, x, y){
   const el = document.createElement('div');
   el.className = 'volume-float';
-  el.textContent = `+${Math.round(kg).toLocaleString()}kg`;
+  el.textContent = text || (REWARD_WORDS[Math.floor(Math.random() * REWARD_WORDS.length)] + ' ✓');
   el.style.left = (x || window.innerWidth / 2) + 'px';
   el.style.top = (y || window.innerHeight * 0.55) + 'px';
   document.body.appendChild(el);
   setTimeout(() => el.remove(), 1500);
+}
+
+// Volume for one set, in kg, from whatever's available. Returns 0 when
+// there's nothing to compute rather than guessing.
+function setVolumeKg(weight, unit, weightType, reps, numSets){
+  const w = parseFloat(weight);
+  if (!isFinite(w) || w <= 0) return 0;
+  const kg = unit === 'lb' ? w * 0.453592 : w;
+  // Missing reps/sets default to 1 rather than voiding the whole
+  // calculation - a set logged as just "40kg" still moved 40kg.
+  const r = parseInt(reps, 10) || 1;
+  const n = parseInt(numSets, 10) || 1;
+  return kg * r * n * (weightType === 'per' ? 2 : 1);
+}
+
+// Fires the float from wherever the user actually tapped, so the reward
+// reads as coming from their action rather than appearing at random.
+function celebrateLoggedSet(el, weight, unit, weightType, reps, numSets){
+  const kg = setVolumeKg(weight, unit, weightType, reps, numSets);
+  let x = null, y = null;
+  if (el && el.getBoundingClientRect){
+    const r = el.getBoundingClientRect();
+    x = r.left + r.width / 2; y = r.top;
+  }
+  floatSetReward(kg > 0 ? `+${Math.round(kg).toLocaleString()}kg` : null, x, y);
 }
 
 // Fires when the last remaining exercise on a day gets logged. The app has
@@ -10337,14 +10413,7 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
     if (insertedId){
       // Volume added by this set, floated from where the button actually is
       // so it reads as coming from the tap rather than appearing at random.
-      const w = parseFloat(weightRaw) || 0;
-      const reps = parseInt(repsVal, 10) || 0;
-      const sets = parseInt(setsVal, 10) || 1;
-      if (w > 0 && reps > 0){
-        const kg = (unit === 'lb' ? w * 0.453592 : w) * reps * sets * (weightType === 'per' ? 2 : 1);
-        const btnRect = overlay.querySelector('#saveSetBtn').getBoundingClientRect();
-        floatVolumeGain(kg, btnRect.left + btnRect.width / 2, btnRect.top);
-      }
+      celebrateLoggedSet(overlay.querySelector('#saveSetBtn'), weightRaw, unit, weightType, repsVal, setsVal);
       overlay.remove();
       if (state.currentTab === 'track') renderTrack();
       // Checked after the re-render so it sees the freshly-updated done
