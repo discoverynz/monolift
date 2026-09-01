@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.263';
+const APP_VERSION = 'Beta 5.264';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -13682,6 +13682,12 @@ async function fetchExtendedWorkoutData(weeksBack){
     if (s._name){
       const m = matchExercise(s._name, db);
       s._muscle = m && m.primaryMuscles && m.primaryMuscles[0];
+      // The finer region, resolved once here alongside the broad muscle.
+      // The heat map draws front/side/rear delts and upper/mid/lower chest
+      // separately, and that split only means anything if the sets carry
+      // the same granularity - broad "shoulders" can't tell a week of
+      // pressing apart from a balanced one.
+      if (s._muscle) s._fine = fineMuscleCategory(s._muscle, s._name);
     }
   });
   return { sets, exercises, db };
@@ -14007,69 +14013,171 @@ const MUSCLE_IDEAL_GAP_DAYS = {
   traps: 4.7, 'lower back': 4.7
 };
 
-// MUSCLE HEAT MAP. Two simplified body outlines - front and back - with each
-// region tinted by how much work it has taken this week. A ranked list makes
-// you read and compare numbers; a body makes a gap obvious at a glance,
-// which is the entire point of a balance screen.
-const HEATMAP_REGIONS = {
-  front: [
-    { m:'shoulders',  d:'M52,62 q-13,2 -16,15 q9,5 17,2 z M108,62 q13,2 16,15 q-9,5 -17,2 z' },
-    { m:'chest',      d:'M62,64 q18,-6 36,0 l3,22 q-21,7 -42,0 z' },
-    { m:'biceps',     d:'M36,80 q-6,16 -3,30 q9,2 13,-4 q1,-15 -2,-27 z M124,80 q6,16 3,30 q-9,2 -13,-4 q-1,-15 2,-27 z' },
-    { m:'forearms',   d:'M31,113 q-4,17 -1,30 q8,2 12,-3 q1,-15 -1,-28 z M129,113 q4,17 1,30 q-8,2 -12,-3 q-1,-15 1,-28 z' },
-    { m:'abdominals', d:'M64,88 q16,5 32,0 l-3,40 q-13,4 -26,0 z' },
-    { m:'quadriceps', d:'M63,132 q13,4 26,0 l-3,52 q-10,3 -20,0 z' },
-    { m:'calves',     d:'M68,188 q10,3 18,0 l-2,34 q-7,2 -14,0 z' },
-  ],
-  back: [
-    { m:'traps',      d:'M60,58 q20,-6 40,0 l-6,20 q-14,4 -28,0 z' },
-    { m:'shoulders',  d:'M52,62 q-13,2 -16,15 q9,5 17,2 z M108,62 q13,2 16,15 q-9,5 -17,2 z' },
-    { m:'lats',       d:'M58,80 q22,6 44,0 l-5,32 q-17,5 -34,0 z' },
-    { m:'triceps',    d:'M36,80 q-6,16 -3,30 q9,2 13,-4 q1,-15 -2,-27 z M124,80 q6,16 3,30 q-9,2 -13,-4 q-1,-15 2,-27 z' },
-    { m:'forearms',   d:'M31,113 q-4,17 -1,30 q8,2 12,-3 q1,-15 -1,-28 z M129,113 q4,17 1,30 q-8,2 -12,-3 q-1,-15 1,-28 z' },
-    { m:'lower back', d:'M65,113 q15,4 30,0 l-3,18 q-12,3 -24,0 z' },
-    { m:'glutes',     d:'M62,132 q18,5 36,0 l-3,22 q-15,4 -30,0 z' },
-    { m:'hamstrings', d:'M64,155 q16,4 32,0 l-4,32 q-12,3 -24,0 z' },
-    { m:'calves',     d:'M68,188 q10,3 18,0 l-2,34 q-7,2 -14,0 z' },
-  ]
+// MUSCLE HEAT MAP.
+// Regions are drawn only where the classifier can actually tell them apart -
+// front/side/rear delts, upper/mid/lower chest, brachialis from biceps. Quads
+// stay whole because nothing in the app distinguishes vastus lateralis from
+// rectus femoris, and drawing a split the data can't fill would imply a
+// precision that doesn't exist.
+const HEATMAP_FRONT = [
+ ['Front Delts',  "M47,73 C39,75 34,82 33,92 C38,96 45,95 50,91 C51,83 51,77 52,73 Z M113,73 C121,75 126,82 127,92 C122,96 115,95 110,91 C109,83 109,77 108,73 Z"],
+ ['Side Delts',   "M33,92 C31,99 31,105 32,110 C37,113 44,111 47,107 C48,101 49,96 50,91 Z M127,92 C129,99 129,105 128,110 C123,113 116,111 113,107 C112,101 111,96 110,91 Z"],
+ ['Upper Chest',  "M62,71 C72,67 88,67 98,71 L99,81 C89,78 71,78 61,81 Z"],
+ ['Mid Chest',    "M61,82 C71,79 89,79 99,82 L100,92 C90,90 70,90 60,92 Z"],
+ ['Lower Chest',  "M60,93 C70,91 90,91 100,93 C98,101 91,105 80,105 C69,105 62,101 60,93 Z"],
+ ['Biceps',       "M33,112 C31,120 31,128 32,135 C37,138 44,136 47,131 C47,124 48,117 49,112 Z M127,112 C129,120 129,128 128,135 C123,138 116,136 113,131 C113,124 112,117 111,112 Z"],
+ ['Brachialis',   "M32,136 C31,141 31,145 31,148 C36,151 42,149 45,145 C45,142 46,139 46,136 Z M128,136 C129,141 129,145 129,148 C124,151 118,149 115,145 C115,142 114,139 114,136 Z"],
+ ['Forearms',     "M31,150 C28,160 27,170 28,180 C33,183 40,181 43,176 C44,167 45,158 45,149 Z M129,150 C132,160 133,170 132,180 C127,183 120,181 117,176 C116,167 115,158 115,149 Z"],
+ ['Abdominals',   "M64,107 C72,111 88,111 96,107 L95,126 C88,129 72,129 65,126 Z M65,128 C72,131 88,131 95,128 L93,150 C87,153 73,153 67,150 Z"],
+ ['Obliques',     "M60,109 C62,108 63,109 63,110 L64,148 C62,146 59,140 59,130 Z M100,109 C98,108 97,109 97,110 L96,148 C98,146 101,140 101,130 Z"],
+ ['Quadriceps',   "M63,154 C71,158 78,158 78,158 L76,210 C71,213 64,213 60,210 Z M97,154 C89,158 82,158 82,158 L84,210 C89,213 96,213 100,210 Z"],
+ ['Calves',       "M64,216 C70,219 76,219 78,217 L76,256 C71,259 66,259 62,256 Z M96,216 C90,219 84,219 82,217 L84,256 C89,259 94,259 98,256 Z"],
+];
+const HEATMAP_BACK = [
+ ['Traps',        "M59,66 C69,61 91,61 101,66 L96,88 C88,92 72,92 64,88 Z"],
+ ['Rear Delts',   "M47,73 C39,75 34,82 33,92 C38,96 45,95 50,91 C51,83 51,77 52,73 Z M113,73 C121,75 126,82 127,92 C122,96 115,95 110,91 C109,83 109,77 108,73 Z"],
+ ['Upper Back',   "M64,89 C72,93 88,93 96,89 L94,108 C87,112 73,112 66,108 Z"],
+ ['Lats',         "M61,100 C67,104 72,106 72,106 L74,140 C68,138 62,130 60,118 Z M99,100 C93,104 88,106 88,106 L86,140 C92,138 98,130 100,118 Z"],
+ ['Triceps',      "M33,112 C31,122 31,132 32,140 C37,143 44,141 47,136 C47,128 48,119 49,112 Z M127,112 C129,122 129,132 128,140 C123,143 116,141 113,136 C113,128 112,119 111,112 Z"],
+ ['Forearms',     "M31,150 C28,160 27,170 28,180 C33,183 40,181 43,176 C44,167 45,158 45,149 Z M129,150 C132,160 133,170 132,180 C127,183 120,181 117,176 C116,167 115,158 115,149 Z"],
+ ['Lower Back',   "M67,132 C74,136 86,136 93,132 L91,154 C85,157 75,157 69,154 Z"],
+ ['Glutes',       "M63,156 C72,161 88,161 97,156 L95,183 C87,188 73,188 65,183 Z"],
+ ['Hamstrings',   "M64,185 C71,189 78,189 78,189 L76,224 C71,227 65,227 61,224 Z M96,185 C89,189 82,189 82,189 L84,224 C89,227 95,227 99,224 Z"],
+ ['Calves',       "M64,226 C70,229 76,229 78,227 L76,260 C71,263 66,263 62,260 Z M96,226 C90,229 84,229 82,227 L84,260 C89,263 94,263 98,260 Z"],
+];
+// Which broad muscle a drawn region falls back to, so a set the classifier
+// only resolved coarsely ("shoulders") still lights something rather than
+// silently vanishing from the map.
+const REGION_BROAD = {
+  'Front Delts':'shoulders','Side Delts':'shoulders','Rear Delts':'shoulders',
+  'Upper Chest':'chest','Mid Chest':'chest','Lower Chest':'chest',
+  'Biceps':'biceps','Brachialis':'biceps','Triceps':'triceps','Forearms':'forearms',
+  'Abdominals':'abdominals','Obliques':'abdominals','Quadriceps':'quadriceps',
+  'Calves':'calves','Traps':'traps','Upper Back':'lats','Lats':'lats',
+  'Lower Back':'lower back','Glutes':'glutes','Hamstrings':'hamstrings'
 };
 
-function buildMuscleHeatmapHtml(sets){
+// Least to most: dull yellow, gold, amber, orange, red - with the glow
+// growing alongside. Two channels carrying the same ranking, so it reads
+// from hue or from brightness alone, and survives colour blindness.
+function heatStep(t){
+  if (t <= 0) return null;
+  if (t < 0.22) return { f:'#7A6A1E', s:'#A08C28', g:0 };
+  if (t < 0.45) return { f:'#C9A227', s:'#E8C24A', g:9 };
+  if (t < 0.68) return { f:'#E8A33D', s:'#FFC46B', g:20 };
+  if (t < 0.86) return { f:'#FF6B1A', s:'#FF9040', g:34 };
+  return { f:'#E8261A', s:'#FF5C4A', g:56 };
+}
+
+function heatmapCounts(sets){
   const counts = {};
-  (sets || []).forEach(s => { if (s._muscle) counts[s._muscle] = (counts[s._muscle] || 0) + 1; });
-  const max = Math.max(1, ...Object.values(counts));
-  // Intensity is relative to the user's own hardest-hit muscle, not an
-  // absolute set count - what matters here is the balance between regions,
-  // and an absolute scale would read as all-cold for a light week and
-  // all-hot for a heavy one regardless of how even it actually was.
-  const fillFor = (m) => {
-    const n = counts[m] || 0;
-    if (!n) return 'rgba(255,255,255,0.05)';
-    const t = n / max;
-    const alpha = 0.16 + t * 0.72;
-    return `rgba(255,107,26,${alpha.toFixed(2)})`;
-  };
-  const body = (side) => `
-    <svg viewBox="0 0 160 230" style="width:100%; height:auto;" aria-hidden="true">
-      <ellipse cx="80" cy="34" rx="16" ry="19" fill="rgba(255,255,255,0.05)"/>
-      <rect x="72" y="52" width="16" height="10" rx="4" fill="rgba(255,255,255,0.05)"/>
-      ${HEATMAP_REGIONS[side].map(r => `<path d="${r.d}" fill="${fillFor(r.m)}" stroke="rgba(255,255,255,0.07)" stroke-width="0.8"><title>${BALANCE_LABELS[r.m] || r.m}: ${counts[r.m] || 0} sets</title></path>`).join('')}
-    </svg>`;
-  const untrained = BALANCE_MUSCLES.filter(m => !counts[m]);
+  (sets || []).forEach(s => {
+    const n = Number(s.num_sets) || 1;
+    // Prefer the fine region; fall back to spreading a coarse match across
+    // the regions it covers so nothing is dropped.
+    if (s._fine && REGION_BROAD[s._fine] !== undefined){
+      counts[s._fine] = (counts[s._fine] || 0) + n;
+    } else if (s._muscle){
+      const regions = Object.keys(REGION_BROAD).filter(r => REGION_BROAD[r] === s._muscle);
+      if (regions.length) counts[regions[0]] = (counts[regions[0]] || 0) + n;
+    }
+  });
+  return counts;
+}
+
+function heatmapBodySvg(regions, counts, mx, pid){
+  const blurs = [9,20,34,56].map(g =>
+    `<filter id="${pid}-b${g}" x="-70%" y="-70%" width="240%" height="240%"><feGaussianBlur stdDeviation="${g/10}" result="x"/><feMerge><feMergeNode in="x"/><feMergeNode in="x"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`).join('');
+  const paths = regions.map(([name, d]) => {
+    const n = counts[name] || 0;
+    const h = heatStep(mx > 0 ? n / mx : 0);
+    const common = `class="hm-region" data-region="${name}" data-sets="${n}" style="cursor:pointer;"`;
+    if (!h) return `<path d="${d}" fill="#191B1E" stroke="#33363B" stroke-width="0.7" ${common}></path>`;
+    const fl = h.g ? ` filter="url(#${pid}-b${h.g})"` : '';
+    return `<path d="${d}" fill="${h.f}" stroke="${h.s}" stroke-width="0.9"${fl} ${common}></path>`;
+  }).join('\n  ');
+  return `<svg viewBox="0 0 160 272" style="width:100%; height:auto; display:block;">
+  <defs>${blurs}</defs>
+  <ellipse cx="80" cy="36" rx="16" ry="19.5" fill="#191B1E" stroke="#33363B" stroke-width="0.7"/>
+  <path d="M72,55 L88,55 L86,69 L74,69 Z" fill="#191B1E" stroke="#33363B" stroke-width="0.7"/>
+  ${paths}
+</svg>`;
+}
+
+function buildMuscleHeatmapHtml(sets, mode){
+  const counts = heatmapCounts(sets);
+  const mx = Math.max(1, ...Object.values(counts));
+  const side = state.heatmapSide === 'back' ? 'back' : 'front';
+  const regions = side === 'back' ? HEATMAP_BACK : HEATMAP_FRONT;
+  const total = Object.values(counts).reduce((a,b) => a+b, 0);
+  const allRegions = [...new Set([...HEATMAP_FRONT, ...HEATMAP_BACK].map(r => r[0]))];
+  const gaps = allRegions.filter(r => !counts[r]);
+  const top = Object.keys(counts).sort((a,b) => counts[b] - counts[a])[0];
+  let reading;
+  if (!top) reading = mode === 'plan' ? 'Nothing in your plan yet.' : 'Nothing logged yet this week.';
+  else {
+    const verb = mode === 'plan' ? 'takes the most room in your plan' : 'took the most work';
+    reading = `<b>${top}</b> ${verb}, ${counts[top]} set${counts[top]===1?'':'s'}.` +
+      (gaps.length === 0 ? ' Nothing untouched.'
+        : gaps.length <= 3 ? ` Nothing for ${gaps.join(', ')}.`
+        : ` ${gaps.length} regions untouched, including ${gaps[0]} and ${gaps[1]}.`);
+  }
   return `
-    <div class="section-label">Heat Map — This Week</div>
-    <div style="margin:0 18px 8px 18px; background:var(--panel); border-radius:14px; padding:16px 14px;">
-      <div style="display:flex; gap:14px; align-items:flex-start;">
-        <div style="flex:1;">${body('front')}<div style="text-align:center; font-family:'JetBrains Mono',monospace; font-size:9.5px; color:var(--slate); margin-top:4px;">FRONT</div></div>
-        <div style="flex:1;">${body('back')}<div style="text-align:center; font-family:'JetBrains Mono',monospace; font-size:9.5px; color:var(--slate); margin-top:4px;">BACK</div></div>
+    <div style="margin:0 18px 10px 18px; background:var(--panel); border-radius:16px; padding:16px 15px 18px 15px;">
+      <div style="display:flex; gap:16px; margin-bottom:2px;">
+        <button class="hm-side" data-side="front" style="background:none; border:none; padding:0 0 5px 0; font-size:14px; color:${side==='front'?'var(--chalk)':'var(--slate)'}; border-bottom:2px solid ${side==='front'?'var(--flame)':'transparent'};">Front</button>
+        <button class="hm-side" data-side="back" style="background:none; border:none; padding:0 0 5px 0; font-size:14px; color:${side==='back'?'var(--chalk)':'var(--slate)'}; border-bottom:2px solid ${side==='back'?'var(--flame)':'transparent'};">Back</button>
       </div>
-      <div style="display:flex; align-items:center; gap:8px; margin-top:12px; padding-top:12px; border-top:1px solid var(--line);">
-        <span style="font-size:10px; color:var(--slate);">Untouched</span>
-        <div style="flex:1; height:6px; border-radius:3px; background:linear-gradient(90deg, rgba(255,255,255,0.05), rgba(255,107,26,0.88));"></div>
-        <span style="font-size:10px; color:var(--slate);">Hammered</span>
+      <div style="display:flex; align-items:baseline; gap:8px; margin:14px 0 2px 0;">
+        <span style="font-family:'Bebas Neue',sans-serif; font-size:38px; line-height:0.9;">${total}</span>
+        <span class="small" style="color:var(--slate);">${mode === 'plan' ? 'sets across your full plan' : 'sets logged this week'}</span>
       </div>
-      ${untrained.length ? `<div class="small" style="color:var(--slate); margin-top:10px; line-height:1.55;">Nothing logged this week for <span style="color:#E8A33D;">${untrained.map(m => BALANCE_LABELS[m] || m).join(', ')}</span>.</div>` : `<div class="small" style="color:var(--good); margin-top:10px;">Every muscle group got work this week.</div>`}
+      <div style="margin:6px 0 4px 0;">${heatmapBodySvg(regions, counts, mx, 'hm' + side)}</div>
+      <div id="heatmapDetail" style="min-height:22px; margin-top:10px;"></div>
+      <div class="small" style="color:var(--slate); line-height:1.6; margin-top:6px;">${reading}</div>
+      <div class="small" style="color:var(--slate); margin-top:10px; font-size:11px;">Tap a muscle for detail.</div>
     </div>`;
+}
+
+// Wired after render. Tapping a region names it, gives its set count, and
+// offers a way through to your own exercises for it - the map becomes
+// something to act on rather than only look at.
+function wireHeatmapInteractions(sets){
+  const counts = heatmapCounts(sets);
+  const lastTrained = {};
+  (sets || []).forEach(s => {
+    const r = s._fine;
+    if (!r) return;
+    if (!lastTrained[r] || s.logged_at > lastTrained[r]) lastTrained[r] = s.logged_at;
+  });
+  document.querySelectorAll('.hm-side').forEach(b => {
+    b.onclick = () => { state.heatmapSide = b.dataset.side; renderBalance(state.balanceMode, state.balanceView); };
+  });
+  const detail = document.getElementById('heatmapDetail');
+  document.querySelectorAll('.hm-region').forEach(el => {
+    el.onclick = () => {
+      const name = el.dataset.region;
+      const n = parseInt(el.dataset.sets, 10) || 0;
+      // Outline the tapped one - adjacent regions are small and fingers are
+      // imprecise, so showing which was actually hit matters.
+      document.querySelectorAll('.hm-region').forEach(o => o.setAttribute('stroke-width', o === el ? '2.2' : '0.9'));
+      document.querySelectorAll('.hm-region').forEach(o => { if (o !== el && !o.dataset.sets.match(/^[1-9]/)) o.setAttribute('stroke', '#33363B'); });
+      el.setAttribute('stroke', '#FFFFFF');
+      const last = lastTrained[name];
+      const ago = last ? Math.round((new Date(todayStr()+'T00:00:00') - new Date(last+'T00:00:00'))/86400000) : null;
+      if (!detail) return;
+      detail.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; background:rgba(255,255,255,0.03); border-radius:10px; padding:10px 12px;">
+          <div style="min-width:0;">
+            <div style="font-family:'Oswald',sans-serif; font-size:13.5px;">${name}</div>
+            <div class="small" style="color:var(--slate); margin-top:2px;">${n === 0 ? 'Nothing logged this week' : `${n} set${n===1?'':'s'} this week`}${ago !== null ? ` · last ${ago === 0 ? 'today' : ago === 1 ? 'yesterday' : ago + ' days ago'}` : ''}</div>
+          </div>
+          <button class="hm-jump" data-broad="${REGION_BROAD[name] || ''}" style="flex-shrink:0; background:rgba(255,107,26,0.12); border:1px solid rgba(255,107,26,0.3); color:var(--flame); border-radius:9px; padding:7px 11px; font-size:11.5px;">Exercises</button>
+        </div>`;
+      const jump = detail.querySelector('.hm-jump');
+      if (jump) jump.onclick = () => openPicker('mine', jump.dataset.broad);
+    };
+  });
 }
 
 function computeRecoveryClock(sets){
@@ -14743,8 +14851,12 @@ async function renderBalance(mode, view){
 
   // Built from the same current-week sets the rest of this view already has,
   // so it costs no extra query.
-  const heatmapHtml = (view === 'muscle' && weeks && weeks.length)
-    ? buildMuscleHeatmapHtml(weeks[weeks.length-1].sets) : '';
+  // Shown in both modes. Logged asks what you actually trained; Full Plan
+  // asks what your week even includes - and a muscle that's hot on the plan
+  // while cold on logged is the single most useful thing this screen can
+  // surface, which only works if both draw the same figure.
+  const heatmapSets = (weeks && weeks.length) ? weeks[weeks.length-1].sets : [];
+  const heatmapHtml = (view === 'muscle') ? buildMuscleHeatmapHtml(heatmapSets, mode) : '';
   const recoveryClockHtml = recoveryClock ? `
     <div class="section-label">Recovery Clock</div>
     <div class="small" style="padding:0 18px 8px 18px; color:var(--slate);">When each muscle is next due, based on its usual training rhythm - not just days since last worked.</div>
@@ -15084,6 +15196,9 @@ async function renderBalance(mode, view){
   document.querySelectorAll('.bal-view-chip').forEach(chip => {
     chip.onclick = () => renderBalance(mode, chip.dataset.view);
   });
+  state.balanceMode = mode;
+  state.balanceView = view;
+  if (heatmapHtml) wireHeatmapInteractions(heatmapSets);
   document.querySelectorAll('.muscle-jump').forEach(btn => {
     btn.onclick = (e) => {
       e.stopPropagation();
