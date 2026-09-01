@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.262';
+const APP_VERSION = 'Beta 5.263';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -874,6 +874,39 @@ function openingDay(){
   return todayWeekday();
 }
 let state = { selectedDay: openingDay(), exercises: [], session: null, currentTab: 'track', trackScrollY: 0, renderGeneration: 0 };
+
+// MIDNIGHT ROLLOVER. All dates in this app come from the phone's own clock
+// (todayStr uses local getFullYear/getMonth/getDate, never UTC), so the day
+// already travels with you and changes at local midnight wherever you land -
+// which is the behaviour you want abroad.
+//
+// What was missing is anything that NOTICES. A PWA is normally backgrounded
+// rather than closed, so the selected day was only ever recalculated on a
+// full reload: open the app at 9am after leaving it running overnight and it
+// still showed yesterday, with yesterday's done-flags. Crossing a timezone
+// makes that worse, since the date can shift without a night passing at all.
+let _lastKnownDate = todayStr();
+function checkDayRollover(){
+  const now = todayStr();
+  if (now === _lastKnownDate) return;
+  const previous = _lastKnownDate;
+  _lastKnownDate = now;
+  // Only move the user if they were sitting on what WAS today. If they'd
+  // deliberately navigated to some other day, yanking them away would
+  // discard a deliberate choice for a clock tick they didn't ask about.
+  const wasOnPreviousToday = state.selectedDay === new Date(previous + 'T00:00:00').getDay();
+  if (wasOnPreviousToday || isAnyDay(state.selectedDay)) state.selectedDay = openingDay();
+  // Everything cached is keyed to the old date - done-flags, header stats,
+  // "logged today" - and every one of them is now wrong.
+  invalidateTrackSnapshots();
+  warmInvalidate();
+  if (state.currentTab === 'track') renderTrack();
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) checkDayRollover(); });
+window.addEventListener('focus', checkDayRollover);
+// Backstop for the app being left open and visible across midnight, where
+// neither of the above ever fires.
+setInterval(checkDayRollover, 60000);
 
 const ICON_TRACK = `<svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="4" width="4" height="16" rx="1.2"/><rect x="17" y="4" width="4" height="16" rx="1.2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>`;
 const ICON_SCALE = `<svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="4" width="18" height="17" rx="3"/><circle cx="12" cy="12.5" r="5"/><line x1="12" y1="12.5" x2="15" y2="10"/></svg>`;
@@ -14722,12 +14755,14 @@ async function renderBalance(mode, view){
         else if (r.dueInDays === 0){ statusText = 'Due today'; statusColor = '#E8A33D'; }
         else { statusText = `Due in ${r.dueInDays}d`; statusColor = 'var(--good)'; }
         return `
-        <div style="display:flex; justify-content:space-between; align-items:center; font-size:12.5px; padding:4px 0;">
-          <div style="color:var(--chalk);">${BALANCE_LABELS[r.muscle]}</div>
+        <div style="display:flex; justify-content:space-between; align-items:center; font-size:12.5px; padding:4px 0; gap:10px;">
+          <div style="color:var(--chalk); flex:1; min-width:0;">${BALANCE_LABELS[r.muscle]}</div>
           <div style="text-align:right;">
             <div style="color:${statusColor}; font-weight:600;">${statusText}</div>
             <div style="color:var(--slate); font-size:10px;">last: ${r.days === 0 ? 'today' : r.days === 1 ? 'yesterday' : `${r.days}d ago`}</div>
           </div>
+          <button class="muscle-jump" data-muscle="${r.muscle}" aria-label="Show ${BALANCE_LABELS[r.muscle]} exercises"
+            style="flex-shrink:0; width:28px; height:28px; border-radius:8px; background:rgba(255,107,26,0.12); border:1px solid rgba(255,107,26,0.3); color:var(--flame); font-size:14px; line-height:1;">›</button>
         </div>`;
       }).join('')}
     </div>` : '';
@@ -15006,6 +15041,8 @@ async function renderBalance(mode, view){
           <div class="bal-seg-chip ${mode==='plan'?'active':''}" data-mode="plan" style="flex:1; text-align:center; padding:7px 0; font-family:'Bebas Neue',sans-serif; font-size:11.5px; letter-spacing:0.5px; color:${mode==='plan'?'var(--ink)':'var(--slate)'}; background:${mode==='plan'?'var(--flame)':'transparent'};">FULL PLAN</div>
         </div>
         ${balanceHeroHtml(tally, prevTally, mode)}
+        ${heatmapHtml}
+        ${recoveryClockHtml}
         ${badgesHtml}
         ${scoreAndVarietyHtml}
         ${comebackHtml}
@@ -15024,8 +15061,6 @@ async function renderBalance(mode, view){
         ${mostLoggedHtml}
         ${volumeByLocationHtml}
         ${leaderboardHtml}
-        ${heatmapHtml}
-        ${recoveryClockHtml}
         ${repRangeHtml}
         ${compoundSplitHtml}
         ${equipmentHtml}
@@ -15048,6 +15083,14 @@ async function renderBalance(mode, view){
   });
   document.querySelectorAll('.bal-view-chip').forEach(chip => {
     chip.onclick = () => renderBalance(mode, chip.dataset.view);
+  });
+  document.querySelectorAll('.muscle-jump').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      // 'mine' rather than 'database' - the question this answers is "what
+      // do I already have for this muscle", not "what else exists".
+      openPicker('mine', btn.dataset.muscle);
+    };
   });
   document.querySelectorAll('.bal-row[data-muscle]').forEach(row => {
     row.onclick = () => openPicker('database', row.dataset.muscle);
