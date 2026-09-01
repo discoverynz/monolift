@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.275';
+const APP_VERSION = 'Beta 5.276';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -2244,7 +2244,72 @@ async function quickSaveSet(exerciseId, exerciseName, best){
   return true;
 }
 
+// The active exercise during a session, expanded in place. Every other row
+// in the list stays exactly as it is - nothing new appears on screen, one
+// card is simply larger than its neighbours.
+function sessionActiveCard(ex){
+  const st = sessionStateFor(ex.id);
+  // Only the exercise the session is pointed at expands. Without this every
+  // card in the list would render expanded the moment a session started.
+  if (!st || !st.isActive) return null;
+  const restLeft = sessionRestLeft();
+  const last = ex.lastSet;
+  const w = last && last.weight != null ? last.weight : '';
+  const r = last && last.reps != null ? last.reps : '';
+  const unit = (last && last.weight_unit) || 'kg';
+  const pips = Array.from({ length: Math.max(st.target, st.done) }, (_, i) =>
+    `<div style="flex:1; height:5px; border-radius:3px; background:${i < st.done ? 'var(--good)' : i === st.done ? 'var(--flame)' : '#2c2e33'};"></div>`).join('');
+
+  if (restLeft > 0){
+    // Resting: the card itself fills left to right as the timer runs, so the
+    // countdown is spatial rather than only a number - catchable from across
+    // a gym without reading it.
+    const total = (readSession() || {}).restTotal || 90;
+    const pct = Math.max(0, Math.min(100, ((total - restLeft) / total) * 100));
+    return `<div class="ex-card session-card" data-id="${ex.id}" style="position:relative; overflow:hidden; background:var(--panel); border:1px solid rgba(201,162,39,0.5); border-radius:13px; padding:13px; margin-bottom:8px;">
+      <div style="position:absolute; left:0; top:0; bottom:0; width:${pct}%; background:rgba(201,162,39,0.13); transition:width 1s linear;"></div>
+      <div style="position:relative; display:flex; justify-content:space-between; align-items:center; gap:10px;">
+        <div style="min-width:0;">
+          <div style="font-family:'Oswald',sans-serif; font-size:15px;">${ex.name}</div>
+          <div class="small" style="color:var(--brass); margin-top:2px;">Resting — set ${st.done + 1} next</div>
+        </div>
+        <div style="display:flex; align-items:center; gap:9px; flex-shrink:0;">
+          <span style="font-family:'Bebas Neue',sans-serif; font-size:26px; color:var(--brass);">${Math.floor(restLeft/60)}:${String(restLeft%60).padStart(2,'0')}</span>
+          <button class="sess-skip-rest" style="background:var(--ink); border:1px solid var(--line); color:var(--slate); border-radius:8px; padding:7px 10px; font-size:11px;">Skip</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  return `<div class="ex-card session-card" data-id="${ex.id}" style="background:linear-gradient(160deg, rgba(255,107,26,0.11), rgba(255,107,26,0.03)); border:1px solid rgba(255,107,26,0.45); border-radius:13px; padding:13px; margin-bottom:8px;">
+    <div style="display:flex; justify-content:space-between; align-items:baseline; gap:8px;">
+      <div style="font-family:'Oswald',sans-serif; font-size:15px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${ex.name}</div>
+      <div class="small" style="color:var(--flame); flex-shrink:0;">set ${st.done + 1} of ${st.target}</div>
+    </div>
+    <div style="display:flex; gap:5px; margin:10px 0 11px 0;">${pips}</div>
+    <div style="display:flex; gap:8px; align-items:center;">
+      <div style="flex:1; background:var(--ink); border:1px solid var(--line); border-radius:9px; padding:7px 10px;">
+        <div style="font-size:9px; color:var(--slate);">Weight</div>
+        <input id="sessW" inputmode="decimal" value="${w}" style="width:100%; background:none; border:none; color:var(--chalk); font-family:'Bebas Neue',sans-serif; font-size:21px; padding:0;">
+      </div>
+      <div style="flex:1; background:var(--ink); border:1px solid var(--line); border-radius:9px; padding:7px 10px;">
+        <div style="font-size:9px; color:var(--slate);">Reps</div>
+        <input id="sessR" inputmode="numeric" value="${r}" style="width:100%; background:none; border:none; color:var(--chalk); font-family:'Bebas Neue',sans-serif; font-size:21px; padding:0;">
+      </div>
+      <button class="sess-log" data-unit="${unit}" style="background:var(--flame); border:none; color:var(--ink); border-radius:9px; padding:13px 17px; font-family:'Bebas Neue',sans-serif; font-size:14px; letter-spacing:0.5px;">LOG</button>
+    </div>
+    <div style="display:flex; gap:7px; margin-top:9px;">
+      <button class="sess-done-ex" style="flex:1; background:none; border:1px solid var(--line); color:var(--slate); border-radius:8px; padding:7px; font-size:11px;">Done with this</button>
+      <button class="sess-skip-ex" style="flex:1; background:none; border:1px solid var(--line); color:var(--slate); border-radius:8px; padding:7px; font-size:11px;">Skip</button>
+    </div>
+  </div>`;
+}
+
 function exerciseRow(ex){
+  // During a session the current exercise renders as an expanded card
+  // instead of a normal row.
+  const sessCard = sessionActiveCard(ex);
+  if (sessCard) return sessCard;
   const groupNameRaw = ex.alt_groups ? ex.alt_groups.name : null;
   // Never show a day-of-week reference in the tag itself - a group can
   // legitimately apply regardless of which day it's viewed from, so a name
@@ -5225,7 +5290,7 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
     : remaining.length >= 2
     ? `<div style="padding:10px 18px 0 18px;">
         <button class="btn-primary" id="startSessionBtn" style="width:100%; display:flex; align-items:center; justify-content:center; gap:8px;">
-          <span style="font-family:'Bebas Neue',sans-serif; font-size:16px; letter-spacing:0.8px;">${resumable ? 'RESUME SESSION' : 'START SESSION'}</span>
+          <span style="font-family:'Bebas Neue',sans-serif; font-size:16px; letter-spacing:0.8px;">${resumable ? '■ END SESSION' : '▶ START SESSION'}</span>
           <span style="font-size:11.5px; opacity:0.75;">${resumable ? `${resumable.idx + 1} of ${resumable.order.length}` : `${remaining.length} exercises`}</span>
         </button>
       </div>`
@@ -5268,8 +5333,20 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
             <div style="font-size:8.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px; margin-top:2px;">Volume ${headerStats.targetDateIsToday ? 'Today' : dayLabelOf(headerStats.targetWeekday)}</div>
           </div>
           <div style="flex:1; text-align:center; padding:14px 6px; border-right:1px solid rgba(255,255,255,0.06);">
-            <div class="${headerStats.streak > 0 ? 'streak-alive' : ''}" style="font-family:'JetBrains Mono',monospace; font-size:17px; font-weight:600; color:var(--flame);">${headerStats.streak > 0 ? '🔥 ' : ''}${headerStats.streak}</div>
-            <div style="font-size:8.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px; margin-top:2px;">Day Streak</div>
+            ${(() => {
+              // While a session runs, this slot shows elapsed time instead of
+              // the streak - reusing furniture that already exists rather
+              // than adding a row, and the streak isn't what you need to
+              // know mid-workout anyway. It returns the moment you finish.
+              const sess = readSession();
+              if (sess){
+                const mins = Math.max(0, Math.floor((Date.now() - new Date(sess.startedAt)) / 60000));
+                return `<div style="font-family:'JetBrains Mono',monospace; font-size:17px; font-weight:600; color:var(--flame);">${mins}m</div>
+                  <div style="font-size:8.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px; margin-top:2px;">Session</div>`;
+              }
+              return `<div class="${headerStats.streak > 0 ? 'streak-alive' : ''}" style="font-family:'JetBrains Mono',monospace; font-size:17px; font-weight:600; color:var(--flame);">${headerStats.streak > 0 ? '🔥 ' : ''}${headerStats.streak}</div>
+                <div style="font-size:8.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px; margin-top:2px;">Day Streak</div>`;
+            })()}
           </div>
           <div style="flex:1; text-align:center; padding:14px 6px;">
             <div style="font-family:'JetBrains Mono',monospace; font-size:17px; font-weight:600; color:var(--chalk);">${headerStats.setsToday}</div>
@@ -5449,9 +5526,84 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   if (clearLocBtn) clearLocBtn.onclick = () => openLocationPicker(allLocations, currentLocationId);
   const addMoreBtn = document.getElementById('addMoreTodayBtn');
   if (addMoreBtn) addMoreBtn.onclick = () => openPicker();
+  // --- in-place session card handlers ---
+  const sessLogBtn = document.querySelector('.sess-log');
+  if (sessLogBtn) sessLogBtn.onclick = async () => {
+    const sess = readSession();
+    if (!sess) return;
+    const cur = sess.order[sess.idx];
+    const ex = (state.exercises || []).find(e => e.id === cur.id);
+    if (!ex) return;
+    sessLogBtn.textContent = '…';
+    const ok = await sessionLogSet(ex, document.getElementById('sessW').value, document.getElementById('sessR').value, sessLogBtn.dataset.unit);
+    if (!ok){ sessLogBtn.textContent = 'LOG'; return; }
+    const done = (sess.setsDone[cur.id] || 0) + 1;
+    const target = sess.targetSets[cur.id] || (ex.lastSet && Number(ex.lastSet.num_sets)) || 3;
+    sess.setsDone[cur.id] = done;
+    sess.targetSets[cur.id] = target;
+    if (done >= target){
+      // Exercise finished - move on rather than resting into nothing.
+      sess.idx++;
+      sess.restUntil = null;
+      writeSession(sess);
+      if (sess.idx >= sess.order.length) return finishSession(sess);
+    } else {
+      const secs = restSecondsFor(ex);
+      sess.restUntil = new Date(Date.now() + secs * 1000).toISOString();
+      sess.restTotal = secs;
+      writeSession(sess);
+    }
+    await loadExercises();
+    renderTrack();
+  };
+  const sessSkipRest = document.querySelector('.sess-skip-rest');
+  if (sessSkipRest) sessSkipRest.onclick = () => {
+    const sess = readSession();
+    if (!sess) return;
+    sess.restUntil = null; writeSession(sess); renderTrack();
+  };
+  const sessDoneEx = document.querySelector('.sess-done-ex');
+  if (sessDoneEx) sessDoneEx.onclick = () => {
+    const sess = readSession();
+    if (!sess) return;
+    sess.idx++; sess.restUntil = null; writeSession(sess);
+    if (sess.idx >= sess.order.length) return finishSession(sess);
+    renderTrack();
+  };
+  const sessSkipEx = document.querySelector('.sess-skip-ex');
+  if (sessSkipEx) sessSkipEx.onclick = () => {
+    const sess = readSession();
+    if (!sess) return;
+    sess.idx++; sess.restUntil = null; writeSession(sess);
+    if (sess.idx >= sess.order.length) return finishSession(sess);
+    renderTrack();
+  };
+  // Tick the rest countdown without re-rendering the whole screen, which
+  // would fight any input the user is mid-way through typing.
+  if (window.__sessTick) clearInterval(window.__sessTick);
+  if (sessionRestLeft() > 0){
+    window.__sessTick = setInterval(() => {
+      const left = sessionRestLeft();
+      const card = document.querySelector('.session-card');
+      if (!card){ clearInterval(window.__sessTick); return; }
+      if (left <= 0){
+        clearInterval(window.__sessTick);
+        const sess = readSession();
+        if (sess){ sess.restUntil = null; writeSession(sess); }
+        if (!document.hidden) playTimerSound();
+        renderTrack();
+        return;
+      }
+      const clock = card.querySelector('span[style*="Bebas"]');
+      if (clock) clock.textContent = `${Math.floor(left/60)}:${String(left%60).padStart(2,'0')}`;
+      const fill = card.querySelector('div[style*="position:absolute"]');
+      const total = (readSession() || {}).restTotal || 90;
+      if (fill) fill.style.width = Math.max(0, Math.min(100, ((total - left) / total) * 100)) + '%';
+    }, 500);
+  }
   const startSessBtn = document.getElementById('startSessionBtn');
   if (startSessBtn) startSessBtn.onclick = () => {
-    if (readSession()) renderSessionScreen();
+    if (readSession()) endSessionEarly();
     else startSession(visibleExercises);
   };
   const mainCard = document.getElementById('mainEventCard');
@@ -15789,7 +15941,7 @@ function startSession(list){
     setsDone: {},          // exerciseId -> count logged this session
     targetSets: {}         // exerciseId -> how many planned
   });
-  renderSessionScreen();
+  renderTrack();
 }
 
 function endSession(){
@@ -15798,200 +15950,48 @@ function endSession(){
   renderTrack();
 }
 
-async function renderSessionScreen(){
+// Ending from the toolbar. If everything got logged it's a finish worth
+// marking; if not, it's just stopping, and nothing should be celebrated.
+function endSessionEarly(){
   const sess = readSession();
-  if (!sess) return endSession();
+  if (!sess) return;
+  const list = (state.exercises || []).filter(ex => isAvailableOnSelectedDay(ex));
+  const allDone = list.length > 0 && list.every(ex => ex.loggedToday || ex.completeVia);
+  if (allDone) finishSession(sess);
+  else endSession();
+}
+
+// Which exercise the session is currently pointed at, and how far into it.
+function sessionStateFor(exId){
+  const sess = readSession();
+  if (!sess) return null;
   const cur = sess.order[sess.idx];
-  if (!cur) return finishSession(sess);
-  const ex = (state.exercises || []).find(e => e.id === cur.id);
-  // The exercise vanished - removed from the day, or a stale session from
-  // before an edit. Skip rather than stalling the whole run on it.
-  if (!ex){ sess.idx++; writeSession(sess); return renderSessionScreen(); }
-
-  const target = sess.targetSets[cur.id] || (ex.lastSet && Number(ex.lastSet.num_sets)) || 3;
-  const done = sess.setsDone[cur.id] || 0;
-  const last = ex.lastSet ? formatSetValue(ex.lastSet) : null;
-  const total = sess.order.length;
-
-  const app = document.getElementById('app');
-  app.innerHTML = `
-    <div class="app-shell">
-      <div class="overlay-scroll" style="padding:calc(14px + env(safe-area-inset-top,0px)) 0 40px 0;">
-        <div style="display:flex; gap:4px; padding:0 18px 14px 18px;">
-          ${sess.order.map((_, i) => `<div style="flex:1; height:4px; border-radius:2px; background:${i < sess.idx ? 'var(--good)' : i === sess.idx ? 'var(--flame)' : '#26282c'};"></div>`).join('')}
-        </div>
-        <div style="padding:0 18px;">
-          <div class="small" style="color:var(--slate);">Exercise ${sess.idx + 1} of ${total}</div>
-          <div style="font-family:'Bebas Neue',sans-serif; font-size:30px; line-height:1; margin:2px 0 4px 0;">${ex.name}</div>
-          <div class="small" style="color:var(--slate); margin-bottom:14px;">${last ? `Last time: ${last}` : 'No history yet'}</div>
-          ${Array.from({length: Math.max(target, done)}, (_, i) => {
-            const isDone = i < done, isNow = i === done;
-            return `<div style="display:flex; align-items:center; gap:10px; padding:11px 12px; border-radius:11px; margin-bottom:7px;
-              background:${isDone ? 'rgba(143,191,122,0.09)' : isNow ? 'rgba(255,107,26,0.1)' : 'var(--panel)'};
-              border:1px solid ${isDone ? 'rgba(143,191,122,0.28)' : isNow ? 'rgba(255,107,26,0.4)' : 'transparent'};">
-              <span style="width:20px; font-family:'Bebas Neue',sans-serif; font-size:17px; color:var(--slate);">${i+1}</span>
-              <span style="flex:1; font-size:14px; color:${isDone ? 'var(--chalk)' : 'var(--slate)'};">${isDone ? 'Logged' : isNow ? `Set ${i+1} of ${target}` : '—'}</span>
-              ${isDone ? '<span style="color:var(--good); font-size:15px;">✓</span>' : ''}
-            </div>`;
-          }).join('')}
-          <div style="display:flex; gap:8px; margin:14px 0;">
-            <div style="flex:1; background:var(--panel); border:1px solid var(--line); border-radius:11px; padding:10px 12px;">
-              <div style="font-size:10px; color:var(--slate);">Weight</div>
-              <input id="sessWeight" inputmode="decimal" value="${ex.lastSet && ex.lastSet.weight != null ? ex.lastSet.weight : ''}"
-                style="width:100%; background:none; border:none; color:var(--chalk); font-family:'Bebas Neue',sans-serif; font-size:25px; padding:0;">
-            </div>
-            <div style="flex:1; background:var(--panel); border:1px solid var(--line); border-radius:11px; padding:10px 12px;">
-              <div style="font-size:10px; color:var(--slate);">Reps</div>
-              <input id="sessReps" inputmode="numeric" value="${ex.lastSet && ex.lastSet.reps != null ? ex.lastSet.reps : ''}"
-                style="width:100%; background:none; border:none; color:var(--chalk); font-family:'Bebas Neue',sans-serif; font-size:25px; padding:0;">
-            </div>
-          </div>
-          <button class="btn-primary" id="sessLogBtn" style="width:100%;">Log set ${done + 1}</button>
-          <div style="display:flex; gap:8px; margin-top:9px;">
-            <button class="btn-primary" id="sessSkipBtn" style="flex:1; background:var(--panel); color:var(--slate); border:1px solid var(--line); font-size:13px;">Skip exercise</button>
-            <button class="btn-primary" id="sessDoneEarlyBtn" style="flex:1; background:var(--panel); color:var(--slate); border:1px solid var(--line); font-size:13px;">Done with this</button>
-          </div>
-          <button class="btn-primary" id="sessQuitBtn" style="width:100%; margin-top:9px; background:none; color:var(--slate); border:none; font-size:12.5px;">Quit to list — keeps everything logged</button>
-        </div>
-      </div>
-    </div>`;
-
-  document.getElementById('sessLogBtn').onclick = async () => {
-    const w = document.getElementById('sessWeight').value;
-    const r = document.getElementById('sessReps').value;
-    const btn = document.getElementById('sessLogBtn');
-    btn.textContent = 'Saving…';
-    const ok = await sessionLogSet(ex, w, r);
-    if (!ok){ btn.textContent = `Log set ${done + 1}`; return; }
-    sess.setsDone[cur.id] = done + 1;
-    sess.targetSets[cur.id] = target;
-    writeSession(sess);
-    if (done + 1 >= target) renderExerciseComplete(sess, ex);
-    else renderRestOverlay(sess, ex, restSecondsFor(ex));
-  };
-  document.getElementById('sessSkipBtn').onclick = () => { sess.idx++; writeSession(sess); renderSessionScreen(); };
-  document.getElementById('sessDoneEarlyBtn').onclick = () => renderExerciseComplete(sess, ex);
-  document.getElementById('sessQuitBtn').onclick = () => endSession();
+  const done = sess.setsDone[exId] || 0;
+  const target = sess.targetSets[exId] || 3;
+  return { sess, isActive: cur && cur.id === exId, done, target };
 }
 
-// Writes through the same path a normal log does, so nothing about the
-// stored set differs because it came from a session.
-async function sessionLogSet(ex, weightRaw, repsRaw){
-  const userData = { user: await getCurrentUser() };
-  if (!userData.user) return false;
-  const idField = setExerciseIdField();
-  const unit = (ex.lastSet && ex.lastSet.weight_unit) || 'kg';
-  const payload = {
-    user_id: userData.user.id,
-    weight: weightRaw ? parseFloat(weightRaw) : null,
-    weight_unit: unit,
-    weight_type: (ex.lastSet && ex.lastSet.weight_type) || 'total',
-    reps: repsRaw ? parseInt(repsRaw, 10) : ASSUMED_REPS,
-    num_sets: 1,
-    logged_at: todayStr(),
-    location_id: effectiveLocationId()
-  };
-  payload[idField] = ex.id;
-  invalidateTrackSnapshots();
-  let error = null;
-  try {
-    const res = await withTimeout(supabaseClient.from('sets').insert(payload).select(), 12000);
-    if (res.__timeout) error = { message: 'timed out' };
-    else error = res.error;
-  } catch(e){ error = { message: e.message || 'network' }; }
-  if (error){
-    // Same offline protection as everywhere else - a session set is not
-    // more disposable than any other.
-    queueSetLocally(payload);
-    showQueuedSetToast();
-  }
-  celebrateLoggedSet(document.getElementById('sessLogBtn'), payload.weight, unit, payload.weight_type, payload.reps, 1);
-  return true;
+// Rest is stored on the session rather than in a component, so it survives
+// a re-render, a tab switch, or the app being backgrounded - and is derived
+// from an absolute end time so locking the phone can't pause it.
+function sessionRestLeft(){
+  const sess = readSession();
+  if (!sess || !sess.restUntil) return 0;
+  return Math.max(0, Math.ceil((new Date(sess.restUntil) - Date.now()) / 1000));
 }
 
-function renderRestOverlay(sess, ex, seconds){
-  const endAt = Date.now() + seconds * 1000;
-  const ov = document.createElement('div');
-  ov.className = 'overlay-screen';
-  ov.style.zIndex = '45';
-  const done = sess.setsDone[ex.id] || 0;
-  const target = sess.targetSets[ex.id] || 3;
-  ov.innerHTML = `
-    <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:26px; text-align:center;">
-      <div style="width:172px; height:172px; border-radius:50%; border:3px solid #26282c; display:flex; align-items:center; justify-content:center; margin-bottom:18px;">
-        <div id="restClock" style="font-family:'Bebas Neue',sans-serif; font-size:52px; line-height:1;">${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,'0')}</div>
-      </div>
-      <div class="small" style="color:var(--slate); margin-bottom:22px; line-height:1.55;">
-        Next up<br><b style="color:var(--chalk);">${ex.name} — set ${done + 1} of ${target}</b>
-      </div>
-      <button class="btn-primary" id="restSkip" style="max-width:220px; width:100%;">Skip rest</button>
-      <button class="btn-primary" id="restAdd" style="max-width:220px; width:100%; margin-top:9px; background:var(--panel); color:var(--chalk); border:1px solid var(--line); font-size:13px;">+30 sec</button>
-    </div>`;
-  document.body.appendChild(ov);
-  let target_ms = endAt;
-  // Wall-clock, so locking the phone mid-rest doesn't pause it - the same
-  // fix the standalone timer needed.
-  const tick = setInterval(() => {
-    const left = Math.max(0, Math.ceil((target_ms - Date.now()) / 1000));
-    const el = document.getElementById('restClock');
-    if (el) el.textContent = `${Math.floor(left/60)}:${String(left%60).padStart(2,'0')}`;
-    if (left <= 0){
-      clearInterval(tick);
-      if (!document.hidden) playTimerSound();
-      ov.remove();
-      renderSessionScreen();
-    }
-  }, 250);
-  const close = () => { clearInterval(tick); ov.remove(); renderSessionScreen(); };
-  ov.querySelector('#restSkip').onclick = close;
-  ov.querySelector('#restAdd').onclick = () => { target_ms += 30000; };
-}
-
-// Confirms rather than silently advancing, because finishing an exercise is
-// exactly when someone decides to add a set or cut one - and no app asks.
-function renderExerciseComplete(sess, ex){
-  const done = sess.setsDone[ex.id] || 0;
-  const nextName = sess.order[sess.idx + 1] ? sess.order[sess.idx + 1].name : null;
-  const app = document.getElementById('app');
-  app.innerHTML = `
-    <div class="app-shell">
-      <div class="overlay-scroll" style="padding:calc(14px + env(safe-area-inset-top,0px)) 0 40px 0;">
-        <div style="display:flex; gap:4px; padding:0 18px 14px 18px;">
-          ${sess.order.map((_, i) => `<div style="flex:1; height:4px; border-radius:2px; background:${i <= sess.idx ? 'var(--good)' : '#26282c'};"></div>`).join('')}
-        </div>
-        <div style="text-align:center; padding:22px 18px 6px 18px;">
-          <div style="font-size:30px;">✓</div>
-          <div style="font-family:'Bebas Neue',sans-serif; font-size:26px; margin-top:6px;">${ex.name} done</div>
-          <div class="small" style="color:var(--slate);">${done} set${done===1?'':'s'} logged</div>
-        </div>
-        <div style="padding:14px 18px 0 18px;">
-          <button class="btn-primary" id="sessNextBtn" style="width:100%;">${nextName ? `Next: ${nextName}` : 'Finish session'}</button>
-          <button class="btn-primary" id="sessAddSetBtn" style="width:100%; margin-top:9px; background:var(--panel); color:var(--chalk); border:1px solid var(--line); font-size:13px;">Add another set</button>
-        </div>
-      </div>
-    </div>`;
-  document.getElementById('sessNextBtn').onclick = () => {
-    sess.idx++;
-    writeSession(sess);
-    if (sess.idx >= sess.order.length) finishSession(sess);
-    else renderSessionScreen();
-  };
-  document.getElementById('sessAddSetBtn').onclick = () => {
-    sess.targetSets[ex.id] = (sess.targetSets[ex.id] || done) + 1;
-    writeSession(sess);
-    renderSessionScreen();
-  };
-}
-
+// Session state lives on the exercise card itself rather than on a separate
+// screen. Replacing the whole Lift screen meant losing the exercise list,
+// the stats and the heat - a worse app wearing a guided-flow costume, and it
+// forced a fixed order on someone who might superset or jump around. The
+// session is now an annotation ON the list rather than a replacement for it,
+// which also removes the "don't trap the user" problem structurally: there's
+// nothing to escape from because you were never taken anywhere.
 async function finishSession(sess){
   const mins = Math.max(1, Math.round((Date.now() - new Date(sess.startedAt)) / 60000));
   writeSession(null);
-  await loadExercises();
   const list = (state.exercises || []).filter(ex => isAvailableOnSelectedDay(ex));
-  state.currentTab = 'track';
   renderTrack();
-  // Reuses the existing session-complete screen, now firing because the
-  // session genuinely ended rather than because a checkbox happened to tick.
   setTimeout(() => showSessionCompleteScreen(list, mins), 350);
 }
 
