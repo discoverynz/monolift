@@ -1,5 +1,10 @@
-const CACHE_NAME = 'monolift-v322';
-const SHELL = ['./', './index.html', './css/styles.css?v=322', './js/app.js?v=322', './js/supabase-client.js?v=322', './manifest.json'];
+const CACHE_NAME = 'monolift-v323';
+const SHELL = ['./', './index.html', './css/styles.css?v=323', './js/app.js?v=323', './js/supabase-client.js?v=323', './manifest.json'];
+
+// True until this worker has served one navigation. A newly-activated worker
+// means a deploy just happened, and the HTML sitting in the old cache points
+// at the previous build's versioned assets.
+let FIRST_RUN_AFTER_UPDATE = true;
 
 self.addEventListener('install', (event) => {
   self.skipWaiting(); // don't wait for old tabs to close — take over immediately
@@ -46,6 +51,8 @@ self.addEventListener('fetch', (event) => {
   const isVersioned = url.searchParams.has('v');
 
   if (isNavigation){
+    const wasFirst = FIRST_RUN_AFTER_UPDATE;
+    FIRST_RUN_AFTER_UPDATE = false;
     // STALE-WHILE-REVALIDATE, not network-first. Network-first meant every
     // single app open paid a full round trip for the HTML before a single
     // script could even begin downloading - the whole app sat behind it.
@@ -73,7 +80,13 @@ self.addEventListener('fetch', (event) => {
           }
           return response;
         }).catch(() => cached);
-        return cached || networkPromise;
+        // If the cached HTML was stored by an OLDER worker version, serving
+        // it means booting the previous build's app.js - which is exactly
+        // how a deploy can land correctly and still show nothing new. A
+        // freshly-installed worker has no HTML of its own yet, so on the
+        // first navigation after an update we wait for the network rather
+        // than serving the last version's shell.
+        return cached && !wasFirst ? cached : (networkPromise.then(r => r || cached));
       })
     );
     return;

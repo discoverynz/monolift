@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.271';
+const APP_VERSION = 'Beta 5.272';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -5199,7 +5199,7 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
           </h1>
           ${buildVolumeRaceHtml(headerStats)}
           ${(() => { const t = tonnageComparison(headerStats.volumeKg); return t ? `<div class="small" style="color:var(--slate); margin-top:6px;">${t.icon} ${t.text} moved today.</div>` : ''; })()}
-          <div class="quote">"${q.t}" — ${q.a}</div>
+
         </div>
         <div style="display:flex; margin:14px 18px 0 18px; border-radius:14px; overflow:hidden;
           background:linear-gradient(165deg, #202226, #191a1d); border:1px solid rgba(255,255,255,0.06);
@@ -16403,7 +16403,18 @@ if ('serviceWorker' in navigator) {
     toast.id = 'updateToast';
     toast.innerHTML = `<span>Update available</span><button id="updateReloadBtn">Reload</button>`;
     document.body.appendChild(toast);
-    document.getElementById('updateReloadBtn').onclick = () => location.reload();
+    document.getElementById('updateReloadBtn').onclick = async () => {
+      // location.reload() alone re-requests the SAME cached HTML the worker
+      // just served, so the new version never actually loads and the toast
+      // reappears forever. The caches have to go first.
+      try {
+        const keys = await caches.keys();
+        await Promise.all(keys.map(k => caches.delete(k)));
+      } catch(e){}
+      // Cache-busted so the HTML itself is refetched rather than pulled from
+      // the browser's own HTTP cache, which sits underneath the worker.
+      location.replace(location.pathname + '?u=' + Date.now());
+    };
     setTimeout(() => { if (toast.parentNode) toast.remove(); }, 12000);
   });
 }
