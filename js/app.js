@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.273';
+const APP_VERSION = 'Beta 5.274';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -3456,6 +3456,39 @@ async function openWipeAltGroupsScreen(){
   };
 }
 
+// Undo a day's LOGGING - a different thing from Clear a Day, which removes
+// exercises from a plan. This deletes the sets recorded on a date so the day
+// goes back to unlogged, for the case where something was logged by mistake,
+// or against the wrong day, or a session needs redoing.
+async function openResetDayLogging(dateStr, label){
+  const userData = { user: await getCurrentUser() };
+  if (!userData.user) return;
+  const r = await withTimeout(
+    supabaseClient.from('sets').select('id').eq('user_id', userData.user.id).eq('logged_at', dateStr), 15000);
+  if (r.__timeout || r.error){ alert("Couldn't check that day - try again."); return; }
+  const count = (r.data || []).length;
+  if (!count){ alert(`Nothing is logged on ${label}.`); return; }
+  showConfirmDialog(
+    `Deletes ${count} set${count===1?'':'s'} logged on ${label}. The exercises stay on your plan - only the logged sets go, and this can't be undone.`,
+    async () => {
+      const del = await withBulkRetry(() => withTimeout(
+        supabaseClient.from('sets').delete().eq('user_id', userData.user.id).eq('logged_at', dateStr), 20000));
+      if (del && del.error){ alert("Couldn't clear it - nothing was deleted. Usually a dropped connection; try again."); return; }
+      // Every cached view is keyed to what was logged, so all of it is wrong now.
+      invalidateTrackSnapshots();
+      warmInvalidate();
+      // A session covering that day is meaningless once its sets are gone.
+      try {
+        const sess = readSession();
+        if (sess && sess.date === dateStr) writeSession(null);
+        localStorage.removeItem(`zealift_session_done_${dateStr}_${state.selectedDay}`);
+      } catch(e){}
+      renderTrack();
+    },
+    { title: `Reset ${label}?`, danger: true, confirmLabel: `Delete ${count} set${count===1?'':'s'}` }
+  );
+}
+
 async function openClearDayScreen(){
   const overlay = document.createElement('div');
   overlay.className = 'overlay-screen';
@@ -5159,12 +5192,15 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   // obvious place in the app for ideas - and it was showing nothing at all,
   // because the normal suggestion engine needs existing exercises to work
   // from and an empty day has none.
-  // Sits directly above the toolbar. Only offered on today - guiding someone
-  // through a day they're merely browsing makes no sense - and only when
-  // there's something left to do.
+  // Sits directly above the toolbar, offered whenever there's something left
+  // to do.
   const remaining = visibleExercises.filter(ex => !ex.loggedToday && !ex.completeVia);
   const resumable = readSession();
-  const sessionStartHtml = (headerStats.targetDateIsToday && remaining.length >= 2)
+  // Deliberately NOT gated on the selected weekday being today. Working
+  // Thursday's plan on a Wednesday is normal, and sets are recorded against
+  // the real date either way - so the only thing that matters is whether
+  // there's anything left to do on the plan you're looking at.
+  const sessionStartHtml = remaining.length >= 2
     ? `<div style="padding:10px 18px 0 18px;">
         <button class="btn-primary" id="startSessionBtn" style="width:100%; display:flex; align-items:center; justify-content:center; gap:8px;">
           <span style="font-family:'Bebas Neue',sans-serif; font-size:16px; letter-spacing:0.8px;">${resumable ? 'RESUME SESSION' : 'START SESSION'}</span>
@@ -5222,6 +5258,9 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
         <div style="padding:8px 18px 0 18px; display:flex; gap:8px; flex-wrap:wrap;">
           ${isAnyDay(state.selectedDay) && workingExercises.length > 0 ? `<button id="toolbarClearAnyBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:var(--panel); border:1px solid var(--line); color:var(--slate);">
             <span style="font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px;">CLEAR</span>
+          </button>` : ''}
+          ${headerStats.setsToday > 0 ? `<button id="toolbarResetDayBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:var(--panel); border:1px solid var(--line); color:var(--slate);">
+            <span style="font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px;">RESET DAY</span>
           </button>` : ''}
           <button id="toolbarTimerBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:rgba(255,107,26,0.10); border:1px solid rgba(255,107,26,0.45); color:var(--flame);">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg>
@@ -5389,6 +5428,16 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   if (retryBtn) retryBtn.onclick = () => { state.exercises = []; renderTrack(); };
   const clearLocBtn = document.getElementById('clearLocationBtn');
   if (clearLocBtn) clearLocBtn.onclick = () => openLocationPicker(allLocations, currentLocationId);
+  const resetDayBtn = document.getElementById('toolbarResetDayBtn');
+  if (resetDayBtn) resetDayBtn.onclick = () => {
+    // Targets the date the sets were actually RECORDED against, which for a
+    // future-day plan is today rather than that weekday's date - otherwise
+    // it would try to clear a day nothing was ever written to.
+    const info = targetDateInfo();
+    const dateStr = info.doneDateStr;
+    const label = dateStr === todayStr() ? 'today' : formatLoggedDate(dateStr);
+    openResetDayLogging(dateStr, label);
+  };
   const startSessBtn = document.getElementById('startSessionBtn');
   if (startSessBtn) startSessBtn.onclick = () => {
     if (readSession()) renderSessionScreen();

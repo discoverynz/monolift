@@ -1,5 +1,5 @@
-const CACHE_NAME = 'monolift-v324';
-const SHELL = ['./', './index.html', './css/styles.css?v=324', './js/app.js?v=324', './js/supabase-client.js?v=324', './manifest.json'];
+const CACHE_NAME = 'monolift-v325';
+const SHELL = ['./', './index.html', './css/styles.css?v=325', './js/app.js?v=325', './js/supabase-client.js?v=325', './manifest.json'];
 
 // True until this worker has served one navigation. A newly-activated worker
 // means a deploy just happened, and the HTML sitting in the old cache points
