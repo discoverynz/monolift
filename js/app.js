@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.272';
+const APP_VERSION = 'Beta 5.273';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -5199,6 +5199,7 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
           </h1>
           ${buildVolumeRaceHtml(headerStats)}
           ${(() => { const t = tonnageComparison(headerStats.volumeKg); return t ? `<div class="small" style="color:var(--slate); margin-top:6px;">${t.icon} ${t.text} moved today.</div>` : ''; })()}
+          <div class="quote">"${q.t}" — ${q.a}</div>
 
         </div>
         <div style="display:flex; margin:14px 18px 0 18px; border-radius:14px; overflow:hidden;
@@ -16024,10 +16025,9 @@ function buildVolumeRaceHtml(hs){
   const now = hs.volumeKg || 0;
   // Nothing to race against. Say so plainly rather than inventing a target
   // out of a week where nothing was logged.
-  if (last === null || last <= 0){
-    if (now <= 0) return '';
-    return `<div style="margin-top:8px; font-size:11.5px; color:var(--slate);">${now.toLocaleString()}kg today — first time on this day, so this becomes the mark to beat.</div>`;
-  }
+  // Nothing to race against. Say nothing rather than narrating the absence -
+  // the volume figure is already on screen directly above this.
+  if (last === null || last <= 0) return '';
   const pct = Math.min(100, Math.round((now / last) * 100));
   const beaten = now >= last;
   const remaining = Math.max(0, last - now);
