@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.255';
+const APP_VERSION = 'Beta 5.256';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1693,7 +1693,13 @@ function hasExplicitCurrentLocation(){
 // Single source of truth for "which location should filter/tagging use right
 // now" - respects an explicit Anywhere pick, falls back to default otherwise.
 function effectiveLocationId(){
+  // An explicit pick always wins, even during a trip - if someone has
+  // deliberately said where they are, Trip Mode has no business overriding
+  // it. It only supplies the DEFAULT, replacing the home gym default that
+  // would otherwise be wrong for the entire trip.
   if (hasExplicitCurrentLocation()) return getCurrentLocationId();
+  const trip = getTripMode();
+  if (trip && trip.locationId) return getCurrentLocationId() || trip.locationId;
   return getCurrentLocationId() || getDefaultLocationId();
 }
 function getDefaultLocationId(){ return localStorage.getItem('zealift_default_location') || null; }
@@ -1732,6 +1738,41 @@ function isAvailableAtLocation(ex, locationId){
 // have a stale location tag from whichever gym the user was at that day, and
 // without this override it would stay invisible everywhere else forever -
 // the exact bug this exists to close, for both old and new data.
+// ---------- TRIP MODE ----------
+// Switching location already filters the exercise list, but it doesn't
+// change what "progress" means, doesn't end itself, and doesn't know that
+// two weeks of bands beating your machine PRs was never on the table. Trip
+// Mode is the difference between the app tolerating a trip and understanding
+// one. Stored locally rather than in the database on purpose - it's about
+// where this phone is right now, not a property of the account.
+const TRIP_KEY = 'zealift_trip_mode';
+function getTripMode(){
+  try {
+    const raw = localStorage.getItem(TRIP_KEY);
+    if (!raw) return null;
+    const t = JSON.parse(raw);
+    // Ends itself on the return date rather than lingering until someone
+    // remembers - a mode you have to remember to turn off is one that
+    // silently misreports your training for weeks after you're home.
+    if (t.endDate && todayStr() > t.endDate){ localStorage.removeItem(TRIP_KEY); return null; }
+    return t;
+  } catch(e){ return null; }
+}
+function setTripMode(t){
+  try {
+    if (t) localStorage.setItem(TRIP_KEY, JSON.stringify(t));
+    else localStorage.removeItem(TRIP_KEY);
+  } catch(e){}
+  invalidateTrackSnapshots();
+  warmInvalidate();
+}
+function isTripActive(){ return !!getTripMode(); }
+function tripDayCount(){
+  const t = getTripMode();
+  if (!t || !t.startDate) return 0;
+  return Math.max(1, Math.round((new Date(todayStr()+'T00:00:00') - new Date(t.startDate+'T00:00:00')) / 86400000) + 1);
+}
+
 function isAvailableOnSelectedDay(ex, locationId){
   if (isAnyDay(state.selectedDay)) return true;
   return isAvailableAtLocation(ex, locationId);
@@ -2232,8 +2273,14 @@ function exerciseRow(ex){
   const splitInfo = ex.splitLabel ? SPLIT_TAG_STYLE[ex.splitLabel] : null;
   const splitTag = splitInfo ? `<span style="font-size:9px; padding:2px 5px; border-radius:4px; margin-left:5px; background:${splitInfo[0]}26; color:${splitInfo[0]};">${splitInfo[1]}</span>` : '';
 
+  // During a trip, "same weight a few sessions running" is the goal, not a
+  // problem - you're working with packed kit and holding ground is the win.
+  // Nudging someone to add load they don't have access to is just noise, so
+  // the note flips to acknowledging maintenance instead of chasing gains.
   const stagnantNote = ex.stagnant
-    ? `<div style="font-size:10.5px; color:#E8A33D; margin-top:8px; display:flex; align-items:center; gap:5px;"><span>📈</span>Same weight a few sessions running — try increasing</div>`
+    ? (isTripActive()
+        ? `<div style="font-size:10.5px; color:var(--good); margin-top:8px; display:flex; align-items:center; gap:5px;"><span>✈️</span>Holding steady while you're away — that's the win right now</div>`
+        : `<div style="font-size:10.5px; color:#E8A33D; margin-top:8px; display:flex; align-items:center; gap:5px;"><span>📈</span>Same weight a few sessions running — try increasing</div>`)
     : '';
   // Band equivalent of the stagnation note above - climbing reps on an
   // unchanged band is the band version of "time to increase", since there's
@@ -4972,6 +5019,7 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
         <div class="day-strip">${dayChips}</div>
         <div class="header">
           ${headerStats.targetDateIsToday ? `<div class="greeting-line">${buildGreeting(getDisplayName())}</div>` : ''}
+          ${isTripActive() ? `<div style="font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--brass); letter-spacing:1px; text-transform:uppercase; margin-bottom:4px;">✈️ Trip Mode · Day ${tripDayCount()}</div>` : ''}
           <div class="eyebrow">${dayLabelOf(state.selectedDay).toUpperCase()}</div>
           <h1 id="dayTypeHeader" style="cursor:pointer;${dayTypeUnavailable ? ' color:#E8A33D;' : ''}">${effectiveDayTypeLabel}</h1>
           <div class="quote">"${q.t}" — ${q.a}</div>
@@ -14824,6 +14872,77 @@ async function performDaySwap(dayA, dayB){
   }
 }
 
+async function openTripModeScreen(){
+  const trip = getTripMode();
+  const locs = await loadLocations();
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  let pickedLoc = trip ? trip.locationId : null;
+  let endDate = trip ? trip.endDate : '';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeTrip">✕</button><h1>Trip Mode</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll">
+      ${trip ? `
+        <div style="margin:8px 18px 14px 18px; background:rgba(201,162,39,0.1); border:1px solid rgba(201,162,39,0.35); border-radius:13px; padding:14px;">
+          <div style="font-family:'Oswald',sans-serif; font-size:15px; color:var(--brass);">✈️ Day ${tripDayCount()} away</div>
+          <div class="small" style="color:var(--slate); margin-top:4px; line-height:1.55;">
+            Training against <b style="color:var(--chalk);">${(locs.find(l => l.id === trip.locationId) || {}).name || 'your trip location'}</b>${trip.endDate ? ` · ends ${formatLoggedDate(trip.endDate)}` : ''}
+          </div>
+        </div>
+        <button class="btn-primary" id="endTripBtn" style="width:calc(100% - 36px); margin:0 18px 18px 18px; background:var(--panel); color:var(--chalk); border:1px solid var(--line);">End Trip Mode</button>
+        <div class="small" style="padding:0 18px 18px 18px; color:var(--slate); line-height:1.55;">Ending it brings back your normal gyms and goes back to judging progress against your usual loads.</div>
+      ` : `
+        <div class="small" style="padding:8px 18px 14px 18px; color:var(--slate); line-height:1.6;">
+          For when you're away from your gyms and working with what you packed. Your plan isn't changed or deleted - it's just not what you're shown.
+        </div>
+        <div class="field-label">Where you'll be training</div>
+        <div class="chip-row" id="tripLocRow" style="padding:0 18px 10px 18px;">
+          ${locs.map(l => `<div class="chip" data-loc="${l.id}">${l.name}</div>`).join('') || '<div class="small" style="color:var(--slate);">No locations yet - add one under Me → Location first.</div>'}
+        </div>
+        <div class="field-label">Coming back <span class="opt">optional</span></div>
+        <div class="field-card"><input class="field-input" id="tripEnd" type="date" style="font-size:15px;"></div>
+        <div class="small" style="padding:0 18px 14px 18px; color:var(--slate); line-height:1.55;">Set this and Trip Mode ends itself on that date. Leave it blank and you'll turn it off yourself.</div>
+        <div class="field-label">While it's on</div>
+        <div style="margin:0 18px 8px 18px; background:var(--panel); border-radius:12px; padding:13px;">
+          <div class="small" style="color:var(--chalk); line-height:1.7;">
+            · That location becomes the default, so you're not re-picking it every session.<br>
+            · Progress is judged on <b>holding ground</b>, not adding load. Two weeks of bands was never going to beat your machine numbers, and reading it as regression would be wrong.<br>
+            · Your streak keeps running on the same rules - a rest day is still fine.
+          </div>
+        </div>
+        <button class="save-btn" id="startTripBtn" style="margin:18px;">Start Trip Mode</button>
+      `}
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeTrip').onclick = () => overlay.remove();
+  const endBtn = overlay.querySelector('#endTripBtn');
+  if (endBtn) endBtn.onclick = () => {
+    setTripMode(null);
+    overlay.remove();
+    renderMe();
+    if (state.currentTab === 'track') renderTrack();
+  };
+  overlay.querySelectorAll('#tripLocRow .chip[data-loc]').forEach(c => {
+    c.onclick = () => {
+      pickedLoc = c.dataset.loc;
+      overlay.querySelectorAll('#tripLocRow .chip').forEach(x => x.classList.remove('active'));
+      c.classList.add('active');
+    };
+  });
+  const startBtn = overlay.querySelector('#startTripBtn');
+  if (startBtn) startBtn.onclick = () => {
+    if (!pickedLoc){ alert('Pick where you\'ll be training first.'); return; }
+    const endVal = overlay.querySelector('#tripEnd').value;
+    setTripMode({ locationId: pickedLoc, startDate: todayStr(), endDate: endVal || null });
+    // Clear any stale explicit pick so the trip default actually takes
+    // effect immediately rather than on the next midnight reset.
+    setCurrentLocationId(pickedLoc);
+    overlay.remove();
+    renderMe();
+    if (state.currentTab === 'track') renderTrack();
+  };
+}
+
 async function renderMe(){
   const userData = { user: await getCurrentUser() };
   const email = userData && userData.user ? userData.user.email : '';
@@ -14837,6 +14956,10 @@ async function renderMe(){
         <div class="account-card">
           <div class="avatar">${initial}</div>
           <div><div class="account-email">${email}</div><div class="account-tag">● Signed in</div></div>
+        </div>
+        <div class="me-item" id="tripModeBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;${isTripActive() ? ' border:1px solid rgba(201,162,39,0.4);' : ''}">
+          <div><div>${isTripActive() ? '✈️ Trip Mode — on' : 'Trip Mode'}</div><div class="small" style="color:var(--slate); margin-top:2px;">${isTripActive() ? `Day ${tripDayCount()} away. Tap to end or review.` : 'Away from your gyms? Train against what you packed.'}</div></div>
+          <div class="chev" style="margin-top:2px;">›</div>
         </div>
         <div class="me-item" id="displayNameBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
           <div><div>Your Name</div><div class="small" style="color:var(--slate); margin-top:2px;">${getDisplayName() ? `Greeting you as "${getDisplayName()}"` : 'Add one to personalise your daily greeting'}</div></div>
@@ -14878,6 +15001,8 @@ async function renderMe(){
       ${renderTabbar()}
     </div>`;
   attachShellHandlers();
+  const tripBtn = document.getElementById('tripModeBtn');
+  if (tripBtn) tripBtn.onclick = () => openTripModeScreen();
   const dnBtn = document.getElementById('displayNameBtn');
   if (dnBtn) dnBtn.onclick = () => {
     promptText({
