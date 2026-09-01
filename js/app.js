@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.266';
+const APP_VERSION = 'Beta 5.267';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -14524,7 +14524,19 @@ async function tallyFullPlan(){
     fetchAllExercisesCompat(userData.user.id),
     loadExerciseDB()
   ]);
-  const exercises = allExercises.filter(ex => ex.weekday !== null && ex.weekday !== undefined);
+  // Sorted by name so an alt group always elects the SAME member to
+  // represent its slot. Without this, whichever row the database happened to
+  // return first won - arbitrary, and unstable across loads. Broad muscle is
+  // almost always identical across alts so the bars never showed it, but the
+  // heat map's finer split does: a group holding Bench Press (Mid Chest) and
+  // Incline Press (Upper Chest) would light a different region depending on
+  // row order, and could flip between two refreshes with nothing changed.
+  // Alphabetical is still an arbitrary choice - it just stops being a
+  // changing one.
+  const exercises = allExercises
+    .filter(ex => ex.weekday !== null && ex.weekday !== undefined)
+    .slice()
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
   const tally = {};
   const planFine = [];
