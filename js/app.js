@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.267';
+const APP_VERSION = 'Beta 5.268';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -4705,7 +4705,7 @@ async function fetchTrackHeaderStats(){
   const [targetResult, streakResult] = await Promise.all([
     withTimeout(
           supabaseClient.from('sets')
-            .select('weight, weight_unit, weight_type, reps, num_sets, logged_at')
+            .select('weight, weight_unit, weight_type, reps, num_sets, logged_at, created_at')
             .eq('user_id', userData.user.id).eq('logged_at', targetDateStr),
           15000),
     withTimeout(
@@ -4715,6 +4715,10 @@ async function fetchTrackHeaderStats(){
   ]);
   const targetSets = (targetResult.__timeout || targetResult.error) ? [] : (targetResult.data || []);
   const streakSets = (streakResult.__timeout || streakResult.error) ? [] : (streakResult.data || []);
+  // Stashed for session heat, which needs the individual timestamps rather
+  // than the aggregate this function otherwise returns. Only meaningful for
+  // today - heat is about the session happening right now.
+  state.todaysSetsRaw = targetDateIsToday ? targetSets : [];
   const setsToday = targetSets.reduce((sum, s) => sum + (Number(s.num_sets) || 1), 0);
   let volumeKg = 0;
   targetSets.forEach(s => {
@@ -5155,6 +5159,9 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   // obvious place in the app for ideas - and it was showing nothing at all,
   // because the normal suggestion engine needs existing exercises to work
   // from and an empty day has none.
+  const ghostRaceHtml = buildGhostRaceHtml(headerStats, visibleExercises);
+  const mainEventHtml = buildMainEventHtml(visibleExercises);
+  const sessionHeatHtml = buildSessionHeatHtml(computeSessionHeat(state.todaysSetsRaw || []));
   const tripIdeasHtml = ((isTripActive() || isAnyDay(state.selectedDay)) && visibleExercises.length === 0)
     ? buildTripIdeasHtml(effectiveDayTypeLabel) : '';
 
@@ -5173,6 +5180,7 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
             <span style="color:var(--slate); font-weight:400;">${dayLabelOf(state.selectedDay)}</span>${effectiveDayTypeLabel ? ` <span style="color:var(--slate); font-weight:400;">—</span> ${effectiveDayTypeLabel}` : ''}
           </h1>
           ${buildVolumeRaceHtml(headerStats)}
+          ${(() => { const t = tonnageComparison(headerStats.volumeKg); return t ? `<div class="small" style="color:var(--slate); margin-top:6px;">${t.icon} ${t.text} moved today.</div>` : ''; })()}
           <div class="quote">"${q.t}" — ${q.a}</div>
         </div>
         <div style="display:flex; margin:14px 18px 0 18px; border-radius:14px; overflow:hidden;
@@ -5210,6 +5218,9 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
           <div style="height:100%; width:${pct}%; border-radius:3px; background:linear-gradient(90deg, #FF7A2E, #FFAA5C); box-shadow:0 0 10px rgba(255,107,26,0.5);"></div>
         </div>
         ${workingExercises.length > 0 ? groupByToggleHtml(groupBy) : ''}
+        ${ghostRaceHtml}
+        ${sessionHeatHtml}
+        ${mainEventHtml}
         ${listHtml}
         <div id="suggestionsSlot">${suggestionsHtml}</div>
         ${tripIdeasHtml}
@@ -5358,6 +5369,8 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   if (retryBtn) retryBtn.onclick = () => { state.exercises = []; renderTrack(); };
   const clearLocBtn = document.getElementById('clearLocationBtn');
   if (clearLocBtn) clearLocBtn.onclick = () => openLocationPicker(allLocations, currentLocationId);
+  const mainCard = document.getElementById('mainEventCard');
+  if (mainCard) mainCard.onclick = () => openLogForm(mainCard.dataset.exId, mainCard.dataset.exName);
   document.querySelectorAll('.trip-idea-add').forEach(btn => {
     btn.onclick = async () => {
       const idea = HOME_GYM_IDEAS.find(i => i.name === btn.dataset.idea);
@@ -15536,6 +15549,180 @@ function detectMilestones(stats, list){
   const prs = (list || []).filter(ex => ex.showPr).length;
   if (prs >= 3) out.push({ icon:'🏆', text:`${prs} personal records in one session` });
   return out;
+}
+
+// Volume as an object you can picture. "4,240kg" is the headline number and
+// nobody has a feel for it - a grand piano, everyone does. Ordered heaviest
+// first so the first match found is the largest thing genuinely beaten.
+const TONNAGE_THINGS = [
+  [12000, '🚌', 'a city bus'],
+  [8000,  '🐘', 'an elephant'],
+  [5400,  '🐋', 'a killer whale'],
+  [4000,  '🎹', 'a grand piano'],
+  [2500,  '🦏', 'a rhino'],
+  [1600,  '🚗', 'a small car'],
+  [900,   '🐂', 'a bison'],
+  [450,   '🏍️', 'a motorbike'],
+  [200,   '🛋️', 'a sofa'],
+  [80,    '🐕', 'a big dog'],
+];
+function tonnageComparison(kg){
+  if (!kg || kg < 80) return null;
+  const hit = TONNAGE_THINGS.find(t => kg >= t[0]);
+  if (!hit) return null;
+  const mult = kg / hit[0];
+  const phrase = mult >= 1.9 ? `${Math.floor(mult)}× ${hit[2]}` : `about ${hit[2]}`;
+  return { icon: hit[1], text: phrase };
+}
+
+// The day's main event. A flat list of eight exercises has no focal point,
+// but a session genuinely has one lift that matters most - and the app
+// already knows which. Picks the heaviest working weight, since that's the
+// one that decides whether the day went well.
+function pickMainEvent(list){
+  const candidates = (list || []).filter(ex => !ex.loggedToday && !ex.completeVia);
+  if (candidates.length < 3) return null; // too short a day to have an undercard
+  let best = null, bestKg = 0;
+  candidates.forEach(ex => {
+    const s = ex.lastSet || ex.maxSet;
+    if (!s) return;
+    const w = Number(s.weight);
+    if (!isFinite(w) || w <= 0) return;
+    const kg = (s.weight_unit === 'lb' ? w * 0.453592 : w) * (s.weight_type === 'per' ? 2 : 1);
+    if (kg > bestKg){ bestKg = kg; best = ex; }
+  });
+  return best;
+}
+
+function buildMainEventHtml(list){
+  const ex = pickMainEvent(list);
+  if (!ex) return '';
+  const s = ex.lastSet || ex.maxSet;
+  const label = s ? formatSetValue(s) : '';
+  const near = ex.maxSet && ex.lastSet && Number(ex.lastSet.weight) >= Number(ex.maxSet.weight);
+  return `
+    <div id="mainEventCard" data-ex-id="${ex.id}" data-ex-name="${(ex.name||'').replace(/"/g,'&quot;')}"
+      style="position:relative; overflow:hidden; margin:14px 18px 0 18px; cursor:pointer;
+      background:linear-gradient(155deg, rgba(255,107,26,0.16), rgba(232,73,42,0.03));
+      border:1px solid rgba(255,107,26,0.45); border-radius:16px; padding:15px;">
+      <div style="position:absolute; right:-38px; top:-38px; width:120px; height:120px; border-radius:50%;
+        background:radial-gradient(circle, rgba(255,107,26,0.22), transparent 70%); pointer-events:none;"></div>
+      <div style="font-size:11px; color:var(--flame); font-weight:600;">Main event</div>
+      <div style="font-family:'Bebas Neue',sans-serif; font-size:27px; line-height:1; margin:5px 0 3px 0;">${ex.name}</div>
+      <div class="small" style="color:var(--slate);">${label ? `${label} last time. ` : ''}${near ? 'One clean set beats your best.' : 'The lift that decides today.'}</div>
+    </div>`;
+}
+
+// Recovery as a battery rather than a list of dates. A level that drains and
+// refills is exactly what recovery IS, and everyone reads a battery with no
+// legend at all - which "chest: 2 days ago" has never managed.
+function buildChargeCellsHtml(recovery){
+  if (!recovery || !recovery.length) return '';
+  const rows = recovery.filter(r => r.days !== null).slice(0, 5);
+  if (!rows.length) return '';
+  const cell = (r) => {
+    // Full charge at the muscle's own ideal gap, so a slow-recovering group
+    // isn't judged against the same clock as a fast one.
+    const pct = Math.max(0, Math.min(1, r.days / (r.idealGap || 3)));
+    const lit = Math.max(1, Math.round(pct * 5));
+    const cls = pct >= 0.85 ? 'on' : pct >= 0.5 ? 'warn' : 'low';
+    const bars = Array.from({length:5}, (_,i) =>
+      `<i style="flex:1; border-radius:1.5px; background:${i < lit ? (cls==='on'?'var(--good)':cls==='warn'?'var(--brass)':'var(--flame)') : '#232529'};"></i>`).join('');
+    const word = pct >= 1 ? 'full' : pct >= 0.85 ? 'ready' : pct >= 0.5 ? `${Math.max(1, r.idealGap - r.days)}d` : 'fried';
+    return `<div style="display:flex; align-items:center; gap:11px; margin-bottom:9px;">
+      <span class="small" style="width:88px; flex-shrink:0; color:var(--chalk);">${BALANCE_LABELS[r.muscle] || r.muscle}</span>
+      <div style="flex:1; height:16px; border-radius:4px; border:1.5px solid #3a3d42; background:#141517; display:flex; gap:2px; padding:2px;">${bars}</div>
+      <span class="small" style="width:52px; text-align:right; flex-shrink:0; color:var(--slate); font-size:10.5px;">${word}</span>
+    </div>`;
+  };
+  return `<div style="margin:0 18px 8px 18px; background:var(--panel); border-radius:14px; padding:14px 13px 6px 13px;">
+    <div class="small" style="color:var(--slate); margin-bottom:11px;">Recovery charge</div>
+    ${rows.map(cell).join('')}
+  </div>`;
+}
+
+// Live ghost race. The existing volume bar compares totals at the END of a
+// day; this compares where you are RIGHT NOW against where last week's
+// session was at the same point. Every gym app tells you how it went
+// afterwards, when nothing can be done - this makes the middle of a session
+// have stakes.
+function buildGhostRaceHtml(hs, list){
+  if (!hs || !hs.targetDateIsToday) return '';
+  const last = hs.lastWeekVolumeKg;
+  if (last === null || last <= 0) return '';
+  const total = (list || []).length;
+  const done = (list || []).filter(ex => ex.loggedToday || ex.completeVia).length;
+  // Only mid-session. Before you start there's nothing to race, and once
+  // you're finished the session summary is the right place for the verdict.
+  if (done === 0 || done >= total || total < 2) return '';
+  const now = hs.volumeKg || 0;
+  // Where last week stood at this same fraction of the session, which is the
+  // only fair comparison - comparing a part-done session against a whole one
+  // would always read as losing.
+  const ghostNow = Math.round(last * (done / total));
+  const delta = now - ghostNow;
+  const ahead = delta >= 0;
+  const pct = Math.max(4, Math.min(100, Math.round((now / Math.max(1, last)) * 100)));
+  const ghostPct = Math.max(2, Math.min(100, Math.round((ghostNow / Math.max(1, last)) * 100)));
+  return `
+    <div style="margin:12px 18px 0 18px; background:linear-gradient(150deg,#1e2024,#171819); border:1px solid #2a2c30; border-radius:15px; padding:13px 14px 14px 14px;">
+      <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:13px;">
+        <span class="small" style="color:var(--slate);">Against last week, same point</span>
+        <span style="font-family:'Bebas Neue',sans-serif; font-size:24px; line-height:1; color:${ahead ? 'var(--good)' : 'var(--flame)'};">${ahead ? '+' : ''}${delta.toLocaleString()}kg</span>
+      </div>
+      <div style="position:relative; height:32px; border-radius:8px; background:#141517; overflow:hidden;">
+        <div style="position:absolute; inset:0 auto 0 0; width:${pct}%; display:flex; align-items:center; padding-left:9px;
+          background:linear-gradient(90deg, ${ahead ? 'rgba(143,191,122,.9), rgba(143,191,122,.3)' : 'rgba(255,107,26,.9), rgba(255,107,26,.3)'});
+          border-right:2px solid ${ahead ? 'var(--good)' : 'var(--flame)'};
+          font-size:10.5px; font-weight:600; color:#17181A; white-space:nowrap; transition:width .6s cubic-bezier(.2,.8,.3,1);">
+          ${now.toLocaleString()}kg · ${done} of ${total}
+        </div>
+        <div style="position:absolute; top:-2px; bottom:-2px; left:${ghostPct}%; width:2px;
+          background:repeating-linear-gradient(180deg,#8C8E94 0 4px,transparent 4px 8px);"></div>
+      </div>
+    </div>`;
+}
+
+// Session heat. Density of work, cooling while you rest.
+//
+// The obvious version of this rewards rushing, which is actively bad advice -
+// a heavy compound NEEDS three minutes and an accessory does not. So the
+// cooling window scales with how heavy the last set actually was: a big
+// single buys far more rest before heat decays than a light isolation set.
+// Without that it's a fun mechanic that quietly pushes you to train worse.
+function computeSessionHeat(todaysSets){
+  if (!todaysSets || todaysSets.length < 2) return null;
+  const withTime = todaysSets.filter(s => s.created_at).sort((a,b) => new Date(a.created_at) - new Date(b.created_at));
+  if (withTime.length < 2) return null;
+  const lastSet = withTime[withTime.length - 1];
+  const minsSince = (Date.now() - new Date(lastSet.created_at)) / 60000;
+  const w = Number(lastSet.weight);
+  const kg = isFinite(w) && w > 0 ? (lastSet.weight_unit === 'lb' ? w * 0.453592 : w) : 0;
+  // Heavier work earns a longer window before it counts as cooling.
+  const allowedRest = kg >= 80 ? 5 : kg >= 40 ? 3.5 : 2.5;
+  const span = (new Date(lastSet.created_at) - new Date(withTime[0].created_at)) / 60000;
+  const pace = span > 0 ? withTime.length / span : 0; // sets per minute
+  const heat = Math.max(0, Math.min(1, (pace / 0.35) * Math.max(0, 1 - (minsSince / (allowedRest * 2)))));
+  return { heat, minsSince, allowedRest, sets: withTime.length, span: Math.round(span) };
+}
+
+function buildSessionHeatHtml(h){
+  if (!h || h.sets < 3) return '';
+  const pct = Math.round(h.heat * 100);
+  const word = pct >= 70 ? 'Hot' : pct >= 40 ? 'Warm' : 'Cooling';
+  const colour = pct >= 70 ? 'var(--flame)' : pct >= 40 ? 'var(--brass)' : 'var(--slate)';
+  const left = Math.max(0, h.allowedRest - h.minsSince);
+  return `
+    <div style="margin:10px 18px 0 18px; background:var(--panel); border-radius:14px; padding:13px 14px;">
+      <div style="display:flex; justify-content:space-between; align-items:baseline;">
+        <span class="small">Session heat</span>
+        <span style="font-family:'Bebas Neue',sans-serif; font-size:19px; color:${colour};">${word}</span>
+      </div>
+      <div style="height:9px; border-radius:5px; background:#141517; overflow:hidden; margin:9px 0 7px 0;">
+        <div style="height:100%; width:${pct}%; border-radius:5px; background:linear-gradient(90deg,#C9A227,#FF6B1A,#E8261A); transition:width .6s ease;"></div>
+      </div>
+      <div class="small" style="color:var(--slate);">${h.sets} sets in ${h.span} min.${left > 0.3 ? ` Stays hot for another ${Math.ceil(left)} min — heavier sets buy more rest.` : ' Next set brings it back up.'}</div>
+    </div>`;
 }
 
 function buildVolumeRaceHtml(hs){
