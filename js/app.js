@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.277';
+const APP_VERSION = 'Beta 5.278';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -16282,8 +16282,10 @@ async function renderMe(){
         </div>
         <div class="section-label">App</div>
         <div class="me-item" id="shareAppBtn"><div>Share MonoLift</div><div class="chev">›</div></div>
-        <div class="me-item" id="refreshAppBtn"><div>Refresh App</div><div class="chev">›</div></div>
-        <div class="me-item" id="updateAppBtn"><div>Check for Updates</div><div class="chev">›</div></div>
+        <div class="me-item" id="updateAppBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+          <div><div>Update App</div><div class="small" style="color:var(--slate); margin-top:2px;">Running ${APP_VERSION} — clears every cache and reloads fresh</div></div>
+          <div class="chev" style="margin-top:2px;">›</div>
+        </div>
         <div class="me-item" id="signOutBtn"><div>Sign Out</div><div class="chev">›</div></div>
         <div style="text-align:center; padding:18px 0; color:var(--slate); font-family:'JetBrains Mono',monospace; font-size:10.5px;">MonoLift · ${APP_VERSION}</div>
       </div>
@@ -16320,10 +16322,13 @@ async function renderMe(){
       prompt('Copy this link to share:', shareUrl);
     }
   };
-  document.getElementById('refreshAppBtn').onclick = () => { location.reload(); };
   document.getElementById('updateAppBtn').onclick = async () => {
     const btn = document.getElementById('updateAppBtn');
-    btn.querySelector('div').textContent = 'Updating…';
+    // Target the label specifically. querySelector('div') now matches the
+    // outer wrapper added for the version subtitle, so writing to it would
+    // wipe both lines rather than update the label.
+    const label = btn.querySelector('div > div');
+    if (label) label.textContent = 'Updating…';
     try {
       if ('serviceWorker' in navigator){
         const regs = await navigator.serviceWorker.getRegistrations();
@@ -16333,8 +16338,22 @@ async function renderMe(){
         const keys = await caches.keys();
         await Promise.all(keys.map(k => caches.delete(k)));
       }
+      // Clearing the service worker and its caches is not enough on its own.
+      // The browser's OWN http cache sits underneath, and location.reload()
+      // re-requests the same URL - which Safari will happily serve from
+      // there, handing back the same index.html that names the old
+      // app.js?v=. That is exactly why this button appeared to do nothing:
+      // it correctly removed everything it knew about, then reloaded into a
+      // copy it could not see.
+      //
+      // Refetching index.html with cache:'reload' forces a revalidation at
+      // the http layer too, so the navigation below lands on genuinely
+      // current HTML.
+      await fetch('./index.html', { cache: 'reload' }).catch(() => {});
     } catch(e){}
-    location.reload();
+    // A distinct URL rather than reload(), so nothing anywhere in the stack
+    // can answer it from a cached copy of the previous address.
+    location.replace(location.pathname + '?u=' + Date.now());
   };
   document.getElementById('signOutBtn').onclick = async () => {
     // Anything queued but not yet uploaded belongs to THIS account. Left in
