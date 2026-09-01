@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.261';
+const APP_VERSION = 'Beta 5.262';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -9751,12 +9751,18 @@ function setVolumeKg(weight, unit, weightType, reps, numSets){
 // reads as coming from their action rather than appearing at random.
 function celebrateLoggedSet(el, weight, unit, weightType, reps, numSets){
   const kg = setVolumeKg(weight, unit, weightType, reps, numSets);
-  let x = null, y = null;
+  // Horizontally centred on the screen rather than over the button that was
+  // tapped. A quick-save button sits at the right edge of a row, so floating
+  // from it put the number half off-screen and reading as a side-effect
+  // rather than the reward. Vertically it still rises from the row you
+  // actually logged, so it stays tied to the thing you did.
+  let y = null;
   if (el && el.getBoundingClientRect){
-    const r = el.getBoundingClientRect();
-    x = r.left + r.width / 2; y = r.top;
+    const row = el.closest ? (el.closest('.ex-card') || el) : el;
+    const r = row.getBoundingClientRect();
+    y = r.top + r.height / 2;
   }
-  floatSetReward(kg > 0 ? `+${Math.round(kg).toLocaleString()}kg` : null, x, y);
+  floatSetReward(kg > 0 ? `+${Math.round(kg).toLocaleString()}kg` : null, window.innerWidth / 2, y);
 }
 
 // Fires when the last remaining exercise on a day gets logged. The app has
@@ -9942,6 +9948,7 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
         <div class="chip-row" id="logLocationChipRow" style="padding:0;"></div>
       </div>
       <div id="guideArea" style="margin-bottom:18px;"></div>
+      <div id="sessionGhostArea" style="display:none;"></div>
       <div id="sameAsLastArea" style="margin-bottom:18px;"></div>
       <button class="save-btn" id="saveSetBtn" style="margin-bottom:18px;">Save Set</button>
       <div style="height:1px; background:var(--line); margin:0 18px 18px 18px;"></div>
@@ -10250,6 +10257,47 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
     }
   }
 
+  // SESSION GHOST. What you did the last time you trained this - shown while
+  // you're entering today's numbers, so there's always a version of yourself
+  // to race. Reuses the history query already running rather than adding
+  // another fetch, since it needs exactly the same rows.
+  function renderSessionGhost(sets){
+    const area = overlay.querySelector('#sessionGhostArea');
+    if (!area) return;
+    const today = todayStr();
+    // The most recent session that ISN'T today - comparing today against
+    // sets already logged today would just be racing yourself mid-workout.
+    const prior = (sets || []).filter(s => s.logged_at !== today);
+    if (!prior.length){ area.style.display = 'none'; return; }
+    const lastDate = prior[0].logged_at;
+    const lastSession = prior.filter(s => s.logged_at === lastDate);
+    // Best set of that session, by weight then reps - what you'd actually
+    // be trying to beat, not an arbitrary first row.
+    const best = lastSession.reduce((m, s) => {
+      const w = Number(s.weight) || 0, mw = m ? Number(m.weight) || 0 : -1;
+      if (w > mw || (w === mw && (Number(s.reps)||0) > (Number(m.reps)||0))) return s;
+      return m;
+    }, null);
+    if (!best) { area.style.display = 'none'; return; }
+    // formatSetValue is the app's own set formatter - it already handles
+    // bands, pins, levels, seconds and per-side correctly, so the ghost
+    // reads identically to the same set shown anywhere else.
+    // formatSetValue already appends sets/reps internally - adding
+    // formatSetsReps again here would print them twice.
+    const label = formatSetValue(best);
+    const daysAgo = Math.round((new Date(today+'T00:00:00') - new Date(lastDate+'T00:00:00')) / 86400000);
+    area.style.display = 'block';
+    area.innerHTML = `
+      <div style="margin:0 18px 14px 18px; background:rgba(255,255,255,0.02); border:1px dashed var(--line); border-radius:12px; padding:11px 13px;">
+        <div style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;">
+          <span style="font-family:'JetBrains Mono',monospace; font-size:9.5px; color:var(--slate); letter-spacing:1px; text-transform:uppercase;">👻 Last time</span>
+          <span style="font-size:10px; color:var(--slate);">${daysAgo === 1 ? 'yesterday' : daysAgo + ' days ago'}</span>
+        </div>
+        <div style="font-family:'Oswald',sans-serif; font-size:16px; color:var(--slate); margin-top:3px;">${label}</div>
+        <div style="font-size:10.5px; color:var(--flame); margin-top:3px;">Beat it.</div>
+      </div>`;
+  }
+
   async function loadHistory(){
     const userData = { user: await getCurrentUser() };
     const useMaster = getUseExerciseMasterFlag();
@@ -10291,6 +10339,7 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
     const list = overlay.querySelector('#historyList');
     if (result.__timeout || result.error){ list.innerHTML = '<div class="empty-state" style="padding:20px;">Could not load history.</div>'; return; }
     const sets = result.data || [];
+    renderSessionGhost(sets);
     if (sets.length === 0){
       list.innerHTML = '<div class="empty-state" style="padding:20px;">No history yet — this will be your first entry.</div>';
       return;
@@ -13925,6 +13974,71 @@ const MUSCLE_IDEAL_GAP_DAYS = {
   traps: 4.7, 'lower back': 4.7
 };
 
+// MUSCLE HEAT MAP. Two simplified body outlines - front and back - with each
+// region tinted by how much work it has taken this week. A ranked list makes
+// you read and compare numbers; a body makes a gap obvious at a glance,
+// which is the entire point of a balance screen.
+const HEATMAP_REGIONS = {
+  front: [
+    { m:'shoulders',  d:'M52,62 q-13,2 -16,15 q9,5 17,2 z M108,62 q13,2 16,15 q-9,5 -17,2 z' },
+    { m:'chest',      d:'M62,64 q18,-6 36,0 l3,22 q-21,7 -42,0 z' },
+    { m:'biceps',     d:'M36,80 q-6,16 -3,30 q9,2 13,-4 q1,-15 -2,-27 z M124,80 q6,16 3,30 q-9,2 -13,-4 q-1,-15 2,-27 z' },
+    { m:'forearms',   d:'M31,113 q-4,17 -1,30 q8,2 12,-3 q1,-15 -1,-28 z M129,113 q4,17 1,30 q-8,2 -12,-3 q-1,-15 1,-28 z' },
+    { m:'abdominals', d:'M64,88 q16,5 32,0 l-3,40 q-13,4 -26,0 z' },
+    { m:'quadriceps', d:'M63,132 q13,4 26,0 l-3,52 q-10,3 -20,0 z' },
+    { m:'calves',     d:'M68,188 q10,3 18,0 l-2,34 q-7,2 -14,0 z' },
+  ],
+  back: [
+    { m:'traps',      d:'M60,58 q20,-6 40,0 l-6,20 q-14,4 -28,0 z' },
+    { m:'shoulders',  d:'M52,62 q-13,2 -16,15 q9,5 17,2 z M108,62 q13,2 16,15 q-9,5 -17,2 z' },
+    { m:'lats',       d:'M58,80 q22,6 44,0 l-5,32 q-17,5 -34,0 z' },
+    { m:'triceps',    d:'M36,80 q-6,16 -3,30 q9,2 13,-4 q1,-15 -2,-27 z M124,80 q6,16 3,30 q-9,2 -13,-4 q-1,-15 2,-27 z' },
+    { m:'forearms',   d:'M31,113 q-4,17 -1,30 q8,2 12,-3 q1,-15 -1,-28 z M129,113 q4,17 1,30 q-8,2 -12,-3 q-1,-15 1,-28 z' },
+    { m:'lower back', d:'M65,113 q15,4 30,0 l-3,18 q-12,3 -24,0 z' },
+    { m:'glutes',     d:'M62,132 q18,5 36,0 l-3,22 q-15,4 -30,0 z' },
+    { m:'hamstrings', d:'M64,155 q16,4 32,0 l-4,32 q-12,3 -24,0 z' },
+    { m:'calves',     d:'M68,188 q10,3 18,0 l-2,34 q-7,2 -14,0 z' },
+  ]
+};
+
+function buildMuscleHeatmapHtml(sets){
+  const counts = {};
+  (sets || []).forEach(s => { if (s._muscle) counts[s._muscle] = (counts[s._muscle] || 0) + 1; });
+  const max = Math.max(1, ...Object.values(counts));
+  // Intensity is relative to the user's own hardest-hit muscle, not an
+  // absolute set count - what matters here is the balance between regions,
+  // and an absolute scale would read as all-cold for a light week and
+  // all-hot for a heavy one regardless of how even it actually was.
+  const fillFor = (m) => {
+    const n = counts[m] || 0;
+    if (!n) return 'rgba(255,255,255,0.05)';
+    const t = n / max;
+    const alpha = 0.16 + t * 0.72;
+    return `rgba(255,107,26,${alpha.toFixed(2)})`;
+  };
+  const body = (side) => `
+    <svg viewBox="0 0 160 230" style="width:100%; height:auto;" aria-hidden="true">
+      <ellipse cx="80" cy="34" rx="16" ry="19" fill="rgba(255,255,255,0.05)"/>
+      <rect x="72" y="52" width="16" height="10" rx="4" fill="rgba(255,255,255,0.05)"/>
+      ${HEATMAP_REGIONS[side].map(r => `<path d="${r.d}" fill="${fillFor(r.m)}" stroke="rgba(255,255,255,0.07)" stroke-width="0.8"><title>${BALANCE_LABELS[r.m] || r.m}: ${counts[r.m] || 0} sets</title></path>`).join('')}
+    </svg>`;
+  const untrained = BALANCE_MUSCLES.filter(m => !counts[m]);
+  return `
+    <div class="section-label">Heat Map — This Week</div>
+    <div style="margin:0 18px 8px 18px; background:var(--panel); border-radius:14px; padding:16px 14px;">
+      <div style="display:flex; gap:14px; align-items:flex-start;">
+        <div style="flex:1;">${body('front')}<div style="text-align:center; font-family:'JetBrains Mono',monospace; font-size:9.5px; color:var(--slate); margin-top:4px;">FRONT</div></div>
+        <div style="flex:1;">${body('back')}<div style="text-align:center; font-family:'JetBrains Mono',monospace; font-size:9.5px; color:var(--slate); margin-top:4px;">BACK</div></div>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px; margin-top:12px; padding-top:12px; border-top:1px solid var(--line);">
+        <span style="font-size:10px; color:var(--slate);">Untouched</span>
+        <div style="flex:1; height:6px; border-radius:3px; background:linear-gradient(90deg, rgba(255,255,255,0.05), rgba(255,107,26,0.88));"></div>
+        <span style="font-size:10px; color:var(--slate);">Hammered</span>
+      </div>
+      ${untrained.length ? `<div class="small" style="color:var(--slate); margin-top:10px; line-height:1.55;">Nothing logged this week for <span style="color:#E8A33D;">${untrained.map(m => BALANCE_LABELS[m] || m).join(', ')}</span>.</div>` : `<div class="small" style="color:var(--good); margin-top:10px;">Every muscle group got work this week.</div>`}
+    </div>`;
+}
+
 function computeRecoveryClock(sets){
   const lastTrained = {};
   sets.forEach(s => {
@@ -14594,6 +14708,10 @@ async function renderBalance(mode, view){
       <div style="font-size:13px; color:var(--chalk); line-height:1.4;">${BALANCE_LABELS[comebackAlert.muscle]} is overdue by ${Math.abs(comebackAlert.dueInDays)} day${Math.abs(comebackAlert.dueInDays)===1?'':'s'} against its usual training rhythm (last hit ${comebackAlert.days} days ago).</div>
     </div>` : '';
 
+  // Built from the same current-week sets the rest of this view already has,
+  // so it costs no extra query.
+  const heatmapHtml = (view === 'muscle' && weeks && weeks.length)
+    ? buildMuscleHeatmapHtml(weeks[weeks.length-1].sets) : '';
   const recoveryClockHtml = recoveryClock ? `
     <div class="section-label">Recovery Clock</div>
     <div class="small" style="padding:0 18px 8px 18px; color:var(--slate);">When each muscle is next due, based on its usual training rhythm - not just days since last worked.</div>
@@ -14906,6 +15024,7 @@ async function renderBalance(mode, view){
         ${mostLoggedHtml}
         ${volumeByLocationHtml}
         ${leaderboardHtml}
+        ${heatmapHtml}
         ${recoveryClockHtml}
         ${repRangeHtml}
         ${compoundSplitHtml}
