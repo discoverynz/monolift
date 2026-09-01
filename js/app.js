@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.269';
+const APP_VERSION = 'Beta 5.270';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -16004,7 +16004,33 @@ async function renderMe(){
     location.reload();
   };
   document.getElementById('signOutBtn').onclick = async () => {
+    // Anything queued but not yet uploaded belongs to THIS account. Left in
+    // place, the next person to sign in on this device would silently
+    // upload another user's sets under their own id - the worst outcome
+    // available here, and invisible to both of them.
+    const pending = readOutbox().length;
+    if (pending){
+      const ok = confirm(`${pending} set${pending===1?'':'s'} still haven't uploaded. Signing out now discards them permanently. Sign out anyway?`);
+      if (!ok) return;
+    }
     invalidateTrackSnapshots(); // never leave one account's plan cached for the next
+    // Account-scoped state that would otherwise carry into the next session
+    // on this device: queued sets, the greeting name, an active trip, and
+    // the current/default location. Preferences that aren't identity-bound -
+    // units, timer length, grouping - are deliberately left alone, since
+    // they're properties of the device rather than the person.
+    ['zealift_set_outbox','zealift_display_name','zealift_trip_mode',
+     'zealift_current_location','zealift_default_location','zealift_reorg_snapshot']
+      .forEach(k => { try { localStorage.removeItem(k); } catch(e){} });
+    // Session-complete markers are per-day and per-account.
+    try {
+      const doomed = [];
+      for (let i = 0; i < localStorage.length; i++){
+        const k = localStorage.key(i);
+        if (k && k.startsWith('zealift_session_done_')) doomed.push(k);
+      }
+      doomed.forEach(k => localStorage.removeItem(k));
+    } catch(e){}
     await supabaseClient.auth.signOut();
   };
 }
@@ -16017,9 +16043,38 @@ supabaseClient.auth.onAuthStateChange((_event, session) => {
   // Identity may have changed - drop the memoised user so nothing reads a
   // stale id against a different session.
   clearCachedUser();
+  // Sets queued offline belong to whoever queued them. If a different
+  // account signs in on this device, uploading them would file one person's
+  // training under another's - so they're dropped on an identity change,
+  // and only on an identity change. Signing back into the SAME account
+  // keeps them, which is the whole point of the queue surviving a logout.
+  try {
+    const uid = session && session.user ? session.user.id : null;
+    const lastUid = localStorage.getItem('zealift_last_uid');
+    if (uid && lastUid && uid !== lastUid){
+      localStorage.removeItem('zealift_set_outbox');
+      ['zealift_display_name','zealift_trip_mode','zealift_current_location','zealift_default_location']
+        .forEach(k => { try { localStorage.removeItem(k); } catch(e){} });
+      invalidateTrackSnapshots();
+    }
+    if (uid) localStorage.setItem('zealift_last_uid', uid);
+  } catch(e){}
   if (hadSession === hasSession) return;
   if (session) { state.currentTab = 'track'; renderTrack(); }
-  else renderLogin();
+  else {
+    // Losing a session without a deliberate sign-out - an expired or revoked
+    // token - takes the same path, so the same account-scoped state has to
+    // go. The outbox is deliberately KEPT here, unlike on explicit sign-out:
+    // the user never chose to leave, and if they sign back into the same
+    // account those sets are still theirs and still worth uploading. It's
+    // scoped by nothing though, so a DIFFERENT account signing in next
+    // would inherit them - which is why the login path clears it below if
+    // the user id has changed.
+    invalidateTrackSnapshots();
+    ['zealift_display_name','zealift_trip_mode','zealift_current_location']
+      .forEach(k => { try { localStorage.removeItem(k); } catch(e){} });
+    renderLogin();
+  }
 });
 
 // When the app comes back to the foreground on a new calendar day, state.selectedDay
