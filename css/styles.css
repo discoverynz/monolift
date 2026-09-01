@@ -450,3 +450,57 @@ input:focus, button:focus{ outline:none; }
   }
   .greeting-line, .session-done-hero{ color:var(--flame); -webkit-text-fill-color:var(--flame); }
 }
+
+/* ---------- BIGGER REWARD ----------
+   The first pass was too timid - a small number drifting up reads as a
+   status message rather than a reward. This is louder without being
+   cartoonish: bigger, a brief burst behind it, and a card that reacts. */
+
+@keyframes ml-burst {
+  0%   { transform:scale(.3); opacity:.85; }
+  100% { transform:scale(2.6); opacity:0; }
+}
+@keyframes ml-float-big {
+  0%   { opacity:0; transform:translateY(6px) scale(.7); }
+  18%  { opacity:1; transform:translateY(-4px) scale(1.18); }
+  32%  { transform:translateY(-10px) scale(1); }
+  100% { opacity:0; transform:translateY(-72px) scale(1.05); }
+}
+@keyframes ml-card-punch {
+  0%   { transform:scale(1); }
+  35%  { transform:scale(1.035); }
+  100% { transform:scale(1); }
+}
+@keyframes ml-streak-pulse {
+  0%,100% { text-shadow:0 0 0 rgba(255,107,26,0); }
+  50%     { text-shadow:0 0 14px rgba(255,107,26,.75); }
+}
+
+.volume-float{
+  position:fixed; z-index:60; pointer-events:none;
+  font-family:'Bebas Neue', sans-serif; font-size:34px; letter-spacing:1px;
+  color:var(--good); text-shadow:0 3px 14px rgba(0,0,0,.75), 0 0 22px rgba(143,191,122,.45);
+  transform-origin:center bottom;
+  animation: ml-float-big 1.5s cubic-bezier(.16,.9,.3,1) forwards;
+}
+.volume-float.pr{ color:var(--flame); text-shadow:0 3px 14px rgba(0,0,0,.75), 0 0 26px rgba(255,107,26,.6); }
+
+/* A ring that expands out from the tap point behind the number. */
+.reward-burst{
+  position:fixed; z-index:59; pointer-events:none;
+  width:56px; height:56px; margin:-28px 0 0 -28px; border-radius:50%;
+  border:2px solid rgba(143,191,122,.65);
+  animation: ml-burst .62s ease-out forwards;
+}
+.reward-burst.pr{ border-color:rgba(255,107,26,.75); }
+
+/* The row you just logged reacts, so the reward is tied to the thing. */
+.just-logged{ animation: ml-card-punch .42s cubic-bezier(.2,1.4,.4,1) both; }
+
+/* Live streaks glow. A dead streak shouldn't. */
+.streak-alive{ animation: ml-streak-pulse 2.6s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce){
+  .volume-float, .reward-burst, .just-logged, .streak-alive{ animation:none !important; }
+  .reward-burst{ display:none !important; }
+}

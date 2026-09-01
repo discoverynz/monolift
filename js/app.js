@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.259';
+const APP_VERSION = 'Beta 5.260';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -5063,10 +5063,26 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
       <button class="btn-primary" id="clearLocationBtn" style="max-width:240px; margin:0 auto; background:var(--panel); color:var(--chalk); border:1px solid var(--line);">Show exercises from anywhere</button>
     </div>`;
   }
-  const suppressSuggestionsForLocation = visibleExercises.length === 0 && workingExercises.length > 0 && currentLocationId;
+  // Suppressing suggestions when everything is filtered out was right before
+  // Trip Mode existed - suggesting machine work at the wrong gym is noise.
+  // During a trip it's exactly backwards: an empty day away from home is
+  // precisely when someone needs something to do, and the Ideas library is
+  // full of things they CAN do. Trip Mode gets its own recommendations
+  // instead of being left with an empty screen.
+  const suppressSuggestionsForLocation = visibleExercises.length === 0 && workingExercises.length > 0 && currentLocationId && !isTripActive();
   const suppressForLoadFailure = loadFailed;
+  // Defined here so both the suppression check above and the render below
+  // read the same value rather than recomputing it differently.
+
   const suggestionsHtml = (suggestions.length > 0 && !suppressSuggestionsForLocation && !suppressForLoadFailure)
     ? buildSuggestionsHtml(suggestions, effectiveDayTypeLabel) : '';
+
+  // Trip recommendations: ideas you can actually do with what you packed,
+  // picked to match whatever this day is meant to train. Only when the day
+  // is genuinely empty - if there's already band work scheduled, that IS the
+  // plan and doesn't need suggestions on top of it.
+  const tripIdeasHtml = (isTripActive() && visibleExercises.length === 0)
+    ? buildTripIdeasHtml(effectiveDayTypeLabel) : '';
 
   app.innerHTML = `
     <div class="app-shell">
@@ -5092,7 +5108,7 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
             <div style="font-size:8.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px; margin-top:2px;">Volume ${headerStats.targetDateIsToday ? 'Today' : dayLabelOf(headerStats.targetWeekday)}</div>
           </div>
           <div style="flex:1; text-align:center; padding:14px 6px; border-right:1px solid rgba(255,255,255,0.06);">
-            <div style="font-family:'JetBrains Mono',monospace; font-size:17px; font-weight:600; color:var(--flame);">${headerStats.streak}</div>
+            <div class="${headerStats.streak > 0 ? 'streak-alive' : ''}" style="font-family:'JetBrains Mono',monospace; font-size:17px; font-weight:600; color:var(--flame);">${headerStats.streak > 0 ? '🔥 ' : ''}${headerStats.streak}</div>
             <div style="font-size:8.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px; margin-top:2px;">Day Streak</div>
           </div>
           <div style="flex:1; text-align:center; padding:14px 6px;">
@@ -5121,6 +5137,7 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
         ${workingExercises.length > 0 ? groupByToggleHtml(groupBy) : ''}
         ${listHtml}
         <div id="suggestionsSlot">${suggestionsHtml}</div>
+        ${tripIdeasHtml}
       </div>
       ${renderTabbar()}
     </div>`;
@@ -5246,6 +5263,8 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
         // Float from the button itself, captured BEFORE the re-render
         // removes it from the DOM and its position becomes unavailable.
         if (best) celebrateLoggedSet(el, best.weight, best.weight_unit, best.weight_type, best.reps, best.num_sets);
+        const card = el.closest('.ex-card');
+        if (card) card.classList.add('just-logged');
         renderTrack();
         setTimeout(() => maybeShowSessionComplete(), 700);
       }
@@ -5264,6 +5283,31 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   if (retryBtn) retryBtn.onclick = () => { state.exercises = []; renderTrack(); };
   const clearLocBtn = document.getElementById('clearLocationBtn');
   if (clearLocBtn) clearLocBtn.onclick = () => openLocationPicker(allLocations, currentLocationId);
+  document.querySelectorAll('.trip-idea-add').forEach(btn => {
+    btn.onclick = async () => {
+      const idea = HOME_GYM_IDEAS.find(i => i.name === btn.dataset.idea);
+      if (!idea) return;
+      btn.textContent = '…';
+      const userData = { user: await getCurrentUser() };
+      if (!userData.user) return;
+      const trip = getTripMode();
+      const { data: inserted, error } = await createExerciseForToday({
+        user_id: userData.user.id, name: idea.name,
+        category: idea.measurementType === 'band' ? 'Bands' : 'Other',
+        weekday: state.selectedDay, alt_group_id: null,
+        measurement_type: idea.measurementType === 'weight' ? null : idea.measurementType,
+        uses_door_anchor: idea.usesDoorAnchor, door_anchor_level: idea.anchorLevel,
+        // Tagged to wherever the trip says you are, so it shows up here
+        // rather than being added and immediately filtered back out.
+        location_ids: trip && trip.locationId ? [trip.locationId] : null,
+        location_confirmed: true
+      });
+      if (error){ alert(error.message); btn.textContent = '+'; return; }
+      renderTrack();
+    };
+  });
+  const tripBrowse = document.getElementById('tripBrowseIdeasBtn');
+  if (tripBrowse) tripBrowse.onclick = () => openPicker('ideas');
   const logSomethingElseBtn = document.getElementById('logSomethingElseBtn');
   if (logSomethingElseBtn) logSomethingElseBtn.onclick = () => openPicker();
   const browseIdeasBtn = document.getElementById('browseIdeasBtn');
@@ -6775,7 +6819,10 @@ async function openPicker(initialTab, jumpToMuscle){
         <div class="ex-card" data-idea-idx="${HOME_GYM_IDEAS.indexOf(idea)}" style="margin:0 18px 9px 18px; background:var(--panel); border-radius:12px; padding:12px 14px;">
           <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
             <div style="flex:1;">
-              <div class="ex-name" style="font-size:13.5px;">${idea.name}</div>
+              <div style="display:flex; align-items:center; gap:7px; flex-wrap:wrap;">
+                <span class="ex-name" style="font-size:13.5px;">${idea.name}</span>
+                <span style="font-size:9.5px; font-family:'JetBrains Mono',monospace; padding:2px 7px; border-radius:9px; background:rgba(255,107,26,0.14); color:var(--flame); white-space:nowrap;">${fineMuscleCategory(idea.muscle, idea.name)}</span>
+              </div>
               ${idea.usesDoorAnchor ? `<div style="font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--brass); margin-top:3px;">🚪 Door anchor — ${idea.anchorLevel}</div>` : ''}
               <div class="small" style="color:var(--slate); margin-top:5px; line-height:1.5;">${idea.hint}</div>
               <div class="idea-img-slot" data-idea-name="${idea.name.replace(/"/g,'&quot;')}" style="margin-top:8px;"></div>
@@ -9616,26 +9663,45 @@ function floatVolumeGain(kg, x, y){
 // made the reward feel arbitrary, appearing only when the maths happened to
 // line up. Volume when there is volume, an acknowledgement otherwise.
 const REWARD_WORDS = ['NICE', 'LOGGED', 'DONE', 'GOOD', 'YES', 'BANKED'];
-function floatSetReward(text, x, y){
+function floatSetReward(text, x, y, isPr){
+  const px = x || window.innerWidth / 2;
+  const py = y || window.innerHeight * 0.55;
+  // Ring behind the number, expanding from the tap point. Gives the reward
+  // a physical origin instead of a value simply appearing in mid-air.
+  const burst = document.createElement('div');
+  burst.className = 'reward-burst' + (isPr ? ' pr' : '');
+  burst.style.left = px + 'px';
+  burst.style.top = py + 'px';
+  document.body.appendChild(burst);
+  setTimeout(() => burst.remove(), 700);
+
   const el = document.createElement('div');
-  el.className = 'volume-float';
+  el.className = 'volume-float' + (isPr ? ' pr' : '');
   el.textContent = text || (REWARD_WORDS[Math.floor(Math.random() * REWARD_WORDS.length)] + ' ✓');
-  el.style.left = (x || window.innerWidth / 2) + 'px';
-  el.style.top = (y || window.innerHeight * 0.55) + 'px';
+  el.style.left = px + 'px';
+  el.style.top = py + 'px';
+  el.style.transform = 'translateX(-50%)';
   document.body.appendChild(el);
-  setTimeout(() => el.remove(), 1500);
+  setTimeout(() => el.remove(), 1600);
+
+  // A short tick where the hardware supports it. Lands even with the phone
+  // face-down on a bench, which is where it often is between sets.
+  try { if (navigator.vibrate) navigator.vibrate(isPr ? [18, 40, 26] : 14); } catch(e){}
 }
 
 // Volume for one set, in kg, from whatever's available. Returns 0 when
 // there's nothing to compute rather than guessing.
+// What the app assumes you did when you don't say. Nobody logs a single rep
+// of anything, so defaulting to 1 undercounted every quick entry - 3x8 is a
+// normal working set and a far better guess than pretending it was one rep.
+const ASSUMED_SETS = 3;
+const ASSUMED_REPS = 8;
 function setVolumeKg(weight, unit, weightType, reps, numSets){
   const w = parseFloat(weight);
   if (!isFinite(w) || w <= 0) return 0;
   const kg = unit === 'lb' ? w * 0.453592 : w;
-  // Missing reps/sets default to 1 rather than voiding the whole
-  // calculation - a set logged as just "40kg" still moved 40kg.
-  const r = parseInt(reps, 10) || 1;
-  const n = parseInt(numSets, 10) || 1;
+  const r = parseInt(reps, 10) || ASSUMED_REPS;
+  const n = parseInt(numSets, 10) || ASSUMED_SETS;
   return kg * r * n * (weightType === 'per' ? 2 : 1);
 }
 
@@ -10408,7 +10474,12 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
     }
     const weight = weightRaw ? parseFloat(weightRaw) : null;
     const insertedId = await withButtonLoading(overlay.querySelector('#saveSetBtn'), 'Saving…', () =>
-      saveEntry(weight, unit, weightType, repsVal ? parseInt(repsVal,10) : null, setsVal ? parseInt(setsVal,10) : null, notesVal)
+      // Persist the same assumption the reward shows, so what gets stored
+      // matches what the user was just told they did. Storing null while
+      // displaying 3x8 would make history and celebration disagree.
+      saveEntry(weight, unit, weightType,
+        repsVal ? parseInt(repsVal,10) : ASSUMED_REPS,
+        setsVal ? parseInt(setsVal,10) : ASSUMED_SETS, notesVal)
     );
     if (insertedId){
       // Volume added by this set, floated from where the button actually is
@@ -15068,6 +15139,44 @@ async function showTripDebrief(trip){
   overlay.querySelector('#tripDebriefClose').onclick = () => overlay.remove();
 }
 
+// Picks ideas matching the day's intent - a Legs day away from home should
+// surface leg work, not a random slice of the library. Falls back to a
+// spread across categories when the day type gives nothing to match on.
+function buildTripIdeasHtml(dayTypeLabel){
+  const label = (dayTypeLabel || '').toLowerCase();
+  const wants = [];
+  if (/chest|push|tricep|shoulder|press/.test(label)) wants.push('Push');
+  if (/back|pull|bicep|row|lat/.test(label)) wants.push('Pull');
+  if (/leg|quad|glute|hamstring|calf/.test(label)) wants.push('Legs');
+  if (/core|ab|oblique/.test(label)) wants.push('Core');
+  let pool = wants.length
+    ? HOME_GYM_IDEAS.filter(i => wants.includes(i.sub))
+    : HOME_GYM_IDEAS;
+  // Rotate the selection by day so the same four don't appear every single
+  // session for a fortnight - variety matters more here than on a normal
+  // day, because this IS the whole plan while away.
+  const seed = Math.floor(Date.now() / 86400000);
+  const picked = [];
+  for (let i = 0; i < Math.min(4, pool.length); i++){
+    picked.push(pool[(seed * 7 + i * 3) % pool.length]);
+  }
+  const unique = picked.filter((v, i, a) => a.indexOf(v) === i);
+  if (!unique.length) return '';
+  return `
+    <div style="margin:18px 18px 0 18px;">
+      <div style="font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--brass); letter-spacing:1px; text-transform:uppercase; margin-bottom:8px;">✈️ What you can do with what you packed</div>
+      ${unique.map(idea => `
+        <div style="background:var(--panel); border:1px solid rgba(201,162,39,0.22); border-radius:12px; padding:12px 13px; margin-bottom:8px; display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
+          <div style="flex:1; min-width:0;">
+            <div style="font-family:'Oswald',sans-serif; font-size:13.5px;">${idea.name}</div>
+            <div class="small" style="color:var(--slate); margin-top:3px; line-height:1.5;">${idea.hint}</div>
+          </div>
+          <button class="trip-idea-add" data-idea="${idea.name.replace(/"/g,'&quot;')}" style="width:30px; height:30px; border-radius:9px; background:rgba(255,107,26,0.15); color:var(--flame); border:1px solid rgba(255,107,26,0.35); font-size:16px; flex-shrink:0;">+</button>
+        </div>`).join('')}
+      <button class="btn-primary" id="tripBrowseIdeasBtn" style="width:100%; background:var(--panel); color:var(--chalk); border:1px solid var(--line); margin-top:2px;">Browse all ${HOME_GYM_IDEAS.length} ideas</button>
+    </div>`;
+}
+
 async function openTripModeScreen(){
   const trip = getTripMode();
   const locs = await loadLocations();
@@ -15115,6 +15224,11 @@ async function openTripModeScreen(){
   if (endBtn) endBtn.onclick = async () => {
     const finished = getTripMode();
     setTripMode(null);
+    // Starting a trip writes the trip location as today's explicit pick so
+    // it takes effect immediately. Ending it has to clear that, or the
+    // explicit pick outranks the default forever and you stay stuck at the
+    // trip location after coming home.
+    try { localStorage.removeItem('zealift_current_location'); } catch(e){}
     overlay.remove();
     renderMe();
     if (state.currentTab === 'track') renderTrack();
