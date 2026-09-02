@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.286';
+const APP_VERSION = 'Beta 5.287';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -10983,6 +10983,15 @@ const HOME_GYM_IDEAS = [
   { name:'Wall Slide', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:'Back against a wall, arms in a goalpost shape, slide up and down keeping contact - shoulder mobility and rear delt activation, good as a warm-up.',
     muscle:'shoulders' },
+  { name:'Ring Rows', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:"Rings low, lean back and pull your chest to them - the rings hang from any anchor above head height (a bar, a sturdy branch, an anchor strap over a door). Walk your feet forward to make it harder, back to make it easier - the one adjustment a fixed bar row can't give you.",
+    muscle:'lats' },
+  { name:'Ring Pull-Ups', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:"Same movement as a bar pull-up, but the rings rotate freely so your hands find their own angle through the rep - easier on the wrists and shoulders than a fixed grip, and the instability genuinely adds work.",
+    muscle:'lats' },
+  { name:'Ring Face Pull', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Rings at chest height, lean back and pull them to your face, elbows high - rear delts and upper back, the same gap Banded Face Pull covers if you have a band instead.',
+    muscle:'shoulders' },
 
   // ---- Push ----
   { name:'Handle Push-Ups', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
@@ -11032,6 +11041,15 @@ const HOME_GYM_IDEAS = [
     muscle:'triceps' },
   { name:'Banded Push Press', sub:'Push', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
     hint:'Stand on the band, dip your knees and drive the press up explosively - adds a leg-drive element a strict press doesn\'t have.',
+    muscle:'shoulders' },
+  { name:'Ring Push-Ups', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Rings just above the floor, hands on them instead of the ground - the free rotation demands real shoulder stability and makes a standard push-up noticeably harder.',
+    muscle:'chest' },
+  { name:'Ring Dips', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:"Rings at hip height, support yourself and lower under control - a genuine step up from a bench or chair dip once those get easy, and closer to a real dip machine than almost any other home option.",
+    muscle:'triceps' },
+  { name:'Ring Support Hold', sub:'Push', measurementType:'time', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Rings at hip height, arms locked out, hold the top position without moving - builds the shoulder stability that everything else on rings depends on, and a fair place to start if a full dip is still out of reach.',
     muscle:'shoulders' },
 
   // ---- Legs ----
@@ -11117,6 +11135,12 @@ const HOME_GYM_IDEAS = [
     muscle:'abdominals' },
   { name:'Leg Raise', sub:'Core', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:'Lying on your back, legs straight, lower them slowly without touching down - lower abs.',
+    muscle:'abdominals' },
+  { name:'Ring L-Sit', sub:'Core', measurementType:'time', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Support yourself on the rings, legs held straight out in front - a genuinely hard core and hip-flexor hold. Bend one or both knees to scale it down if a straight-leg hold isn\'t there yet.',
+    muscle:'abdominals' },
+  { name:'Ring Plank', sub:'Core', measurementType:'time', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Feet in the rings (or hands on them for a push-up-position plank), everything else as a normal plank - the instability turns a familiar hold into a much harder one.',
     muscle:'abdominals' },
 ];
 
