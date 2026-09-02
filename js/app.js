@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.281';
+const APP_VERSION = 'Beta 5.282';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -5228,7 +5228,6 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
           <h1 id="dayTypeHeader" style="cursor:pointer;${dayTypeUnavailable ? ' color:#E8A33D;' : ''}">
             <span style="color:var(--slate); font-weight:400;">${dayLabelOf(state.selectedDay)}</span>${effectiveDayTypeLabel ? ` <span style="color:var(--slate); font-weight:400;">—</span> ${effectiveDayTypeLabel}` : ''}
           </h1>
-          ${(() => { const t = tonnageComparison(headerStats.volumeKg); return t ? `<div class="small" style="color:var(--slate); margin-top:6px;">${t.icon} ${t.text} moved today.</div>` : ''; })()}
           <div class="quote">"${q.t}" — ${q.a}</div>
 
         </div>
@@ -5245,9 +5244,23 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
                 <div style="font-size:8.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px; margin-top:2px;">Day Streak</div>`;
             })()}
           </div>
-          <div style="flex:1; text-align:center; padding:14px 6px;">
+          <div style="flex:1; text-align:center; padding:14px 6px; border-right:1px solid rgba(255,255,255,0.06);">
             <div style="font-family:'JetBrains Mono',monospace; font-size:17px; font-weight:600; color:var(--chalk);">${headerStats.setsToday}</div>
             <div style="font-size:8.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px; margin-top:2px;">Sets ${headerStats.targetDateIsToday ? 'Today' : dayLabelOf(headerStats.targetWeekday)}</div>
+          </div>
+          <div style="flex:1; text-align:center; padding:14px 4px;">
+            ${(() => {
+              // Same tonnage comparison, moved from a standalone line under the
+              // header into the fourth panel here. Text length varies a lot -
+              // "about a killer whale" vs "about a big dog" - so it's sized down
+              // and allowed to wrap rather than forced onto the number's line,
+              // and blank when there's nothing to compare yet.
+              const t = tonnageComparison(headerStats.volumeKg);
+              if (!t) return `<div style="font-family:'JetBrains Mono',monospace; font-size:17px; font-weight:600; color:var(--slate);">—</div>
+                <div style="font-size:8.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px; margin-top:2px;">Like</div>`;
+              return `<div style="font-size:19px; line-height:1;">${t.icon}</div>
+                <div style="font-size:8px; color:var(--slate); margin-top:3px; line-height:1.25;">${t.text}</div>`;
+            })()}
           </div>
         </div>
         <div style="padding:8px 18px 0 18px; display:flex; gap:8px; flex-wrap:wrap;">
