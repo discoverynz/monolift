@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.290';
+const APP_VERSION = 'Beta 5.291';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Rings","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1256,6 +1256,29 @@ function detectWeightStagnation(setsForExercise){
   return mostRecentWeight <= oldestWeight + 0.01;
 }
 
+// How long ago the top weight for this exercise actually went up - not the
+// last time it was logged, the last time it increased. Walks the full
+// history in date order tracking a running max, and the date that max last
+// moved is the answer. Needs 3+ distinct sessions before judging, same bar
+// as detectWeightStagnation, so a brand-new exercise doesn't read as
+// maximally stale just because it has no history to compare against.
+function daysSinceLastIncrease(setsForExercise){
+  const byDate = {};
+  setsForExercise.forEach(s => {
+    if (typeof s.weight !== 'number' || (s.weight_unit !== 'kg' && s.weight_unit !== 'lb')) return;
+    const kg = s.weight_unit === 'lb' ? convertWeight(s.weight, 'lb', 'kg') : s.weight;
+    const perSideKg = s.weight_type === 'per' ? kg * 2 : kg;
+    if (!byDate[s.logged_at] || perSideKg > byDate[s.logged_at]) byDate[s.logged_at] = perSideKg;
+  });
+  const dates = Object.keys(byDate).sort();
+  if (dates.length < 3) return null;
+  let runningMax = -Infinity, lastIncreaseDate = dates[0];
+  dates.forEach(d => {
+    if (byDate[d] > runningMax + 0.01){ runningMax = byDate[d]; lastIncreaseDate = d; }
+  });
+  return Math.round((new Date(todayStr()+'T00:00:00') - new Date(lastIncreaseDate+'T00:00:00')) / 86400000);
+}
+
 // The band equivalent of detectWeightStagnation, but inverted in spirit -
 // weight staying flat is the bad signal there; for bands there's no
 // continuous number to increase, so the useful signal is reps CLIMBING on a
@@ -1393,8 +1416,9 @@ const withLogs = exercises.map(ex => {
     const maxSet = maxSetByExercise[ex.id] || null;
     const showPr = maxSet && lastSet && maxSet.logged_at !== lastSet.logged_at;
     const stagnant = detectWeightStagnation(setsByExerciseId[ex.id] || []);
+    const staleDays = daysSinceLastIncrease(setsByExerciseId[ex.id] || []);
     const bandReady = detectBandProgressionReady(setsByExerciseId[ex.id] || []);
-    return { ...ex, lastSet, loggedToday, maxSet, showPr, stagnant, bandReady };
+    return { ...ex, lastSet, loggedToday, maxSet, showPr, stagnant, staleDays, bandReady };
   });
 
   const doneGroupMember = {};
@@ -15644,23 +15668,58 @@ function tonnageComparison(kg){
   return { icon: hit[1], text: phrase };
 }
 
-// The day's main event. A flat list of eight exercises has no focal point,
-// but a session genuinely has one lift that matters most - and the app
-// already knows which. Picks the heaviest working weight, since that's the
-// one that decides whether the day went well.
+// The day's main event: the lift most overdue for attention. Ranks by how
+// long the top weight has actually gone unmoved - not just logged, but
+// increased - since that's the lift where showing up with intent matters
+// most today, not just whichever number happens to be biggest. Falls back
+// to heaviest working weight for candidates with too little history to
+// judge staleness (same 3-session bar as detectWeightStagnation), so a
+// newer exercise isn't skipped for lack of data and the card never goes
+// empty just because nothing's judgeable yet.
 function pickMainEvent(list){
   const candidates = (list || []).filter(ex => !ex.loggedToday && !ex.completeVia);
   if (candidates.length < 3) return null; // too short a day to have an undercard
+
+  const weighInKg = (ex) => {
+    const s = ex.lastSet || ex.maxSet;
+    const w = s ? Number(s.weight) : NaN;
+    if (!s || !isFinite(w) || w <= 0) return 0;
+    return (s.weight_unit === 'lb' ? w * 0.453592 : w) * (s.weight_type === 'per' ? 2 : 1);
+  };
+
+  const judged = candidates.filter(ex => ex.staleDays !== null && ex.staleDays !== undefined);
+  if (judged.length){
+    // Longest stall wins; ties broken by heaviest working weight, the same
+    // scale used everywhere else in this file.
+    let best = null, bestStale = -1, bestKg = 0;
+    judged.forEach(ex => {
+      const kg = weighInKg(ex);
+      if (ex.staleDays > bestStale || (ex.staleDays === bestStale && kg > bestKg)){
+        best = ex; bestStale = ex.staleDays; bestKg = kg;
+      }
+    });
+    return best;
+  }
+
+  // Nobody has enough history yet to judge staleness - fall back to
+  // heaviest working weight rather than showing nothing.
   let best = null, bestKg = 0;
   candidates.forEach(ex => {
-    const s = ex.lastSet || ex.maxSet;
-    if (!s) return;
-    const w = Number(s.weight);
-    if (!isFinite(w) || w <= 0) return;
-    const kg = (s.weight_unit === 'lb' ? w * 0.453592 : w) * (s.weight_type === 'per' ? 2 : 1);
+    const kg = weighInKg(ex);
     if (kg > bestKg){ bestKg = kg; best = ex; }
   });
   return best;
+}
+
+// Phrases a stall duration proportionally - days close in, then weeks, then
+// months once it's been a genuinely long time, rather than "9 weeks" reading
+// worse than the equally-true "2 months" would.
+function staleDaysPhrase(days){
+  if (days < 14) return `${days} days since your last increase.`;
+  const weeks = Math.round(days / 7);
+  if (weeks < 8) return `${weeks} weeks since this moved.`;
+  const months = Math.round(days / 30);
+  return `${months} month${months === 1 ? '' : 's'} since this moved.`;
 }
 
 function buildMainEventHtml(list){
@@ -15668,7 +15727,11 @@ function buildMainEventHtml(list){
   if (!ex) return '';
   const s = ex.lastSet || ex.maxSet;
   const label = s ? formatSetValue(s) : '';
+  const isStale = ex.staleDays !== null && ex.staleDays !== undefined;
   const near = ex.maxSet && ex.lastSet && Number(ex.lastSet.weight) >= Number(ex.maxSet.weight);
+  const subtext = isStale
+    ? staleDaysPhrase(ex.staleDays)
+    : (near ? 'One clean set beats your best.' : 'The lift that decides today.');
   return `
     <div id="mainEventCard" data-ex-id="${ex.id}" data-ex-name="${(ex.name||'').replace(/"/g,'&quot;')}"
       style="position:relative; overflow:hidden; margin:14px 18px 0 18px; cursor:pointer;
@@ -15678,7 +15741,7 @@ function buildMainEventHtml(list){
         background:radial-gradient(circle, rgba(255,107,26,0.22), transparent 70%); pointer-events:none;"></div>
       <div style="font-size:11px; color:var(--flame); font-weight:600;">Main event</div>
       <div style="font-family:'Bebas Neue',sans-serif; font-size:27px; line-height:1; margin:5px 0 3px 0;">${ex.name}</div>
-      <div class="small" style="color:var(--slate);">${label ? `${label} last time. ` : ''}${near ? 'One clean set beats your best.' : 'The lift that decides today.'}</div>
+      <div class="small" style="color:var(--slate);">${label ? `${label} last time. ` : ''}${subtext}</div>
     </div>`;
 }
 
