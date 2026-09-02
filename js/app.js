@@ -17,7 +17,7 @@ const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders &
 // after a set is saved (see exerciseRow's `justLogged`) - every other time
 // the "Logged today" pill renders, it's the plain ✓ text, unanimated.
 const SET_COMPLETE_TICK_SVG = `<svg class="set-complete-tick" width="16" height="16" viewBox="0 0 24 24" style="flex-shrink:0;"><circle class="tick-ring" cx="12" cy="12" r="10" fill="none" stroke="#0F1A0C" stroke-width="2"></circle><path class="tick-check" d="M7 12.5 L10.5 16 L17 8.5" fill="none" stroke="#0F1A0C" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>`;
-const APP_VERSION = 'Beta 5.298';
+const APP_VERSION = 'Beta 5.299';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Rings","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -887,7 +887,11 @@ let state = { selectedDay: openingDay(), exercises: [], session: null, currentTa
   // Id of whatever exercise a set was just saved against - read once by the
   // very next exerciseRow render to trigger its punch/pulse/check-draw
   // animation, then cleared by renderTrackFromData so it never replays.
-  _justLoggedExId: null };
+  _justLoggedExId: null,
+  // Which category slugs are collapsed - session-only (not persisted to
+  // localStorage or the DB) so a forgotten collapsed category doesn't stay
+  // hidden across app restarts.
+  _collapsedCats: new Set() };
 
 // MIDNIGHT ROLLOVER. All dates in this app come from the phone's own clock
 // (todayStr uses local getFullYear/getMonth/getDate, never UTC), so the day
@@ -2274,12 +2278,12 @@ async function quickSaveSet(exerciseId, exerciseName, best){
   if (error || !data || !data.length){
     queueSetLocally(insertPayload);
     showQueuedSetToast();
-    return true; // genuinely saved, just not uploaded yet
+    return 'queued'; // genuinely saved, just not uploaded yet - matches saveEntry's convention
   }
   if (priorBest !== null && weight !== null && weight > priorBest + 0.01){
     celebratePR(exerciseName, weight, unit, priorBest);
   }
-  return true;
+  return data && data[0] ? data[0].id : true;
 }
 
 function exerciseRow(ex){
@@ -2383,14 +2387,14 @@ function exerciseRow(ex){
   // the note flips to acknowledging maintenance instead of chasing gains.
   const stagnantNote = ex.stagnant
     ? (isTripActive()
-        ? `<div style="font-size:10.5px; color:var(--good); margin-top:8px; display:flex; align-items:center; gap:5px;"><span>✈️</span>Holding steady while you're away — that's the win right now</div>`
-        : `<div style="font-size:10.5px; color:#E8A33D; margin-top:8px; display:flex; align-items:center; gap:5px;"><span>📈</span>Same weight a few sessions running — try increasing</div>`)
+        ? `<div class="${justLogged ? 'nudge-pop-in' : ''}" style="font-size:10.5px; color:var(--good); margin-top:8px; display:flex; align-items:center; gap:5px;"><span>✈️</span>Holding steady while you're away — that's the win right now</div>`
+        : `<div class="${justLogged ? 'nudge-pop-in' : ''}" style="font-size:10.5px; color:#E8A33D; margin-top:8px; display:flex; align-items:center; gap:5px;"><span>📈</span>Same weight a few sessions running — try increasing</div>`)
     : '';
   // Band equivalent of the stagnation note above - climbing reps on an
   // unchanged band is the band version of "time to increase", since there's
   // no continuous weight number to watch instead.
   const bandReadyNote = ex.bandReady
-    ? `<div style="font-size:10.5px; color:#8FBF7A; margin-top:8px; display:flex; align-items:center; gap:5px;"><span>💪</span>${ex.bandReady.reps} reps on ${ex.bandReady.bandLabel} — might be time to move up a level</div>`
+    ? `<div class="${justLogged ? 'nudge-pop-in' : ''}" style="font-size:10.5px; color:#8FBF7A; margin-top:8px; display:flex; align-items:center; gap:5px;"><span>💪</span>${ex.bandReady.reps} reps on ${ex.bandReady.bandLabel} — might be time to move up a level</div>`
     : '';
 
   // Door anchor setup, visible on the row itself rather than only inside the
@@ -5189,7 +5193,15 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
     const editIcon = (groupBy === 'equipment' && !isBandSubHeader)
       ? `<span class="cat-rename-btn" data-cat="${cat}" style="float:right; color:var(--slate); font-size:12px; cursor:pointer; padding:2px 6px;">✎</span>`
       : '';
-    listHtml += `<div class="category" id="${slug}">${cat}${editIcon}</div>` + items.map(exerciseRow).join('');
+    // Collapsible via a chevron rather than the whole label being the
+    // trigger, so the rename icon (which already stopPropagation()s on its
+    // own click) keeps working exactly as before, unaffected by this.
+    // Session-only memory (state, not localStorage/DB) - deliberately not
+    // persisted, since a permanently-collapsed category that's easy to
+    // forget about is worse than one that resets when you leave and come
+    // back.
+    const isCollapsed = state._collapsedCats.has(slug);
+    listHtml += `<div class="category" id="${slug}"><span>${cat}</span>${editIcon}<span class="cat-chev${isCollapsed ? ' collapsed' : ''}" data-target="${slug}-body" style="cursor:pointer; padding:2px 4px;">▾</span></div><div class="cat-body${isCollapsed ? ' collapsed' : ''}" id="${slug}-body">` + items.map(exerciseRow).join('') + `</div>`;
     state.trackFlatOrder.push(...items.map(ex => ({ id: ex.id, name: ex.name })));
   });
   if (state.exercises === null){
@@ -5390,6 +5402,19 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   if (autoGroupBtn) autoGroupBtn.onclick = () => openAutoAltReview();
   const hideCompletedBtn = document.getElementById('toolbarHideCompletedBtn');
   if (hideCompletedBtn) hideCompletedBtn.onclick = () => { setHideCompletedPref(!hideCompleted); renderTrack(); };
+  document.querySelectorAll('.cat-chev').forEach(chev => {
+    chev.onclick = (e) => {
+      e.stopPropagation();
+      const target = document.getElementById(chev.dataset.target);
+      if (!target) return;
+      const nowCollapsed = !chev.classList.contains('collapsed');
+      chev.classList.toggle('collapsed', nowCollapsed);
+      target.classList.toggle('collapsed', nowCollapsed);
+      state._collapsedCats = state._collapsedCats || new Set();
+      if (nowCollapsed) state._collapsedCats.add(chev.dataset.target.replace(/-body$/, ''));
+      else state._collapsedCats.delete(chev.dataset.target.replace(/-body$/, ''));
+    };
+  });
   document.querySelectorAll('.cat-rename-btn').forEach(btn => {
     btn.onclick = (e) => {
       e.stopPropagation();
@@ -5448,8 +5473,8 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
       const originalText = el.textContent;
       el.textContent = 'Saving…';
       const best = (state.trackBestSetById || {})[el.dataset.id];
-      const ok = await quickSaveSet(el.dataset.id, el.dataset.name, best);
-      if (ok){
+      const insertedId = await quickSaveSet(el.dataset.id, el.dataset.name, best);
+      if (insertedId){
         // Float from the button itself, captured BEFORE the re-render
         // removes it from the DOM and its position becomes unavailable.
         if (best) celebrateLoggedSet(el, best.weight, best.weight_unit, best.weight_type, best.reps, best.num_sets);
@@ -5461,6 +5486,15 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
         // destroy this exact DOM node.
         state._justLoggedExId = el.dataset.id;
         renderTrack();
+        showMiniRestTimer(getTimerDefault());
+        // Quick-save is the single most-used way to log a set in the whole
+        // app, and previously the ONLY place offering Undo was the separate
+        // "same as last time" button in the full log form - a much less
+        // used path. Same existing toast, same 5-second window, just now
+        // reachable from where sets actually get logged most often. A
+        // queued (offline) set has no server row yet, so there's nothing
+        // for Undo to delete against.
+        if (insertedId !== 'queued') showUndoLastLogToast(insertedId);
         setTimeout(() => maybeShowSessionComplete(), 700);
       }
       else { el.textContent = originalText; delete el.dataset.saving; }
@@ -6645,10 +6679,13 @@ function confirmDeleteLog(setId, onDeleted){
   };
 }
 
+// Used after any of the three ways a set gets saved (quick-save, the main
+// log form, and "same as last time") - message is generic on purpose so it
+// reads correctly regardless of which path triggered it.
 function showUndoLastLogToast(setId){
   const toast = document.createElement('div');
   toast.style = 'position:fixed; bottom:100px; left:50%; transform:translateX(-50%); max-width:90%; background:var(--panel); border-radius:12px; padding:13px 16px; display:flex; align-items:center; gap:14px; z-index:30; box-shadow:0 8px 24px rgba(0,0,0,0.4);';
-  toast.innerHTML = `<div style="font-size:13px;">Logged — same as last time</div><div id="undoLogBtn" style="color:var(--flame); font-weight:600; font-size:13px; white-space:nowrap;">Undo</div>`;
+  toast.innerHTML = `<div style="font-size:13px;">Set logged</div><div id="undoLogBtn" style="color:var(--flame); font-weight:600; font-size:13px; white-space:nowrap;">Undo</div>`;
   document.body.appendChild(toast);
   const timer = setTimeout(() => toast.remove(), 5000);
   toast.querySelector('#undoLogBtn').onclick = async () => {
@@ -10118,15 +10155,26 @@ function maybeShowSessionComplete(){
 }
 
 async function showSessionCompleteScreen(list){
+  // The session is over - a lingering "rest before your next set" prompt
+  // doesn't make sense once there's no next set, and it would otherwise
+  // render on top of this sheet at a higher z-index.
+  hideMiniRestTimer();
   const stats = await fetchTrackHeaderStats().catch(() => null);
   const volume = stats ? stats.volumeKg : 0;
   const setsToday = stats ? stats.setsToday : 0;
   const streak = stats ? stats.streak : 0;
   const prCount = list.filter(ex => ex.showPr).length;
-  const overlay = document.createElement('div');
-  overlay.className = 'overlay-screen';
-  overlay.innerHTML = `
-    <div class="overlay-scroll" style="padding-top:calc(40px + env(safe-area-inset-top,0px));">
+  // A bottom sheet rather than the old full-screen takeover - the Track
+  // list is still visible (dimmed) behind it, and swiping down or tapping
+  // the scrim dismisses it exactly like closing any other sheet, instead of
+  // this being the one screen in the app you can't just glance past.
+  const scrim = document.createElement('div');
+  scrim.className = 'session-done-scrim';
+  const sheet = document.createElement('div');
+  sheet.className = 'session-done-sheet';
+  sheet.innerHTML = `
+    <div class="sheet-handle" id="sessionDoneHandle"></div>
+    <div class="overlay-scroll" style="max-height:75vh;">
       <div style="padding:0 18px;">
         <div class="session-done-hero">SESSION DONE</div>
         <div class="small" style="color:var(--slate); margin-top:4px; animation:ml-rise .5s ease both; animation-delay:.1s;">
@@ -10145,18 +10193,40 @@ async function showSessionCompleteScreen(list){
             <div style="font-family:'Oswald',sans-serif; font-size:13.5px; color:var(--brass);">${m.icon} ${m.text}</div>
           </div>`).join('')}
         <div style="margin-top:12px; background:var(--panel); border-radius:13px; padding:14px; animation:ml-rise .5s ease both; animation-delay:.5s;">
-          <div class="small" style="color:var(--chalk); line-height:1.6;">Everything on ${dayLabelOf(state.selectedDay)} is logged. Nothing left to chase today.</div>
+          <div class="small" style="color:var(--chalk); line-height:1.6;">Everything on ${dayLabelOf(state.selectedDay)} is logged. Nothing left to chase today. Swipe down or tap outside any time to keep browsing.</div>
         </div>
-        <button class="btn-primary" id="sessionDoneClose" style="width:100%; margin:20px 0 24px 0;">Done</button>
+        <button class="btn-primary" id="sessionDoneClose" style="width:100%; margin:20px 0 calc(24px + env(safe-area-inset-bottom,0px)) 0;">Done</button>
       </div>
     </div>`;
-  document.body.appendChild(overlay);
-  overlay.querySelector('#sessionDoneClose').onclick = () => overlay.remove();
+  document.body.appendChild(scrim);
+  document.body.appendChild(sheet);
+  requestAnimationFrame(() => { scrim.classList.add('show'); sheet.classList.add('show'); });
+
+  const dismiss = () => {
+    scrim.classList.remove('show'); sheet.classList.remove('show');
+    setTimeout(() => { scrim.remove(); sheet.remove(); }, 320);
+  };
+  scrim.onclick = dismiss;
+  sheet.querySelector('#sessionDoneClose').onclick = dismiss;
+
+  // Same threshold-based swipe already used for the guide-preview screen's
+  // left/right paging - a start/end distance check rather than a live
+  // finger-follow drag, which is enough to feel intentional without the
+  // extra complexity of animating the sheet's position every touchmove.
+  let touchStartY = null;
+  sheet.addEventListener('touchstart', (e) => { touchStartY = e.touches[0].clientY; }, { passive:true });
+  sheet.addEventListener('touchend', (e) => {
+    if (touchStartY === null) return;
+    const dy = e.changedTouches[0].clientY - touchStartY;
+    touchStartY = null;
+    if (dy > 70) dismiss();
+  }, { passive:true });
+
   // A small, contained burst scoped to the PR badge itself - the full
   // screen-dimming confetti modal (celebratePR) already fires live at the
   // moment a PR actually lands mid-session; this is a much quieter echo of
   // it for the summary screen, not a second full celebration.
-  const prCard = overlay.querySelector('#sessionPrCard');
+  const prCard = sheet.querySelector('#sessionPrCard');
   if (prCard) setTimeout(() => burstConfettiInto(prCard), 550);
 }
 
@@ -10917,6 +10987,12 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
       state._justLoggedExId = exerciseId;
       overlay.remove();
       if (state.currentTab === 'track') renderTrack();
+      showMiniRestTimer(getTimerDefault());
+      // Same existing toast "same as last time" already uses - this is the
+      // PRIMARY save path (typing a weight and hitting Save Set) and never
+      // offered Undo at all before, even though the shortcut button right
+      // next to it did.
+      if (insertedId !== 'queued') showUndoLastLogToast(insertedId);
       // Checked after the re-render so it sees the freshly-updated done
       // flags rather than the state from before this set landed.
       setTimeout(() => maybeShowSessionComplete(), 700);
@@ -11017,6 +11093,92 @@ async function playTimerSound(){
     _timerAlertEl.play().catch(() => {});
   } catch(e){}
 }
+
+// ---------- FLOATING MINI REST-TIMER ----------
+// Auto-appears after logging a set, docked at the bottom of Track rather
+// than taking over the screen the way the full Timer overlay does - you
+// keep browsing/scrolling the exercise list while it counts down. Tapping
+// it opens the full Timer for presets/custom time/sound picking; tapping ✕
+// dismisses it outright. Deliberately its own small wall-clock-based
+// countdown rather than sharing _timerState/openTimer's machinery - this is
+// meant to be a lightweight ambient nudge, not a second copy of the full
+// timer's preset/sound-picker UI.
+let _miniTimerState = { endAt:null, interval:null, total:0 };
+
+function hideMiniRestTimer(){
+  if (_miniTimerState.interval){ clearInterval(_miniTimerState.interval); _miniTimerState.interval = null; }
+  _miniTimerState.endAt = null;
+  const pill = document.getElementById('miniRestPill');
+  if (pill) pill.classList.remove('show');
+  setTimeout(() => { const p = document.getElementById('miniRestPill'); if (p && !p.classList.contains('show')) p.remove(); }, 350);
+}
+
+// Standalone rather than a closure inside showMiniRestTimer, so the single
+// module-level visibilitychange listener below can call it directly without
+// needing to re-register a fresh listener (and closure) every time a rest
+// period starts.
+function miniRestTimerTick(){
+  const pill = document.getElementById('miniRestPill');
+  const ringFill = document.getElementById('miniRestRingFill');
+  const textEl = document.getElementById('miniRestText');
+  if (!pill || !ringFill || !textEl || !_miniTimerState.endAt) return;
+  const CIRC = 2 * Math.PI * 14;
+  const remaining = Math.max(0, Math.ceil((_miniTimerState.endAt - Date.now()) / 1000));
+  const pct = _miniTimerState.total > 0 ? remaining / _miniTimerState.total : 0;
+  ringFill.style.strokeDasharray = String(CIRC);
+  ringFill.style.strokeDashoffset = String(CIRC * (1 - pct));
+  const m = Math.floor(remaining/60), s = remaining%60;
+  textEl.textContent = `${m}:${s.toString().padStart(2,'0')}`;
+  ringFill.classList.toggle('timer-breathing', remaining > 0 && remaining <= 5);
+  if (remaining <= 0){
+    playTimerSound();
+    if (_miniTimerState.interval){ clearInterval(_miniTimerState.interval); _miniTimerState.interval = null; }
+    textEl.textContent = 'GO';
+    setTimeout(hideMiniRestTimer, 2200);
+  }
+}
+
+function showMiniRestTimer(seconds){
+  if (!seconds || seconds <= 0) return;
+  // Re-tapping quick-save while already resting just restarts the clock
+  // fresh, rather than stacking a second pill or fighting over the DOM node.
+  hideMiniRestTimer();
+  let pill = document.getElementById('miniRestPill');
+  if (!pill){
+    pill = document.createElement('div');
+    pill.id = 'miniRestPill';
+    pill.className = 'mini-rest-pill';
+    pill.innerHTML = `
+      <svg class="mini-rest-ring" width="34" height="34" viewBox="0 0 34 34">
+        <circle class="track" cx="17" cy="17" r="14"></circle>
+        <circle class="fill" id="miniRestRingFill" cx="17" cy="17" r="14"></circle>
+      </svg>
+      <div style="flex:1; min-width:0;">
+        <div id="miniRestText" style="font-family:'JetBrains Mono',monospace; font-size:15px; font-weight:600;"></div>
+        <div style="font-size:9px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px;">Resting — tap to expand</div>
+      </div>
+      <div id="miniRestClose" style="font-size:16px; color:var(--slate); padding:6px;">✕</div>`;
+    document.body.appendChild(pill);
+    pill.querySelector('#miniRestClose').onclick = (e) => { e.stopPropagation(); hideMiniRestTimer(); };
+    pill.onclick = () => { hideMiniRestTimer(); openTimer(); };
+  }
+  requestAnimationFrame(() => pill.classList.add('show'));
+
+  _miniTimerState.total = seconds;
+  _miniTimerState.endAt = Date.now() + seconds * 1000;
+  miniRestTimerTick();
+  // Wall-clock based (recomputed from endAt each tick), same reasoning as
+  // the main timer - a naive per-tick decrement drifts or stalls outright
+  // if the interval gets throttled while the screen is locked between sets.
+  if (_miniTimerState.interval) clearInterval(_miniTimerState.interval);
+  _miniTimerState.interval = setInterval(miniRestTimerTick, 250);
+}
+// Registered once, not per-call - re-syncs the mini timer's display the
+// moment the screen wakes/tab refocuses, rather than accumulating a fresh
+// listener every time a rest period starts.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && _miniTimerState.endAt) miniRestTimerTick();
+});
 
 function openTimer(){
   if (_timerState.interval){ clearInterval(_timerState.interval); _timerState.interval = null; }

@@ -64,6 +64,35 @@ input:focus, button:focus{ outline:none; }
 /* ---------- Exercise list ---------- */
 .category{ font-family:'Bebas Neue', sans-serif; font-size:16px; font-weight:400; letter-spacing:1.5px; color:var(--flame); text-transform:uppercase; padding:16px 18px 6px 18px; display:flex; align-items:center; gap:10px; }
 .category::after{ content:''; flex:1; height:1px; background:linear-gradient(90deg, rgba(255,107,26,0.3), transparent); }
+.cat-chev{ display:inline-block; transition:transform 0.3s cubic-bezier(.34,1.56,.64,1); }
+.cat-chev.collapsed{ transform:rotate(-90deg) scale(0.9); }
+.cat-body{ max-height:3000px; overflow:hidden; opacity:1; transition:max-height 0.35s cubic-bezier(.2,.9,.3,1), opacity 0.25s ease; }
+.cat-body.collapsed{ max-height:0; opacity:0; }
+@keyframes ml-nudge-pop{
+  0%{ transform:translateY(6px) scale(0.9); opacity:0; }
+  70%{ transform:translateY(-2px) scale(1.05); opacity:1; }
+  100%{ transform:translateY(0) scale(1); opacity:1; }
+}
+.nudge-pop-in{ animation:ml-nudge-pop 0.4s ease-out both; }
+
+/* Floating mini rest-timer pill - docked at the bottom, doesn't block
+   scrolling/browsing the exercise list underneath it. */
+.mini-rest-pill{
+  position:fixed; left:14px; right:14px; max-width:452px; margin:0 auto;
+  /* Sits above the app's standard bottom:100px toast lane (used by the
+     queued-set toast, band level-up, and the undo-log toast) rather than
+     the tab bar's own 84px clearance - logging a set can show a toast AND
+     start resting in the same moment, and they'd otherwise stack directly
+     on top of each other. */
+  bottom:calc(154px + env(safe-area-inset-bottom, 0px)); background:var(--panel);
+  border:1px solid rgba(255,107,26,0.4); border-radius:16px; padding:10px 14px;
+  display:flex; align-items:center; gap:12px; z-index:32;
+  box-shadow:0 10px 26px rgba(0,0,0,0.5); cursor:pointer;
+  transform:translateY(120%); opacity:0; transition:transform 0.32s cubic-bezier(.2,.9,.3,1), opacity 0.32s ease;
+}
+.mini-rest-pill.show{ transform:translateY(0); opacity:1; }
+.mini-rest-ring .track{ fill:none; stroke:var(--line); stroke-width:3; }
+.mini-rest-ring .fill{ fill:none; stroke:var(--flame); stroke-width:3; stroke-linecap:round; transform:rotate(-90deg); transform-origin:center; transition:stroke-dashoffset 0.25s linear; }
 .exercise{ display:flex; align-items:center; justify-content:space-between; padding:14px 18px; margin:0 12px 10px 12px; border-radius:14px;
   background:linear-gradient(165deg, #202226, #191a1d); border:1px solid rgba(255,255,255,0.06);
   box-shadow:0 8px 20px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.03);
@@ -436,7 +465,23 @@ input:focus, button:focus{ outline:none; }
   animation: ml-float-up 1.4s ease-out forwards;
 }
 
-/* Session complete */
+/* Session complete - a bottom sheet over the (still-visible, dimmed) Track
+   screen rather than a full-screen takeover. Swipe down or tap the scrim
+   to dismiss, same as any other sheet in the app. */
+.session-done-scrim{
+  position:fixed; inset:0; background:rgba(0,0,0,0); z-index:15; pointer-events:none;
+  transition:background 0.3s ease;
+}
+.session-done-scrim.show{ background:rgba(0,0,0,0.55); pointer-events:auto; }
+.session-done-sheet{
+  position:fixed; left:0; right:0; bottom:0; max-width:480px; margin:0 auto;
+  background:var(--ink); border-top:1px solid var(--line); border-radius:20px 20px 0 0;
+  z-index:16; padding-top:8px;
+  transform:translateY(105%); transition:transform 0.32s cubic-bezier(.2,.9,.3,1);
+}
+.session-done-sheet.show{ transform:translateY(0); }
+.session-done-sheet .sheet-handle{ width:36px; height:4px; background:var(--line); border-radius:3px; margin:0 auto 4px auto; }
+
 .session-done-stat{ flex:1; text-align:center; background:var(--panel); border-radius:13px; padding:14px 8px; animation: ml-rise .5s ease both; }
 .session-done-stat .n{ font-family:'Bebas Neue',sans-serif; font-size:27px; line-height:1; }
 .session-done-stat .l{ font-size:10.5px; color:var(--slate); margin-top:3px; }
@@ -538,7 +583,7 @@ input:focus, button:focus{ outline:none; }
 .timer-breathing{ animation:ml-timer-breathe 1s ease-in-out infinite; }
 
 @media (prefers-reduced-motion: reduce){
-  .volume-float, .reward-burst, .just-logged, .streak-alive, .weight-pulse, .timer-breathing{ animation:none !important; }
+  .volume-float, .reward-burst, .just-logged, .streak-alive, .weight-pulse, .timer-breathing, .nudge-pop-in{ animation:none !important; }
   .set-complete-tick .tick-ring, .set-complete-tick .tick-check{ animation:none !important; stroke-dashoffset:0 !important; }
   .reward-burst{ display:none !important; }
 }
