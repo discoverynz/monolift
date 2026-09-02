@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.284';
+const APP_VERSION = 'Beta 5.285';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -5203,14 +5203,18 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   // obvious place in the app for ideas - and it was showing nothing at all,
   // because the normal suggestion engine needs existing exercises to work
   // from and an empty day has none.
-  const ghostRaceHtml = buildGhostRaceHtml(headerStats, visibleExercises);
+  const ghostData = ghostRaceData(headerStats, visibleExercises);
+  const ghostPillHtml = buildGhostRacePillHtml(ghostData);
+  const ghostRaceHtml = state.ghostExpanded ? buildGhostRaceHtml(ghostData) : '';
   const mainEventHtml = buildMainEventHtml(visibleExercises);
   // Session heat needs per-set timestamps, which only the live header fetch
   // provides - the snapshot path renders from cached aggregate stats and
   // never populates them. Suppressed there rather than shown from whatever
   // happens to be left in state, which on a cold open is either empty or
   // yesterday's session. It appears on the repaint a moment later.
-  const sessionHeatHtml = fromSnapshot ? '' : buildSessionHeatHtml(computeSessionHeat(state.todaysSetsRaw || []));
+  const sessionHeatData = fromSnapshot ? null : computeSessionHeat(state.todaysSetsRaw || []);
+  const sessionHeatPillHtml = buildSessionHeatPillHtml(sessionHeatData);
+  const sessionHeatHtml = state.heatExpanded ? buildSessionHeatHtml(sessionHeatData) : '';
   const tripIdeasHtml = ((isTripActive() || isAnyDay(state.selectedDay)) && visibleExercises.length === 0)
     ? buildTripIdeasHtml(effectiveDayTypeLabel) : '';
 
@@ -5259,7 +5263,7 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
               if (!t) return `<div style="font-family:'JetBrains Mono',monospace; font-size:17px; font-weight:600; color:var(--slate);">—</div>
                 <div style="font-size:8.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px; margin-top:2px;">Like</div>`;
               return `<div style="font-family:'JetBrains Mono',monospace; font-size:17px; font-weight:600; color:var(--chalk);">${t.icon}</div>
-                <div style="font-size:8.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px; margin-top:2px;">${t.text} Moved Today</div>`;
+                <div style="font-size:8.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px; margin-top:2px;">${t.text} Lifted</div>`;
             })()}
           </div>
         </div>
@@ -5267,6 +5271,8 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
           ${isAnyDay(state.selectedDay) && workingExercises.length > 0 ? `<button id="toolbarClearAnyBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:var(--panel); border:1px solid var(--line); color:var(--slate);">
             <span style="font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px;">CLEAR</span>
           </button>` : ''}
+          ${ghostPillHtml}
+          ${sessionHeatPillHtml}
           <button id="toolbarTimerBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:rgba(255,107,26,0.10); border:1px solid rgba(255,107,26,0.45); color:var(--flame);">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg>
             <span style="font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px;">TIMER</span>
@@ -5430,6 +5436,10 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   if (retryBtn) retryBtn.onclick = () => { state.exercises = []; renderTrack(); };
   const clearLocBtn = document.getElementById('clearLocationBtn');
   if (clearLocBtn) clearLocBtn.onclick = () => openLocationPicker(allLocations, currentLocationId);
+  const ghostPill = document.getElementById('ghostRacePill');
+  if (ghostPill) ghostPill.onclick = () => { state.ghostExpanded = !state.ghostExpanded; renderTrack(); };
+  const heatPill = document.getElementById('sessionHeatPill');
+  if (heatPill) heatPill.onclick = () => { state.heatExpanded = !state.heatExpanded; renderTrack(); };
   const mainCard = document.getElementById('mainEventCard');
   if (mainCard) mainCard.onclick = () => openLogForm(mainCard.dataset.exId, mainCard.dataset.exName);
   document.querySelectorAll('.trip-idea-add').forEach(btn => {
@@ -15713,43 +15723,50 @@ function buildChargeCellsHtml(recovery){
 // session was at the same point. Every gym app tells you how it went
 // afterwards, when nothing can be done - this makes the middle of a session
 // have stakes.
-function buildGhostRaceHtml(hs, list){
-  if (!hs || !hs.targetDateIsToday) return '';
+// Data only - shared by the toolbar pill and the expanded detail card, so
+// the two can never disagree about whether there's a race on.
+function ghostRaceData(hs, list){
+  if (!hs || !hs.targetDateIsToday) return null;
   const last = hs.lastWeekVolumeKg;
-  if (last === null || last <= 0) return '';
+  if (last === null || last <= 0) return null;
   const total = (list || []).length;
   const done = (list || []).filter(ex => ex.loggedToday || ex.completeVia).length;
-  // Only mid-session. Before you start there's nothing to race, and once
-  // you're finished the session summary is the right place for the verdict.
-  if (done === 0 || done >= total || total < 2) return '';
+  if (done === 0 || done >= total || total < 2) return null;
   const now = hs.volumeKg || 0;
-  // A day with real work but no measurable volume - bodyweight, bands, timed
-  // holds - would read as 0 against last week and look like total failure
-  // when the session is actually going fine. Volume simply isn't the right
-  // yardstick there, so don't pretend it is.
-  if (now <= 0) return '';
-  // Where last week stood at this same fraction of the session, which is the
-  // only fair comparison - comparing a part-done session against a whole one
-  // would always read as losing.
+  if (now <= 0) return null;
   const ghostNow = Math.round(last * (done / total));
   const delta = now - ghostNow;
   const ahead = delta >= 0;
   const pct = Math.max(4, Math.min(100, Math.round((now / Math.max(1, last)) * 100)));
   const ghostPct = Math.max(2, Math.min(100, Math.round((ghostNow / Math.max(1, last)) * 100)));
+  return { now, last, done, total, delta, ahead, pct, ghostPct };
+}
+
+// Small pill for the toolbar row - always visible, costs almost no vertical
+// space. Tap to expand the full detail card below the toggle.
+function buildGhostRacePillHtml(g){
+  if (!g) return '';
+  return `<button id="ghostRacePill" class="badge-pill" style="height:38px; padding:0 12px; border-radius:10px; background:rgba(255,107,26,0.09); border:1px solid rgba(255,107,26,0.35); color:var(--flame); display:flex; align-items:center; gap:5px; font-size:12px;">
+    👻 <span style="font-family:'JetBrains Mono',monospace; font-size:11px;">${g.ahead ? '+' : ''}${g.delta.toLocaleString()}kg</span>
+  </button>`;
+}
+
+function buildGhostRaceHtml(g){
+  if (!g) return '';
   return `
-    <div style="margin:12px 18px 0 18px; background:linear-gradient(150deg,#1e2024,#171819); border:1px solid #2a2c30; border-radius:15px; padding:13px 14px 14px 14px;">
+    <div style="margin:9px 18px 0 18px; background:linear-gradient(150deg,#1e2024,#171819); border:1px solid #2a2c30; border-radius:15px; padding:13px 14px 14px 14px;">
       <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:13px;">
         <span class="small" style="color:var(--slate);">Against last week, same point</span>
-        <span style="font-family:'Bebas Neue',sans-serif; font-size:24px; line-height:1; color:${ahead ? 'var(--good)' : 'var(--flame)'};">${ahead ? '+' : ''}${delta.toLocaleString()}kg</span>
+        <span style="font-family:'Bebas Neue',sans-serif; font-size:24px; line-height:1; color:${g.ahead ? 'var(--good)' : 'var(--flame)'};">${g.ahead ? '+' : ''}${g.delta.toLocaleString()}kg</span>
       </div>
       <div style="position:relative; height:32px; border-radius:8px; background:#141517; overflow:hidden;">
-        <div style="position:absolute; inset:0 auto 0 0; width:${pct}%; display:flex; align-items:center; padding-left:9px;
-          background:linear-gradient(90deg, ${ahead ? 'rgba(143,191,122,.9), rgba(143,191,122,.3)' : 'rgba(255,107,26,.9), rgba(255,107,26,.3)'});
-          border-right:2px solid ${ahead ? 'var(--good)' : 'var(--flame)'};
+        <div style="position:absolute; inset:0 auto 0 0; width:${g.pct}%; display:flex; align-items:center; padding-left:9px;
+          background:linear-gradient(90deg, ${g.ahead ? 'rgba(143,191,122,.9), rgba(143,191,122,.3)' : 'rgba(255,107,26,.9), rgba(255,107,26,.3)'});
+          border-right:2px solid ${g.ahead ? 'var(--good)' : 'var(--flame)'};
           font-size:10.5px; font-weight:600; color:#17181A; white-space:nowrap; transition:width .6s cubic-bezier(.2,.8,.3,1);">
-          ${now.toLocaleString()}kg · ${done} of ${total}
+          ${g.now.toLocaleString()}kg · ${g.done} of ${g.total}
         </div>
-        <div style="position:absolute; top:-2px; bottom:-2px; left:${ghostPct}%; width:2px;
+        <div style="position:absolute; top:-2px; bottom:-2px; left:${g.ghostPct}%; width:2px;
           background:repeating-linear-gradient(180deg,#8C8E94 0 4px,transparent 4px 8px);"></div>
       </div>
     </div>`;
@@ -15776,6 +15793,16 @@ function computeSessionHeat(todaysSets){
   const pace = span > 0 ? withTime.length / span : 0; // sets per minute
   const heat = Math.max(0, Math.min(1, (pace / 0.35) * Math.max(0, 1 - (minsSince / (allowedRest * 2)))));
   return { heat, minsSince, allowedRest, sets: withTime.length, span: Math.round(span) };
+}
+
+function buildSessionHeatPillHtml(h){
+  if (!h || h.sets < 3) return '';
+  const pct = Math.round(h.heat * 100);
+  const word = pct >= 70 ? 'Hot' : pct >= 40 ? 'Warm' : 'Cooling';
+  const colour = pct >= 70 ? 'var(--flame)' : pct >= 40 ? 'var(--brass)' : 'var(--slate)';
+  return `<button id="sessionHeatPill" class="badge-pill" style="height:38px; padding:0 12px; border-radius:10px; background:rgba(255,107,26,0.09); border:1px solid rgba(255,107,26,0.35); color:${colour}; display:flex; align-items:center; gap:5px; font-size:12px;">
+    🔥 <span style="font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.3px;">${word}</span>
+  </button>`;
 }
 
 function buildSessionHeatHtml(h){
