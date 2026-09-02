@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.288';
+const APP_VERSION = 'Beta 5.289';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -3725,7 +3725,7 @@ async function openPublishToMonoLiftScreen(){
             </div>
             <div class="small" style="color:var(--slate); margin-top:4px;">Equipment</div>
             <div style="display:flex; flex-wrap:wrap; gap:6px;">
-              ${EQUIPMENT_CATEGORIES.map(cat => `<div class="chip publish-equip-chip" data-name="${c.name}" data-equip="${cat.dbValues[0]}" style="font-size:11px; padding:6px 10px;">${cat.label}</div>`).join('')}
+              ${EQUIPMENT_CATEGORIES.map(cat => `<div class="chip publish-equip-chip" data-name="${c.name}" data-equip="${cat.dbValues[0] || cat.key}" style="font-size:11px; padding:6px 10px;">${cat.label}</div>`).join('')}
             </div>
           </div>
         </div>
@@ -4782,29 +4782,7 @@ async function fetchTrackHeaderStats(){
     volumeKg += kgWeight * perSideMultiplier * repsNum * (Number(s.num_sets) || 1);
   });
   const streak = computeConsistencyStreak(streakSets);
-  // Same weekday, one week back - what you're actually racing. Computed from
-  // the streak query's own window rather than a second fetch, since that
-  // query already pulled the dates and this only needs volume for one of
-  // them. Null when there's no comparable session rather than zero, so the
-  // UI can tell "didn't train" apart from "trained and moved nothing".
-  let lastWeekVolumeKg = null;
-  try {
-    const lastWeekStr = addDaysToDate(targetDateStr, -7);
-    const lwResult = await withTimeout(
-      supabaseClient.from('sets').select('weight, weight_unit, weight_type, reps, num_sets')
-        .eq('user_id', userData.user.id).eq('logged_at', lastWeekStr), 10000);
-    if (!lwResult.__timeout && !lwResult.error && lwResult.data && lwResult.data.length){
-      let v = 0;
-      lwResult.data.forEach(s => {
-        const w = Number(s.weight);
-        if (!isFinite(w) || w <= 0) return;
-        const kg = s.weight_unit === 'lb' ? w * 0.453592 : w;
-        v += kg * (s.weight_type === 'per' ? 2 : 1) * (Number(s.reps) || 1) * (Number(s.num_sets) || 1);
-      });
-      lastWeekVolumeKg = Math.round(v);
-    }
-  } catch(e){ /* a missing comparison is not worth failing the header over */ }
-  return { volumeKg: Math.round(volumeKg), setsToday, streak: streak.current, targetDateIsToday, targetWeekday, targetIsFuture, lastWeekVolumeKg };
+  return { volumeKg: Math.round(volumeKg), setsToday, streak: streak.current, targetDateIsToday, targetWeekday, targetIsFuture };
 }
 
 // Suggestions markup, shared by the inline (cached) render and the
@@ -6931,7 +6909,7 @@ async function openPicker(initialTab, jumpToMuscle){
   let ideaFilter = 'All';
   let ideaGroupBy = 'equipment';
   let showKitRecs = false;
-  const EQUIPMENT_GROUP_LABEL = { band: 'Bands', bodyweight: 'Bodyweight', time: 'Timed Holds' };
+  const EQUIPMENT_GROUP_LABEL = { band: 'Bands', bodyweight: 'Bodyweight', time: 'Timed Holds', rings: 'Rings' };
   function renderIdeasTab(){
     removeSideIndex();
     const body = overlay.querySelector('#pickerBody');
@@ -6939,9 +6917,14 @@ async function openPicker(initialTab, jumpToMuscle){
     // SAME categorization, or tapping a chip and reading the header above it
     // tell two different stories. groupKeyOf is the single source both the
     // chip list and the sections are built from, so they can't drift apart.
+    // Equipment identity isn't the same thing as measurementType - a ring
+    // push-up and a floor push-up are both measured as bodyweight reps, but
+    // they don't use the same equipment. idea.equip is an explicit override
+    // for cases where the two diverge; measurementType remains the fallback
+    // for everything else, where it happens to coincide (e.g. band exercises).
     const groupKeyOf = (idea) => ideaGroupBy === 'muscle'
       ? fineMuscleCategory(idea.muscle, idea.name)
-      : (EQUIPMENT_GROUP_LABEL[idea.measurementType] || 'Other');
+      : (EQUIPMENT_GROUP_LABEL[idea.equip || idea.measurementType] || 'Other');
 
     // Filter options come from the FULL library, not the already-filtered
     // list, so every chip stays available regardless of which one is
@@ -6977,7 +6960,7 @@ async function openPicker(initialTab, jumpToMuscle){
     `).join('');
 
     body.innerHTML = `
-      <div class="small" style="padding:10px 18px 8px 18px; color:var(--slate); line-height:1.5;">Bands, push-up handles and bodyweight only - built to fit a hotel room or a small space. Tap + to add and log straight away.</div>
+      <div class="small" style="padding:10px 18px 8px 18px; color:var(--slate); line-height:1.5;">Bands, push-up handles, rings, and bodyweight - built to fit a hotel room or a small space. Tap + to add and log straight away.</div>
       <div style="margin:0 18px 12px 18px; background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden;">
         <button id="kitRecsToggle" style="width:100%; display:flex; justify-content:space-between; align-items:center; padding:11px 13px; background:none; border:none; color:var(--chalk); text-align:left;">
           <span style="font-family:'Oswald',sans-serif; font-size:12.5px;">💡 Want a more complete home setup?</span>
@@ -10987,13 +10970,13 @@ const HOME_GYM_IDEAS = [
   { name:'Wall Slide', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:'Back against a wall, arms in a goalpost shape, slide up and down keeping contact - shoulder mobility and rear delt activation, good as a warm-up.',
     muscle:'shoulders' },
-  { name:'Ring Rows', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+  { name:'Ring Rows', equip:'rings', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:"Rings low, lean back and pull your chest to them - the rings hang from any anchor above head height (a bar, a sturdy branch, an anchor strap over a door). Walk your feet forward to make it harder, back to make it easier - the one adjustment a fixed bar row can't give you.",
     muscle:'lats' },
-  { name:'Ring Pull-Ups', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+  { name:'Ring Pull-Ups', equip:'rings', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:"Same movement as a bar pull-up, but the rings rotate freely so your hands find their own angle through the rep - easier on the wrists and shoulders than a fixed grip, and the instability genuinely adds work.",
     muscle:'lats' },
-  { name:'Ring Face Pull', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+  { name:'Ring Face Pull', equip:'rings', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:'Rings at chest height, lean back and pull them to your face, elbows high - rear delts and upper back, the same gap Banded Face Pull covers if you have a band instead.',
     muscle:'shoulders' },
 
@@ -11046,13 +11029,13 @@ const HOME_GYM_IDEAS = [
   { name:'Banded Push Press', sub:'Push', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
     hint:'Stand on the band, dip your knees and drive the press up explosively - adds a leg-drive element a strict press doesn\'t have.',
     muscle:'shoulders' },
-  { name:'Ring Push-Ups', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+  { name:'Ring Push-Ups', equip:'rings', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:'Rings just above the floor, hands on them instead of the ground - the free rotation demands real shoulder stability and makes a standard push-up noticeably harder.',
     muscle:'chest' },
-  { name:'Ring Dips', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+  { name:'Ring Dips', equip:'rings', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:"Rings at hip height, support yourself and lower under control - a genuine step up from a bench or chair dip once those get easy, and closer to a real dip machine than almost any other home option.",
     muscle:'triceps' },
-  { name:'Ring Support Hold', sub:'Push', measurementType:'time', usesDoorAnchor:false, anchorLevel:null,
+  { name:'Ring Support Hold', equip:'rings', sub:'Push', measurementType:'time', usesDoorAnchor:false, anchorLevel:null,
     hint:'Rings at hip height, arms locked out, hold the top position without moving - builds the shoulder stability that everything else on rings depends on, and a fair place to start if a full dip is still out of reach.',
     muscle:'shoulders' },
 
@@ -11140,10 +11123,10 @@ const HOME_GYM_IDEAS = [
   { name:'Leg Raise', sub:'Core', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:'Lying on your back, legs straight, lower them slowly without touching down - lower abs.',
     muscle:'abdominals' },
-  { name:'Ring L-Sit', sub:'Core', measurementType:'time', usesDoorAnchor:false, anchorLevel:null,
+  { name:'Ring L-Sit', equip:'rings', sub:'Core', measurementType:'time', usesDoorAnchor:false, anchorLevel:null,
     hint:'Support yourself on the rings, legs held straight out in front - a genuinely hard core and hip-flexor hold. Bend one or both knees to scale it down if a straight-leg hold isn\'t there yet.',
     muscle:'abdominals' },
-  { name:'Ring Plank', sub:'Core', measurementType:'time', usesDoorAnchor:false, anchorLevel:null,
+  { name:'Ring Plank', equip:'rings', sub:'Core', measurementType:'time', usesDoorAnchor:false, anchorLevel:null,
     hint:'Feet in the rings (or hands on them for a push-up-position plank), everything else as a normal plank - the instability turns a familiar hold into a much harder one.',
     muscle:'abdominals' },
 ];
