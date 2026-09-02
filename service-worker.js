@@ -1,5 +1,5 @@
-const CACHE_NAME = 'monolift-v329';
-const SHELL = ['./', './index.html', './css/styles.css?v=329', './js/app.js?v=329', './js/supabase-client.js?v=329', './manifest.json'];
+const CACHE_NAME = 'monolift-v330';
+const SHELL = ['./', './index.html', './css/styles.css?v=330', './js/app.js?v=330', './js/supabase-client.js?v=330', './manifest.json'];
 
 self.addEventListener('install', (event) => {
   self.skipWaiting(); // don't wait for old tabs to close — take over immediately
@@ -59,7 +59,7 @@ self.addEventListener('fetch', (event) => {
     // NETWORK-FIRST for the HTML, with cache only as an offline fallback.
     //
     // Serving cached HTML was the root of a bug that cost real hours: the
-    // HTML names versioned assets (app.js?v=329), so stale HTML boots stale
+    // HTML names versioned assets (app.js?v=330), so stale HTML boots stale
     // JavaScript no matter how correct the deployed files are. Every fix for
     // that was itself trapped behind the stale worker that caused it - the
     // update could never arrive because the thing needing updating was what

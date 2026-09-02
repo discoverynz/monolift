@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.278';
+const APP_VERSION = 'Beta 5.279';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -838,11 +838,17 @@ function targetDateInfo(){
   const mm = String(targetDate.getMonth() + 1).padStart(2, '0');
   const dd = String(targetDate.getDate()).padStart(2, '0');
   const targetDateStr = `${yyyy}-${mm}-${dd}`;
-  // Which date decides whether a card shows as done. Sets are always
-  // recorded with today's date, so when you work from a future day's plan -
-  // doing Friday's session on Thursday - the completion check has to look at
-  // today or nothing you just logged would ever turn green.
-  const doneDateStr = targetIsFuture ? todayStr() : targetDateStr;
+  // Which date decides whether a card shows as done.
+  //
+  // Sets are ALWAYS recorded with today's date, whichever day's plan you're
+  // working from. The old rule only redirected this to today for FUTURE
+  // days, which meant working a past day's plan - Monday's session on a
+  // Wednesday - checked Monday's date for sets that were written on
+  // Wednesday. Nothing ever turned green, no matter how much was logged.
+  //
+  // Only the day itself should check its own date. Every other day is being
+  // worked today, so completion is decided by today, in both directions.
+  const doneDateStr = targetDateIsToday ? targetDateStr : todayStr();
   return { targetWeekday, targetDateStr, doneDateStr, targetDateIsToday, targetIsFuture };
 }
 
@@ -15948,6 +15954,53 @@ function endSession(){
 
 // Ending from the toolbar. If everything got logged it's a finish worth
 // marking; if not, it's just stopping, and nothing should be celebrated.
+// Writes through the same insert as every other logging path, including PR
+// detection - the session card had been silently skipping this entirely.
+async function sessionLogSet(ex, weightRaw, repsRaw, unitOverride){
+  const userData = { user: await getCurrentUser() };
+  if (!userData.user) return false;
+  const idField = setExerciseIdField();
+  const unit = unitOverride || (ex.lastSet && ex.lastSet.weight_unit) || 'kg';
+  const weight = weightRaw ? parseFloat(weightRaw) : null;
+  const weightType = (ex.lastSet && ex.lastSet.weight_type) || 'total';
+
+  let priorBest = null;
+  if (weight !== null && (unit === 'kg' || unit === 'lb')){
+    const prev = await withTimeout(
+      supabaseClient.from('sets').select('weight, weight_unit')
+        .eq('user_id', userData.user.id).eq(idField, ex.id)
+        .not('weight', 'is', null).limit(60), 10000);
+    if (!prev.__timeout && !prev.error && prev.data && prev.data.length){
+      priorBest = Math.max(...prev.data.map(s => convertWeight(s.weight, s.weight_unit, unit)));
+    }
+  }
+
+  const payload = {
+    user_id: userData.user.id, weight, weight_unit: unit, weight_type: weightType,
+    reps: repsRaw ? parseInt(repsRaw, 10) : ASSUMED_REPS,
+    num_sets: 1, logged_at: todayStr(), location_id: effectiveLocationId()
+  };
+  payload[idField] = ex.id;
+  invalidateTrackSnapshots();
+  let error = null;
+  try {
+    const res = await withTimeout(supabaseClient.from('sets').insert(payload).select(), 12000);
+    error = res.__timeout ? { message: 'timed out' } : res.error;
+  } catch(e){ error = { message: e.message || 'network' }; }
+  if (error){
+    queueSetLocally(payload);
+    showQueuedSetToast();
+    return true;
+  }
+  const btn = document.querySelector('.sess-log');
+  if (priorBest !== null && weight !== null && weight > priorBest + 0.01){
+    celebratePR(ex.name, weight, unit, priorBest);
+  } else {
+    celebrateLoggedSet(btn, weight, unit, weightType, payload.reps, 1);
+  }
+  return true;
+}
+
 function endSessionEarly(){
   const sess = readSession();
   if (!sess) return;
