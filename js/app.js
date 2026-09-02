@@ -17,7 +17,7 @@ const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders &
 // after a set is saved (see exerciseRow's `justLogged`) - every other time
 // the "Logged today" pill renders, it's the plain ✓ text, unanimated.
 const SET_COMPLETE_TICK_SVG = `<svg class="set-complete-tick" width="16" height="16" viewBox="0 0 24 24" style="flex-shrink:0;"><circle class="tick-ring" cx="12" cy="12" r="10" fill="none" stroke="#0F1A0C" stroke-width="2"></circle><path class="tick-check" d="M7 12.5 L10.5 16 L17 8.5" fill="none" stroke="#0F1A0C" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>`;
-const APP_VERSION = 'Beta 5.300';
+const APP_VERSION = 'Beta 5.301';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Rings","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -2419,26 +2419,51 @@ function exerciseRow(ex){
   </div>`;
 }
 
+// Cached the same way locations now are: renderTrack's Promise.all called
+// this on every single render, one row at a time as the user switched
+// days, when the whole table is at most 8 rows (one per weekday plus
+// Anytime) and only changes when a day is actually retagged. Fetches every
+// weekday's label in one request instead of one request per weekday
+// switched to, and reuses that result until a real mutation invalidates it.
+let _dayTypesCache = null;
+let _dayTypesPromise = null;
+function invalidateDayTypesCache(){ _dayTypesCache = null; _dayTypesPromise = null; }
+
 async function loadDayType(weekday){
   const userData = { user: await getCurrentUser() };
   // Not signed in - genuinely nothing to load, return null so the caller
   // shows a neutral fallback (DAY_NAMES[weekday] = "MON", "TUE" etc.) rather
   // than a hardcoded default plan that was never actually set by anyone.
   if (!userData || !userData.user) return null;
-  const result = await withTimeout(
-    supabaseClient.from('day_types').select('label').eq('user_id', userData.user.id).eq('weekday', weekday).maybeSingle(),
-    15000
-  );
-  // Transient timeout or error - the real label might exist in the database
-  // but we couldn't fetch it right now. Do NOT fall back to a hardcoded
-  // default label ("Chest & Triceps" etc.) since that misleadingly looks
-  // like the day was silently reset to defaults. Return a sentinel that the
-  // caller can render as a placeholder instead.
-  if (result.__timeout) return { __unavailable: true, reason: 'timeout' };
-  if (result.error) return { __unavailable: true, reason: 'error', error: result.error };
+  if (!_dayTypesCache){
+    if (!_dayTypesPromise){
+      _dayTypesPromise = (async () => {
+        const result = await withTimeout(
+          supabaseClient.from('day_types').select('weekday, label').eq('user_id', userData.user.id),
+          15000
+        );
+        if (result.__timeout){ _dayTypesPromise = null; return { failed:true, reason:'timeout' }; }
+        if (result.error){ _dayTypesPromise = null; return { failed:true, reason:'error', error: result.error }; }
+        const byWeekday = {};
+        (result.data || []).forEach(r => { byWeekday[r.weekday] = r.label; });
+        const resolved = { failed:false, byWeekday };
+        _dayTypesCache = resolved;
+        _dayTypesPromise = null;
+        return resolved;
+      })();
+    }
+    // Transient timeout or error - the real label might exist in the
+    // database but we couldn't fetch it right now. Do NOT fall back to a
+    // hardcoded default label ("Chest & Triceps" etc.) since that
+    // misleadingly looks like the day was silently reset to defaults, and
+    // deliberately do NOT cache a failure - the next call should retry the
+    // network rather than being stuck showing "unavailable" until some
+    // unrelated mutation happens to invalidate it.
+    const outcome = await _dayTypesPromise;
+    if (outcome.failed) return { __unavailable: true, reason: outcome.reason, error: outcome.error };
+  }
   // Genuinely no row - user has never set a label for this weekday.
-  if (!result.data) return null;
-  return result.data.label;
+  return (weekday in _dayTypesCache.byWeekday) ? _dayTypesCache.byWeekday[weekday] : null;
 }
 
 // Small confirm popover anchored near the button that triggered it - guards
@@ -4243,6 +4268,7 @@ function openEditDayTypeForm(weekday, currentLabel){
       const userData = { user: await getCurrentUser() };
       invalidateTrackSnapshots();
       await supabaseClient.from('day_types').upsert({ user_id: userData.user.id, weekday, label }, { onConflict: 'user_id,weekday' });
+      invalidateDayTypesCache();
       overlay.remove();
       if (state.currentTab === 'track') renderTrack();
     });
@@ -4556,6 +4582,7 @@ function showOnboarding(mode){
             { onConflict: 'user_id,weekday' }
           );
         }
+        invalidateDayTypesCache();
         if (wiz.superset !== null){
           await supabaseClient.auth.updateUser({ data: { usesSupersets: wiz.superset === 'yes' } });
         }
@@ -8705,6 +8732,7 @@ async function openChangeSingleDay(){
             { user_id: userData.user.id, weekday: targetDay, label: SPLIT_CATEGORY_LABELS[newCategory] || cap(newCategory) },
             { onConflict: 'user_id,weekday' }
           );
+          invalidateDayTypesCache();
         }
         overlay.remove();
         state.selectedDay = targetDay;
@@ -9253,6 +9281,7 @@ async function openPlanReorganizer(){
           { onConflict: 'user_id,weekday' }
         );
       }
+      invalidateDayTypesCache();
 
       overlay.remove();
       state.selectedDay = openingDay();
@@ -15966,6 +15995,7 @@ async function performDaySwap(dayA, dayB){
   } else if (dtB.data){
     await supabaseClient.from('day_types').delete().eq('user_id', uid).eq('weekday', dayB);
   }
+  invalidateDayTypesCache();
 }
 
 // An honest read on what a trip actually cost, shown when it ends. The point
