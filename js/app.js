@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.287';
+const APP_VERSION = 'Beta 5.288';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -3577,6 +3577,10 @@ const EQUIPMENT_CATEGORIES = [
   { key: 'machine', label: 'Machines (Other)', dbValues: ['machine'] },
   { key: 'kettlebells', label: 'Kettlebells', dbValues: ['kettlebells'] },
   { key: 'bands', label: 'Resistance Bands', dbValues: ['bands'] },
+  // No dbValues either, same reason as Bench - the public exercise database
+  // predates gymnastic rings being common home-gym equipment, so there's no
+  // "rings" value in it to auto-match against. Real equipment tag regardless.
+  { key: 'rings', label: 'Gymnastic Rings', dbValues: [] },
   { key: 'bodyweight', label: 'Bodyweight Only', dbValues: ['body only'] },
   { key: 'medicine ball', label: 'Medicine Ball', dbValues: ['medicine ball'] },
   { key: 'exercise ball', label: 'Exercise Ball', dbValues: ['exercise ball'] },
