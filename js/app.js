@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.280';
+const APP_VERSION = 'Beta 5.281';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -5228,7 +5228,6 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
           <h1 id="dayTypeHeader" style="cursor:pointer;${dayTypeUnavailable ? ' color:#E8A33D;' : ''}">
             <span style="color:var(--slate); font-weight:400;">${dayLabelOf(state.selectedDay)}</span>${effectiveDayTypeLabel ? ` <span style="color:var(--slate); font-weight:400;">—</span> ${effectiveDayTypeLabel}` : ''}
           </h1>
-          ${buildVolumeRaceHtml(headerStats)}
           ${(() => { const t = tonnageComparison(headerStats.volumeKg); return t ? `<div class="small" style="color:var(--slate); margin-top:6px;">${t.icon} ${t.text} moved today.</div>` : ''; })()}
           <div class="quote">"${q.t}" — ${q.a}</div>
 
@@ -15788,32 +15787,6 @@ function buildSessionHeatHtml(h){
     </div>`;
 }
 
-function buildVolumeRaceHtml(hs){
-  if (!hs || !hs.targetDateIsToday) return '';
-  const last = hs.lastWeekVolumeKg;
-  const now = hs.volumeKg || 0;
-  // Nothing to race against. Say so plainly rather than inventing a target
-  // out of a week where nothing was logged.
-  // Nothing to race against. Say nothing rather than narrating the absence -
-  // the volume figure is already on screen directly above this.
-  if (last === null || last <= 0) return '';
-  const pct = Math.min(100, Math.round((now / last) * 100));
-  const beaten = now >= last;
-  const remaining = Math.max(0, last - now);
-  return `
-    <div style="margin-top:10px;">
-      <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:5px;">
-        <span style="font-size:11.5px; color:${beaten ? 'var(--good)' : 'var(--slate)'};">
-          ${beaten ? `Beat last week by ${(now - last).toLocaleString()}kg` : `${remaining.toLocaleString()}kg to beat last week`}
-        </span>
-        <span style="font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--slate);">${pct}%</span>
-      </div>
-      <div style="height:7px; background:var(--ink); border-radius:4px; overflow:hidden;">
-        <div style="height:100%; width:${pct}%; border-radius:4px; transition:width .8s cubic-bezier(.2,.8,.3,1);
-          background:${beaten ? 'linear-gradient(90deg,var(--good),#B4D89C)' : 'linear-gradient(90deg,var(--flame),#FF9A5A)'};"></div>
-      </div>
-    </div>`;
-}
 
 function buildTripIdeasHtml(dayTypeLabel){
   const label = (dayTypeLabel || '').toLowerCase();
