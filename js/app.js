@@ -17,7 +17,7 @@ const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders &
 // after a set is saved (see exerciseRow's `justLogged`) - every other time
 // the "Logged today" pill renders, it's the plain ✓ text, unanimated.
 const SET_COMPLETE_TICK_SVG = `<svg class="set-complete-tick" width="16" height="16" viewBox="0 0 24 24" style="flex-shrink:0;"><circle class="tick-ring" cx="12" cy="12" r="10" fill="none" stroke="#0F1A0C" stroke-width="2"></circle><path class="tick-check" d="M7 12.5 L10.5 16 L17 8.5" fill="none" stroke="#0F1A0C" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>`;
-const APP_VERSION = 'Beta 5.299';
+const APP_VERSION = 'Beta 5.300';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Rings","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -1801,6 +1801,7 @@ function setDefaultLocationId(id){
     if (!userData || !userData.user) return;
     await supabaseClient.from('locations').update({ is_default: false }).eq('user_id', userData.user.id).eq('is_default', true);
     if (id) await supabaseClient.from('locations').update({ is_default: true }).eq('id', id);
+    invalidateLocationsCache();
   })().catch(() => {}); // is_default column may not exist yet if the migration hasn't run - fail silently, localStorage still works
 }
 function getHideCompletedPref(){ return localStorage.getItem('zealift_hide_completed') === '1'; }
@@ -2543,6 +2544,7 @@ function openLocationSubPage(){
             onConfirm: async (newName) => {
               if (!newName || newName === name) return;
               await withBulkRetry(() => withTimeout(supabaseClient.from('locations').update({ name: newName }).eq('id', id), 20000));
+              invalidateLocationsCache();
               warmInvalidate();
               renderList();
             } });
@@ -2552,6 +2554,7 @@ function openLocationSubPage(){
           `Delete "${name}"? Sets already logged there keep their record — only the location itself is removed.`,
           async () => {
             await withBulkRetry(() => withTimeout(supabaseClient.from('locations').delete().eq('id', id), 20000));
+            invalidateLocationsCache();
             warmInvalidate();
             renderList();
           }, { title: 'Delete Location?', danger: true, confirmLabel: 'Delete' });
@@ -4004,6 +4007,7 @@ function openEditLocationEquipmentScreen(locationId, locationName, currentTags, 
         alert(`Could not save: ${error.message}\n\nIf this mentions a missing column, the equipment_tags migration needs to be run first.`);
         return false;
       }
+      invalidateLocationsCache();
       const table = exerciseTable();
       const errors = [];
       for (const key of pendingIds){
@@ -4104,7 +4108,7 @@ async function openManageLocationsScreen(){
       btn.onclick = () => {
         promptText({
           title: 'Rename Location', placeholder: 'Name', initialValue: btn.dataset.name,
-          onConfirm: async (newName) => { await supabaseClient.from('locations').update({ name: newName }).eq('id', btn.dataset.id); render(); }
+          onConfirm: async (newName) => { await supabaseClient.from('locations').update({ name: newName }).eq('id', btn.dataset.id); invalidateLocationsCache(); render(); }
         });
       };
     });
@@ -4143,6 +4147,7 @@ async function openManageLocationsScreen(){
             return;
           }
           await withBulkRetry(() => withTimeout(supabaseClient.from('locations').delete().eq('id', btn.dataset.id), 20000));
+          invalidateLocationsCache();
           invalidateTrackSnapshots();
           warmInvalidate();
           render();
@@ -4561,6 +4566,7 @@ function showOnboarding(mode){
             if (!created) continue;
             if (loc.equipment_tags.length){
               await supabaseClient.from('locations').update({ equipment_tags: loc.equipment_tags }).eq('id', created.id);
+              invalidateLocationsCache();
             }
             if (i === wiz.defaultLocationIdx) setDefaultLocationId(created.id);
           }
@@ -9409,7 +9415,23 @@ async function pickAltGroup(container, onPicked){
 }
 
 // ---------- LOCATIONS ----------
-async function loadLocations(){
+// Locations rarely change (Joel adds/renames a gym occasionally, not every
+// render), but loadLocations() was being called fresh from 20+ call sites
+// with zero caching - including inside renderTrack's Promise.all, meaning
+// every single set save, day switch, or background refresh re-queried the
+// same handful of rows from Supabase. Cached like loadExerciseDB already
+// is: in-memory result plus an in-flight-promise dedup so concurrent
+// callers during the same tick share one request instead of firing several.
+// Invalidated at every actual mutation (create/rename/delete/set-default/
+// equipment-tag edit) so nothing ever shows stale location data.
+let _locationsCache = null;
+let _locationsPromise = null;
+function invalidateLocationsCache(){ _locationsCache = null; _locationsPromise = null; }
+
+async function loadLocations(forceRefresh){
+  if (!forceRefresh && _locationsCache) return _locationsCache;
+  if (!forceRefresh && _locationsPromise) return _locationsPromise;
+  _locationsPromise = (async () => {
   const userData = { user: await getCurrentUser() };
   const result = await withTimeout(
     supabaseClient.from('locations').select('id, name, equipment_tags, is_default').eq('user_id', userData.user.id).order('name'),
@@ -9437,7 +9459,8 @@ async function loadLocations(){
   state.locationDefaultColumnMissing = isDefaultColumnMissing;
   // Self-heal: if localStorage's default location got cleared (a known iOS
   // PWA issue) but the database still has one marked, restore it here -
-  // this runs every time Track loads, so it recovers on the very next load.
+  // this runs every time the cache actually refills, so it still recovers
+  // promptly without needing to run on every single render.
   if (!getDefaultLocationId()){
     const dbDefault = locations.find(l => l.is_default);
     if (dbDefault) localStorage.setItem('zealift_default_location', dbDefault.id);
@@ -9466,7 +9489,11 @@ async function loadLocations(){
       } catch(e){ /* legacy value - safe to leave, getCurrentLocationId returns null */ }
     }
   }
+  _locationsCache = locations;
+  _locationsPromise = null;
   return locations;
+  })();
+  return _locationsPromise;
 }
 async function createLocation(name){
   const userData = { user: await getCurrentUser() };
@@ -9474,6 +9501,7 @@ async function createLocation(name){
     supabaseClient.from('locations').insert({ user_id: userData.user.id, name }).select(),
     15000
   );
+  if (!result.__timeout && !result.error && result.data) invalidateLocationsCache();
   return result.__timeout || result.error || !result.data ? null : result.data[0];
 }
 
