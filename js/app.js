@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.282';
+const APP_VERSION = 'Beta 5.283';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -5248,18 +5248,18 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
             <div style="font-family:'JetBrains Mono',monospace; font-size:17px; font-weight:600; color:var(--chalk);">${headerStats.setsToday}</div>
             <div style="font-size:8.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px; margin-top:2px;">Sets ${headerStats.targetDateIsToday ? 'Today' : dayLabelOf(headerStats.targetWeekday)}</div>
           </div>
-          <div style="flex:1; text-align:center; padding:14px 4px;">
+          <div style="flex:1; text-align:center; padding:14px 6px;">
             ${(() => {
-              // Same tonnage comparison, moved from a standalone line under the
-              // header into the fourth panel here. Text length varies a lot -
-              // "about a killer whale" vs "about a big dog" - so it's sized down
-              // and allowed to wrap rather than forced onto the number's line,
-              // and blank when there's nothing to compare yet.
+              // Same treatment as the other three panels: JetBrains Mono,
+              // 17px, uppercase label underneath. The icon substitutes for a
+              // number since there's no single figure to show here, but the
+              // typography has to match or this panel reads as a different
+              // kind of thing bolted onto the strip.
               const t = tonnageComparison(headerStats.volumeKg);
               if (!t) return `<div style="font-family:'JetBrains Mono',monospace; font-size:17px; font-weight:600; color:var(--slate);">—</div>
                 <div style="font-size:8.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px; margin-top:2px;">Like</div>`;
-              return `<div style="font-size:19px; line-height:1;">${t.icon}</div>
-                <div style="font-size:8px; color:var(--slate); margin-top:3px; line-height:1.25;">${t.text}</div>`;
+              return `<div style="font-family:'JetBrains Mono',monospace; font-size:17px; font-weight:600; color:var(--chalk);">${t.icon}</div>
+                <div style="font-size:8.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px; margin-top:2px;">${t.text} Moved Today</div>`;
             })()}
           </div>
         </div>
@@ -15641,7 +15641,7 @@ function tonnageComparison(kg){
   const hit = TONNAGE_THINGS.find(t => kg >= t[0]);
   if (!hit) return null;
   const mult = kg / hit[0];
-  const phrase = mult >= 1.9 ? `${Math.floor(mult)}× ${hit[2]}` : `about ${hit[2]}`;
+  const phrase = mult >= 1.9 ? `${Math.floor(mult)}× ${hit[2]}` : hit[2];
   return { icon: hit[1], text: phrase };
 }
 
