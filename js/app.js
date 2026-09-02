@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.294';
+const APP_VERSION = 'Beta 5.295';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Rings","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -8213,13 +8213,17 @@ async function buildPlanExportText(){
   const useMaster = getUseExerciseMasterFlag();
   const idField = setExerciseIdField();
 
-  const [allEx, altGroupsResult] = await Promise.all([
+  const [allEx, altGroupsResult, dayTypesResult] = await Promise.all([
     fetchAllExercisesCompat(uid),
-    withTimeout(supabaseClient.from('alt_groups').select('id, name').eq('user_id', uid), 15000)
+    withTimeout(supabaseClient.from('alt_groups').select('id, name').eq('user_id', uid), 15000),
+    withTimeout(supabaseClient.from('day_types').select('weekday, label').eq('user_id', uid), 15000)
   ]);
   const altGroupNameById = {};
   (altGroupsResult.__timeout || altGroupsResult.error ? [] : (altGroupsResult.data || []))
     .forEach(g => { altGroupNameById[g.id] = g.name; });
+  const dayTypeLabelByWeekday = {};
+  (dayTypesResult.__timeout || dayTypesResult.error ? [] : (dayTypesResult.data || []))
+    .forEach(d => { dayTypeLabelByWeekday[d.weekday] = d.label; });
 
   // fetchAllExercisesCompat also returns exercises that exist but aren't
   // currently placed on any day (id/weekday null) - nothing to export there.
@@ -8244,17 +8248,18 @@ async function buildPlanExportText(){
 
   // Picks starting (second-earliest session), middle (positional midpoint
   // between earliest and latest), and last (most recent session) from an
-  // exercise's own dated history. Each needs enough distinct sessions to be
-  // meaningful - a "middle" that's actually just the earliest or latest
-  // entry again would be misleading rather than informative.
+  // exercise's own dated history, each paired with the date it was actually
+  // logged on. Each needs enough distinct sessions to be meaningful - a
+  // "middle" that's actually just the earliest or latest entry again would
+  // be misleading rather than informative.
   const weightCheckpoints = (setsForExercise) => {
     const byDate = bestSetPerDate(setsForExercise);
     const dates = Object.keys(byDate).sort();
-    const label = (d) => d ? formatSetValue(byDate[d].set) : null;
+    const point = (d) => d ? { weight: formatSetValue(byDate[d].set), date: formatLoggedDate(d) } : { weight: null, date: null };
     return {
-      starting: dates.length >= 2 ? label(dates[1]) : null,
-      middle: dates.length >= 3 ? label(dates[Math.floor((dates.length - 1) / 2)]) : null,
-      last: dates.length >= 1 ? label(dates[dates.length - 1]) : null
+      starting: dates.length >= 2 ? point(dates[1]) : { weight: null, date: null },
+      middle: dates.length >= 3 ? point(dates[Math.floor((dates.length - 1) / 2)]) : { weight: null, date: null },
+      last: dates.length >= 1 ? point(dates[dates.length - 1]) : { weight: null, date: null }
     };
   };
 
@@ -8269,15 +8274,19 @@ async function buildPlanExportText(){
   dayKeys.forEach(day => {
     const list = byDay[day];
     if (!list || !list.length) return;
-    lines.push(WEEKDAY_LABEL[day] || day);
-    lines.push('Exercise | Alt Group | Starting Weight | Middle Weight | Last Weight');
+    const dayTypeLabel = dayTypeLabelByWeekday[day];
+    lines.push(dayTypeLabel ? `${WEEKDAY_LABEL[day] || day} — ${dayTypeLabel}` : (WEEKDAY_LABEL[day] || day));
+    lines.push('Exercise | Alt Group | Starting Weight | Starting Date | Middle Weight | Middle Date | Last Weight | Last Date');
     list.forEach(ex => {
       const altName = ex.alt_group_id ? (altGroupNameById[ex.alt_group_id] || '') : '';
       const cp = weightCheckpoints(setsById[setIdOf(ex)] || []);
-      const starting = cp.starting || 'n/a';
-      const middle = cp.middle || 'n/a';
-      const last = cp.last || 'not logged yet';
-      lines.push(`${ex.name} | ${altName} | ${starting} | ${middle} | ${last}`);
+      const starting = cp.starting.weight || 'n/a';
+      const startingDate = cp.starting.date || '';
+      const middle = cp.middle.weight || 'n/a';
+      const middleDate = cp.middle.date || '';
+      const last = cp.last.weight || 'not logged yet';
+      const lastDate = cp.last.date || '';
+      lines.push(`${ex.name} | ${altName} | ${starting} | ${startingDate} | ${middle} | ${middleDate} | ${last} | ${lastDate}`);
     });
     lines.push('');
   });
