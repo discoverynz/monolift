@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.292';
+const APP_VERSION = 'Beta 5.293';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Rings","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -8184,6 +8184,106 @@ function openRestoreConfirmScreen(backup, listOverlay, onDone){
   };
 }
 
+// Every placed exercise, grouped by weekday, with its alt group and most
+// recent working weight - a flat plain-text dump meant to be pasted
+// somewhere else (an AI, a note, a message), not rendered as UI. Deliberately
+// simple: pipe-delimited columns rather than a markdown table, since the
+// point is to be trivially parseable by something that isn't this app.
+async function buildPlanExportText(){
+  const userData = { user: await getCurrentUser() };
+  if (!userData.user) return '';
+  const uid = userData.user.id;
+  const useMaster = getUseExerciseMasterFlag();
+  const idField = setExerciseIdField();
+
+  const [allEx, altGroupsResult] = await Promise.all([
+    fetchAllExercisesCompat(uid),
+    withTimeout(supabaseClient.from('alt_groups').select('id, name').eq('user_id', uid), 15000)
+  ]);
+  const altGroupNameById = {};
+  (altGroupsResult.__timeout || altGroupsResult.error ? [] : (altGroupsResult.data || []))
+    .forEach(g => { altGroupNameById[g.id] = g.name; });
+
+  // fetchAllExercisesCompat also returns exercises that exist but aren't
+  // currently placed on any day (id/weekday null) - nothing to export there.
+  const placed = allEx.filter(ex => ex.weekday !== null && ex.weekday !== undefined);
+
+  const setIdOf = (ex) => useMaster ? ex.masterId : ex.id;
+  const uniqueSetIds = [...new Set(placed.map(setIdOf).filter(Boolean))];
+  let lastSetById = {};
+  if (uniqueSetIds.length){
+    const setsResult = await withTimeout(
+      supabaseClient.from('sets')
+        .select(`${idField}, weight, weight_unit, weight_type, reps, num_sets, logged_at, measurement_type, band_snapshot, band_resistance, band_resistance_unit`)
+        .in(idField, uniqueSetIds).order('logged_at', { ascending: false }).limit(4000),
+      15000
+    );
+    const sets = setsResult.__timeout || setsResult.error ? [] : (setsResult.data || []);
+    // First row per id wins - already sorted newest first, so that's the
+    // most recent set regardless of which location it happened at.
+    sets.forEach(s => { const k = s[idField]; if (lastSetById[k] === undefined) lastSetById[k] = s; });
+  }
+
+  const WEEKDAY_ORDER = ['MON','TUE','WED','THU','FRI','SAT','SUN'];
+  const WEEKDAY_LABEL = { MON:'MONDAY', TUE:'TUESDAY', WED:'WEDNESDAY', THU:'THURSDAY', FRI:'FRIDAY', SAT:'SATURDAY', SUN:'SUNDAY', ANY:'ANY DAY' };
+
+  const byDay = {};
+  placed.forEach(ex => { (byDay[ex.weekday] = byDay[ex.weekday] || []).push(ex); });
+  const dayKeys = [...WEEKDAY_ORDER, ...Object.keys(byDay).filter(d => !WEEKDAY_ORDER.includes(d))];
+
+  const lines = ['MONOLIFT PLAN EXPORT', `Generated ${todayStr()}`, ''];
+  dayKeys.forEach(day => {
+    const list = byDay[day];
+    if (!list || !list.length) return;
+    lines.push(WEEKDAY_LABEL[day] || day);
+    lines.push('Exercise | Alt Group | Last Weight');
+    list.forEach(ex => {
+      const altName = ex.alt_group_id ? (altGroupNameById[ex.alt_group_id] || '') : '';
+      const s = lastSetById[setIdOf(ex)];
+      const weightLabel = s ? formatSetValue(s) : 'not logged yet';
+      lines.push(`${ex.name} | ${altName} | ${weightLabel}`);
+    });
+    lines.push('');
+  });
+  return lines.join('\n').trim();
+}
+
+async function openExportPlanTextScreen(){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay-screen';
+  overlay.innerHTML = `
+    <div class="form-header"><button id="closeExportPlan">✕</button><h1>Export Plan as Text</h1><div style="width:18px;"></div></div>
+    <div class="overlay-scroll">
+      <div class="small" style="padding:10px 18px; color:var(--slate); line-height:1.5;">Every day, every exercise, its alt group, and the last weight you logged - plain text, ready to paste anywhere.</div>
+      <div style="padding:0 18px;">
+        <textarea id="exportPlanTextArea" readonly style="width:100%; min-height:340px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px; color:var(--slate); font-family:'JetBrains Mono',monospace; font-size:11.5px; line-height:1.5; resize:vertical;">Loading…</textarea>
+      </div>
+      <div style="padding:14px 18px 20px 18px;">
+        <button class="save-btn" id="copyExportPlanBtn">Copy to Clipboard</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#closeExportPlan').onclick = () => overlay.remove();
+
+  const text = await buildPlanExportText();
+  const area = overlay.querySelector('#exportPlanTextArea');
+  area.value = text || 'No exercises on your plan yet.';
+
+  overlay.querySelector('#copyExportPlanBtn').onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(area.value);
+      alert('Copied - paste it anywhere.');
+    } catch(e){
+      // iOS Safari sometimes blocks the clipboard API outside a direct tap
+      // handler - falling back to select-and-manual-copy rather than
+      // failing silently.
+      area.focus(); area.select();
+      alert('Could not auto-copy - the text is selected, use your keyboard/menu to copy it manually.');
+    }
+  };
+}
+
+
 async function openBackupPlanScreen(){
   const overlay = document.createElement('div');
   overlay.className = 'overlay-screen';
@@ -15920,6 +16020,10 @@ async function renderMe(){
           <div><div>Plan</div><div class="small" style="color:var(--slate); margin-top:2px;">Reorganize, swap days, redo setup, tag workouts</div></div>
           <div class="chev" style="margin-top:2px;">›</div>
         </div>
+        <div class="me-item" id="exportPlanTextBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+          <div><div>Export Plan as Text</div><div class="small" style="color:var(--slate); margin-top:2px;">Every day, every exercise, alt group and last weight - plain text, ready to paste to an AI</div></div>
+          <div class="chev" style="margin-top:2px;">›</div>
+        </div>
         <div class="section-label">App</div>
         <div class="me-item" id="shareAppBtn"><div>Share MonoLift</div><div class="chev">›</div></div>
         <div class="me-item" id="updateAppBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
@@ -15948,6 +16052,7 @@ async function renderMe(){
   document.getElementById('publishMonoLiftBtn').onclick = () => openPublishToMonoLiftScreen();
   if (isOwner) document.getElementById('approveContributorsBtn').onclick = () => openApproveContributorsScreen();
   document.getElementById('planSubPageBtn').onclick = () => openPlanSubPage();
+  document.getElementById('exportPlanTextBtn').onclick = () => openExportPlanTextScreen();
   document.getElementById('shareAppBtn').onclick = async () => {
     const shareUrl = `${location.origin}${location.pathname}`.replace(/\/index\.html$/, '/');
     const shareData = { title: 'MonoLift', text: 'Check out MonoLift - a gym tracking app I use.', url: shareUrl };
