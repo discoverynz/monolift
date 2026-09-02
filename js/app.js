@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.295';
+const APP_VERSION = 'Beta 5.296';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Rings","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -8189,19 +8189,25 @@ function openRestoreConfirmScreen(backup, listOverlay, onDone){
 // somewhere else (an AI, a note, a message), not rendered as UI. Deliberately
 // simple: pipe-delimited columns rather than a markdown table, since the
 // point is to be trivially parseable by something that isn't this app.
-// Groups a flat set list into one "best set" per calendar date - heaviest
-// per-side-kg-normalized weight logged that day, but the returned set keeps
-// its original unit so it still formats exactly as logged. Only weight-based
-// sets (kg/lb) are considered, same filter detectWeightStagnation already
-// uses - band/bodyweight/time/pin sets have no comparable "heaviest" sense.
+// Groups a flat set list into one "best set" per calendar date. For kg/lb
+// sets, "best" means heaviest per-side-kg-normalized weight logged that day
+// (returned set keeps its original unit so it still formats exactly as
+// logged). Band, bodyweight, time, and other non-weighable set types can't
+// be ranked the same way, but still need to show up (a band day shouldn't
+// look like a blank day) - those just take the first set seen for that
+// date, deferring to a weighable set on the same date if one exists.
 function bestSetPerDate(setsForExercise){
   const byDate = {};
   (setsForExercise || []).forEach(s => {
-    if (typeof s.weight !== 'number' || (s.weight_unit !== 'kg' && s.weight_unit !== 'lb')) return;
-    const kg = s.weight_unit === 'lb' ? convertWeight(s.weight, 'lb', 'kg') : s.weight;
-    const perSideKg = s.weight_type === 'per' ? kg * 2 : kg;
+    const isWeighable = typeof s.weight === 'number' && (s.weight_unit === 'kg' || s.weight_unit === 'lb');
     const current = byDate[s.logged_at];
-    if (!current || perSideKg > current.kg) byDate[s.logged_at] = { kg: perSideKg, set: s };
+    if (isWeighable){
+      const kg = s.weight_unit === 'lb' ? convertWeight(s.weight, 'lb', 'kg') : s.weight;
+      const perSideKg = s.weight_type === 'per' ? kg * 2 : kg;
+      if (!current || !current.weighable || perSideKg > current.kg) byDate[s.logged_at] = { weighable: true, kg: perSideKg, set: s };
+    } else if (!current){
+      byDate[s.logged_at] = { weighable: false, kg: -Infinity, set: s };
+    }
   });
   return byDate;
 }
@@ -8263,19 +8269,22 @@ async function buildPlanExportText(){
     };
   };
 
-  const WEEKDAY_ORDER = ['MON','TUE','WED','THU','FRI','SAT','SUN'];
-  const WEEKDAY_LABEL = { MON:'MONDAY', TUE:'TUESDAY', WED:'WEDNESDAY', THU:'THURSDAY', FRI:'FRIDAY', SAT:'SATURDAY', SUN:'SUNDAY', ANY:'ANY DAY' };
+  const WEEKDAY_KEYS = [0, 1, 2, 3, 4, 5, 6, ANY_DAY];
+  const weekdayHeading = (weekday) => isAnyDay(weekday) ? 'HOME / ANY DAY' : (DAY_LABELS[weekday] || String(weekday)).toUpperCase();
 
+  // weekday comes back from the DB as a number (0-6 Mon-Sun, 7 = Anytime/
+  // home-gym - see ANY_DAY), so grouping and lookups both need to stay
+  // numeric throughout rather than drifting into string day-name keys.
   const byDay = {};
-  placed.forEach(ex => { (byDay[ex.weekday] = byDay[ex.weekday] || []).push(ex); });
-  const dayKeys = [...WEEKDAY_ORDER, ...Object.keys(byDay).filter(d => !WEEKDAY_ORDER.includes(d))];
+  placed.forEach(ex => { const wd = Number(ex.weekday); (byDay[wd] = byDay[wd] || []).push(ex); });
+  const dayKeys = [...WEEKDAY_KEYS, ...Object.keys(byDay).map(Number).filter(d => !WEEKDAY_KEYS.includes(d))];
 
   const lines = ['MONOLIFT PLAN EXPORT', `Generated ${todayStr()}`, ''];
   dayKeys.forEach(day => {
     const list = byDay[day];
     if (!list || !list.length) return;
-    const dayTypeLabel = dayTypeLabelByWeekday[day];
-    lines.push(dayTypeLabel ? `${WEEKDAY_LABEL[day] || day} — ${dayTypeLabel}` : (WEEKDAY_LABEL[day] || day));
+    const dayTypeLabel = isAnyDay(day) ? null : dayTypeLabelByWeekday[day];
+    lines.push(dayTypeLabel ? `${weekdayHeading(day)} — ${dayTypeLabel}` : weekdayHeading(day));
     lines.push('Exercise | Alt Group | Starting Weight | Starting Date | Middle Weight | Middle Date | Last Weight | Last Date');
     list.forEach(ex => {
       const altName = ex.alt_group_id ? (altGroupNameById[ex.alt_group_id] || '') : '';
