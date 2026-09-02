@@ -512,7 +512,33 @@ input:focus, button:focus{ outline:none; }
 /* Live streaks glow. A dead streak shouldn't. */
 .streak-alive{ animation: ml-streak-pulse 2.6s ease-in-out infinite; }
 
+/* The weight number in a just-logged "Logged today" pill briefly pulses
+   gold rather than just appearing already-set. */
+@keyframes ml-weight-pulse{
+  0%{ transform:scale(1); }
+  35%{ transform:scale(1.18); text-shadow:0 0 10px rgba(15,26,12,0.4); }
+  100%{ transform:scale(1); }
+}
+.weight-pulse{ display:inline-block; animation:ml-weight-pulse .5s ease both; }
+
+/* Ring-then-check draw-on for the one card that was just logged - every
+   other render of an already-done exercise keeps the plain, unanimated ✓
+   text (see exerciseRow), so this only ever plays once per save. */
+.set-complete-tick .tick-ring{ stroke-dasharray:63; stroke-dashoffset:63; animation:ml-tick-ring .3s ease forwards; }
+.set-complete-tick .tick-check{ stroke-dasharray:15; stroke-dashoffset:15; animation:ml-tick-check .22s ease .28s forwards; }
+@keyframes ml-tick-ring{ to{ stroke-dashoffset:0; } }
+@keyframes ml-tick-check{ to{ stroke-dashoffset:0; } }
+
+/* Rest timer's final 5 seconds get a soft pulse instead of silently
+   counting down to zero. */
+@keyframes ml-timer-breathe{
+  0%,100%{ opacity:1; box-shadow:0 0 0 rgba(255,107,26,0); }
+  50%{ opacity:0.55; box-shadow:0 0 12px rgba(255,107,26,0.7); }
+}
+.timer-breathing{ animation:ml-timer-breathe 1s ease-in-out infinite; }
+
 @media (prefers-reduced-motion: reduce){
-  .volume-float, .reward-burst, .just-logged, .streak-alive{ animation:none !important; }
+  .volume-float, .reward-burst, .just-logged, .streak-alive, .weight-pulse, .timer-breathing{ animation:none !important; }
+  .set-complete-tick .tick-ring, .set-complete-tick .tick-check{ animation:none !important; stroke-dashoffset:0 !important; }
   .reward-burst{ display:none !important; }
 }

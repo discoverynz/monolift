@@ -13,7 +13,11 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.297';
+// Animated ring+checkmark draw-on shown once, on the exact render right
+// after a set is saved (see exerciseRow's `justLogged`) - every other time
+// the "Logged today" pill renders, it's the plain ✓ text, unanimated.
+const SET_COMPLETE_TICK_SVG = `<svg class="set-complete-tick" width="16" height="16" viewBox="0 0 24 24" style="flex-shrink:0;"><circle class="tick-ring" cx="12" cy="12" r="10" fill="none" stroke="#0F1A0C" stroke-width="2"></circle><path class="tick-check" d="M7 12.5 L10.5 16 L17 8.5" fill="none" stroke="#0F1A0C" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>`;
+const APP_VERSION = 'Beta 5.298';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Rings","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -879,7 +883,11 @@ function openingDay(){
   } catch(e){}
   return todayWeekday();
 }
-let state = { selectedDay: openingDay(), exercises: [], session: null, currentTab: 'track', trackScrollY: 0, renderGeneration: 0 };
+let state = { selectedDay: openingDay(), exercises: [], session: null, currentTab: 'track', trackScrollY: 0, renderGeneration: 0,
+  // Id of whatever exercise a set was just saved against - read once by the
+  // very next exerciseRow render to trigger its punch/pulse/check-draw
+  // animation, then cleared by renderTrackFromData so it never replays.
+  _justLoggedExId: null };
 
 // MIDNIGHT ROLLOVER. All dates in this app come from the phone's own clock
 // (todayStr uses local getFullYear/getMonth/getDate, never UTC), so the day
@@ -2291,9 +2299,14 @@ function exerciseRow(ex){
   let subtitle, showCheck, isDone = false, hasQuickButtons = false;
   let quickSaveBtn = '';
   const glassBtnStyle = "background:linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.015)); border:1px solid rgba(255,255,255,0.08); color:#C9CBD1;";
+  // True only for the single render immediately after this exercise's set
+  // was saved (see state._justLoggedExId) - every other render of an
+  // already-done exercise (switching days and back, a background refresh)
+  // shows the exact same pill it always has, unanimated.
+  const justLogged = state._justLoggedExId != null && String(state._justLoggedExId) === String(ex.id);
   if (ex.loggedToday){
-    subtitle = `<div style="margin-top:12px;">
-      <div style="text-align:center; padding:10px 0; border-radius:10px; background:linear-gradient(155deg, #9ED486, #6FA457); box-shadow:0 4px 12px rgba(143,191,122,0.25), inset 0 1px 0 rgba(255,255,255,0.3); font-size:11.5px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:0.3px; color:#0F1A0C; font-weight:700;">✓ Logged today — ${formatSetValue(ex.lastSet)}</div>
+    subtitle = `<div style="margin-top:12px;" class="${justLogged ? 'just-logged-pill' : ''}">
+      <div style="text-align:center; padding:10px 0; border-radius:10px; background:linear-gradient(155deg, #9ED486, #6FA457); box-shadow:0 4px 12px rgba(143,191,122,0.25), inset 0 1px 0 rgba(255,255,255,0.3); font-size:11.5px; font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:0.3px; color:#0F1A0C; font-weight:700; display:flex; align-items:center; justify-content:center; gap:6px;">${justLogged ? SET_COMPLETE_TICK_SVG : '✓'} Logged today — <span class="${justLogged ? 'weight-pulse' : ''}">${formatSetValue(ex.lastSet)}</span></div>
     </div>`;
     showCheck = false; isDone = true;
   } else if (ex.completeVia){
@@ -2387,7 +2400,7 @@ function exerciseRow(ex){
     ? `<div style="font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--brass); margin-top:3px;">🚪 Door anchor${ex.door_anchor_level ? ` — ${ex.door_anchor_level}` : ''}</div>`
     : '';
 
-  return `<div class="exercise" style="${borderStyle}" data-id="${ex.id}" data-name="${ex.name}">
+  return `<div class="exercise${justLogged ? ' just-logged' : ''}" style="${borderStyle}" data-id="${ex.id}" data-name="${ex.name}">
     ${cornerTag}
     <div style="flex:1; min-width:0; ${topPad}">
       <div class="ex-name">${ex.name}${splitTag}${mechTag}</div>
@@ -5025,6 +5038,32 @@ async function renderTrack(){
   return renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations, myGeneration, isStale, false);
 }
 
+// Tracks the last-rendered Volume Today figure and which day it belonged to,
+// so the odometer roll (see renderTrackFromData) only fires for a genuine
+// same-day increase rather than an unrelated day switch.
+let _lastVolumeOdometer = null;
+
+// Counts a number up from `from` to `to` over a short, fixed duration rather
+// than snapping - the DOM node itself is untouched (same element, same
+// styling), only its text content changes each frame, so this works fine
+// even though the app re-renders via innerHTML everywhere else.
+function animateOdometer(el, from, to, suffix){
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches){
+    el.textContent = `${to.toLocaleString()}${suffix || ''}`;
+    return;
+  }
+  const duration = 550;
+  const start = performance.now();
+  function step(now){
+    const t = Math.min(1, (now - start) / duration);
+    const eased = 1 - Math.pow(1 - t, 3);
+    const val = Math.round(from + (to - from) * eased);
+    el.textContent = `${val.toLocaleString()}${suffix || ''}`;
+    if (t < 1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
 async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations, myGeneration, isStale, fromSnapshot){
   // dayTypeLabel can be: a string (real label from DB), null (no row - user
   // never set one), or an { __unavailable } marker (transient fetch failure).
@@ -5234,12 +5273,19 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
           background:linear-gradient(165deg, #202226, #191a1d); border:1px solid rgba(255,255,255,0.06);
           box-shadow:0 8px 20px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.03);">
           <div style="flex:1; text-align:center; padding:14px 6px; border-right:1px solid rgba(255,255,255,0.06);">
-            <div style="font-family:'JetBrains Mono',monospace; font-size:17px; font-weight:600; color:var(--chalk);">${headerStats.volumeKg.toLocaleString()}kg</div>
+            <div id="volumeTodayNum" style="font-family:'JetBrains Mono',monospace; font-size:17px; font-weight:600; color:var(--chalk);">${headerStats.volumeKg.toLocaleString()}kg</div>
             <div style="font-size:8.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px; margin-top:2px;">Volume ${headerStats.targetDateIsToday ? 'Today' : dayLabelOf(headerStats.targetWeekday)}</div>
           </div>
           <div style="flex:1; text-align:center; padding:14px 6px; border-right:1px solid rgba(255,255,255,0.06);">
             ${(() => {
-              return `<div class="${headerStats.streak > 0 ? 'streak-alive' : ''}" style="font-family:'JetBrains Mono',monospace; font-size:17px; font-weight:600; color:var(--flame);">${headerStats.streak > 0 ? '🔥 ' : ''}${headerStats.streak}</div>
+              // Flame grows with the streak itself - small and quiet at day
+              // 1, unmistakably bigger by day 30. Font-size and glow are the
+              // only things that change; the number's own styling is
+              // untouched so this never looks like a different stat.
+              const s = headerStats.streak;
+              const flameSize = s >= 30 ? '26px' : s >= 14 ? '22px' : s >= 7 ? '19px' : '15px';
+              const flameGlow = s >= 14 ? 'filter:drop-shadow(0 0 6px rgba(255,107,26,0.6));' : '';
+              return `<div class="${headerStats.streak > 0 ? 'streak-alive' : ''}" style="font-family:'JetBrains Mono',monospace; font-size:17px; font-weight:600; color:var(--flame); display:flex; align-items:center; justify-content:center; gap:3px;">${headerStats.streak > 0 ? `<span style="font-size:${flameSize}; ${flameGlow} transition:font-size 0.4s cubic-bezier(.34,1.56,.64,1);">🔥</span>` : ''}${headerStats.streak}</div>
                 <div style="font-size:8.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px; margin-top:2px;">Day Streak</div>`;
             })()}
           </div>
@@ -5407,8 +5453,13 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
         // Float from the button itself, captured BEFORE the re-render
         // removes it from the DOM and its position becomes unavailable.
         if (best) celebrateLoggedSet(el, best.weight, best.weight_unit, best.weight_type, best.reps, best.num_sets);
-        const card = el.closest('.ex-card');
-        if (card) card.classList.add('just-logged');
+        // Previously tried to flag the card here via el.closest('.ex-card') -
+        // that class only exists on the unrelated Ideas-tab picker cards, so
+        // this always matched nothing and the punch/pulse animation never
+        // once played. Setting the id instead and reading it back inside
+        // exerciseRow means the flag survives the re-render that's about to
+        // destroy this exact DOM node.
+        state._justLoggedExId = el.dataset.id;
         renderTrack();
         setTimeout(() => maybeShowSessionComplete(), 700);
       }
@@ -5462,6 +5513,27 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
     el.onclick = () => quickAddStarter(el.dataset.name, el.dataset.cat, state.selectedDay);
   });
   attachSuggestionHandlers();
+
+  // Volume odometer: only rolls up when the number genuinely increased for
+  // the SAME day context as last render (i.e. a set was just logged) - a
+  // fresh render after switching days or reloading just shows the number
+  // outright, since counting up from an unrelated previous day's total
+  // would misleadingly imply progress that didn't happen right now.
+  const volEl = document.getElementById('volumeTodayNum');
+  if (volEl){
+    const prev = _lastVolumeOdometer;
+    const next = { weekday: state.selectedDay, kg: headerStats.volumeKg };
+    if (prev && prev.weekday === next.weekday && next.kg > prev.kg){
+      animateOdometer(volEl, prev.kg, next.kg, 'kg');
+    }
+    _lastVolumeOdometer = next;
+  }
+
+  // The just-logged card punch/pulse (see exerciseRow) is a one-shot cue for
+  // the render that immediately follows a save - clearing it here means a
+  // later, unrelated re-render (switching days and back, a background
+  // refresh) never replays it against a card it no longer applies to.
+  state._justLoggedExId = null;
 }
 
 // Shared by the inline render and the deferred injection - suggestion rows
@@ -10021,7 +10093,10 @@ function celebrateLoggedSet(el, weight, unit, weightType, reps, numSets){
   // actually logged, so it stays tied to the thing you did.
   let y = null;
   if (el && el.getBoundingClientRect){
-    const row = el.closest ? (el.closest('.ex-card') || el) : el;
+    // .exercise is the real card class - .ex-card only exists on the
+    // unrelated Ideas-tab picker cards, so this always fell through to the
+    // button itself before rather than actually centering on the row.
+    const row = el.closest ? (el.closest('.exercise') || el) : el;
     const r = row.getBoundingClientRect();
     y = r.top + r.height / 2;
   }
@@ -10062,7 +10137,7 @@ async function showSessionCompleteScreen(list){
           <div class="session-done-stat" style="animation-delay:.3s;"><div class="n" style="color:var(--good);">${setsToday}</div><div class="l">sets</div></div>
           <div class="session-done-stat" style="animation-delay:.4s;"><div class="n" style="color:var(--brass);">${streak}</div><div class="l">day streak</div></div>
         </div>
-        ${prCount ? `<div class="milestone-card" style="margin-top:12px; background:linear-gradient(150deg,rgba(255,107,26,0.16),rgba(232,73,42,0.04)); border:1px solid rgba(255,107,26,0.4); border-radius:13px; padding:14px;">
+        ${prCount ? `<div class="milestone-card" id="sessionPrCard" style="margin-top:12px; background:linear-gradient(150deg,rgba(255,107,26,0.16),rgba(232,73,42,0.04)); border:1px solid rgba(255,107,26,0.4); border-radius:13px; padding:14px; position:relative; overflow:hidden;">
           <div style="font-family:'Oswald',sans-serif; font-size:14px; color:var(--flame);">🏆 ${prCount} personal record${prCount===1?'':'s'} today</div>
         </div>` : ''}
         ${detectMilestones(stats, list).map((m, i) => `
@@ -10077,6 +10152,37 @@ async function showSessionCompleteScreen(list){
     </div>`;
   document.body.appendChild(overlay);
   overlay.querySelector('#sessionDoneClose').onclick = () => overlay.remove();
+  // A small, contained burst scoped to the PR badge itself - the full
+  // screen-dimming confetti modal (celebratePR) already fires live at the
+  // moment a PR actually lands mid-session; this is a much quieter echo of
+  // it for the summary screen, not a second full celebration.
+  const prCard = overlay.querySelector('#sessionPrCard');
+  if (prCard) setTimeout(() => burstConfettiInto(prCard), 550);
+}
+
+// Short-lived confetti particles contained within (and clipped to) the given
+// element, rather than a full-screen overlay - for moments that deserve a
+// beat of celebration but shouldn't compete with a genuine full takeover
+// like celebratePR.
+function burstConfettiInto(container){
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const colors = ['#FF6B1A', '#C9A227', '#8FBF7A', '#EDEAE2'];
+  const rect = container.getBoundingClientRect();
+  const originX = rect.width / 2, originY = rect.height / 2;
+  for (let i = 0; i < 14; i++){
+    const p = document.createElement('div');
+    const angle = (Math.PI * 2 * i) / 14 + Math.random() * 0.4;
+    const dist = 26 + Math.random() * 30;
+    const dx = Math.cos(angle) * dist, dy = Math.sin(angle) * dist;
+    const size = 4 + Math.random() * 4;
+    p.style.cssText = `position:absolute; top:${originY}px; left:${originX}px; width:${size}px; height:${size}px; border-radius:1px; background:${colors[i % colors.length]}; pointer-events:none;`;
+    container.appendChild(p);
+    p.animate([
+      { transform: 'translate(-50%,-50%) translate(0,0) scale(1)', opacity: 1 },
+      { transform: `translate(-50%,-50%) translate(${dx}px, ${dy}px) scale(0.4)`, opacity: 0 }
+    ], { duration: 550 + Math.random() * 200, easing: 'cubic-bezier(.25,.8,.25,1)' });
+    setTimeout(() => p.remove(), 850);
+  }
 }
 
 function showQueuedSetToast(){
@@ -10805,6 +10911,10 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
       // Volume added by this set, floated from where the button actually is
       // so it reads as coming from the tap rather than appearing at random.
       celebrateLoggedSet(overlay.querySelector('#saveSetBtn'), weightRaw, unit, weightType, repsVal, setsVal);
+      // Same one-shot flag the quick-save path sets - this form is the OTHER
+      // place a set gets saved, and it never set this at all before, so its
+      // cards never got the punch/pulse/check-draw treatment either.
+      state._justLoggedExId = exerciseId;
       overlay.remove();
       if (state.currentTab === 'track') renderTrack();
       // Checked after the re-render so it sees the freshly-updated done
@@ -10962,6 +11072,10 @@ function openTimer(){
     disp.style.color = r<=0 ? '#8FBF7A' : 'var(--chalk)';
     const pct = _timerState.total>0 ? ((_timerState.total - r)/_timerState.total)*100 : 0;
     fill.style.width = `${Math.min(100,pct)}%`;
+    // Final stretch gets a soft pulse instead of just counting silently down
+    // to zero - only while actually running, so a paused timer sitting at
+    // e.g. 0:03 doesn't pulse indefinitely while nothing is happening.
+    fill.classList.toggle('timer-breathing', _timerState.running && r > 0 && r <= 5);
     startPauseBtn.textContent = _timerState.running ? 'Pause' : (r<=0 ? 'Start' : (r<_timerState.total ? 'Resume' : 'Start'));
   };
 
