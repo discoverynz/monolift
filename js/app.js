@@ -13,8 +13,8 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.289';
-const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
+const APP_VERSION = 'Beta 5.290';
+const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Rings","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
   try { return JSON.parse(localStorage.getItem(CUSTOM_CATEGORIES_KEY) || '[]'); } catch(e){ return []; }
@@ -5415,7 +5415,7 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
       const trip = getTripMode();
       const { data: inserted, error } = await createExerciseForToday({
         user_id: userData.user.id, name: idea.name,
-        category: idea.measurementType === 'band' ? 'Bands' : 'Other',
+        category: idea.equip === 'rings' ? 'Rings' : (idea.measurementType === 'band' ? 'Bands' : 'Other'),
         weekday: state.selectedDay, alt_group_id: null,
         measurement_type: idea.measurementType === 'weight' ? null : idea.measurementType,
         uses_door_anchor: idea.usesDoorAnchor, door_anchor_level: idea.anchorLevel,
@@ -7043,7 +7043,7 @@ async function openPicker(initialTab, jumpToMuscle){
     const locId = isAnyDay(state.selectedDay) ? null : effectiveLocationId();
     const { data: inserted, error } = await createExerciseForToday({
       user_id: userData.user.id, name: idea.name,
-      category: idea.measurementType === 'band' ? 'Bands' : 'Other',
+      category: idea.equip === 'rings' ? 'Rings' : (idea.measurementType === 'band' ? 'Bands' : 'Other'),
       weekday: state.selectedDay, alt_group_id: null,
       measurement_type: idea.measurementType === 'weight' ? null : idea.measurementType,
       uses_door_anchor: idea.usesDoorAnchor, door_anchor_level: idea.anchorLevel,
