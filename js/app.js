@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.283';
+const APP_VERSION = 'Beta 5.284';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -5278,13 +5278,10 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
             <span style="font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px;">HIDE</span>
           </button>` : ''}
         </div>
-        <div style="margin:12px 18px 14px 18px; height:5px; background:rgba(255,255,255,0.04); border-radius:3px; overflow:hidden;">
-          <div style="height:100%; width:${pct}%; border-radius:3px; background:linear-gradient(90deg, #FF7A2E, #FFAA5C); box-shadow:0 0 10px rgba(255,107,26,0.5);"></div>
-        </div>
         ${workingExercises.length > 0 ? groupByToggleHtml(groupBy) : ''}
+        ${mainEventHtml}
         ${ghostRaceHtml}
         ${sessionHeatHtml}
-        ${mainEventHtml}
         ${listHtml}
         <div id="suggestionsSlot">${suggestionsHtml}</div>
         ${tripIdeasHtml}
