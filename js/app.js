@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.285';
+const APP_VERSION = 'Beta 5.286';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -5203,18 +5203,7 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   // obvious place in the app for ideas - and it was showing nothing at all,
   // because the normal suggestion engine needs existing exercises to work
   // from and an empty day has none.
-  const ghostData = ghostRaceData(headerStats, visibleExercises);
-  const ghostPillHtml = buildGhostRacePillHtml(ghostData);
-  const ghostRaceHtml = state.ghostExpanded ? buildGhostRaceHtml(ghostData) : '';
   const mainEventHtml = buildMainEventHtml(visibleExercises);
-  // Session heat needs per-set timestamps, which only the live header fetch
-  // provides - the snapshot path renders from cached aggregate stats and
-  // never populates them. Suppressed there rather than shown from whatever
-  // happens to be left in state, which on a cold open is either empty or
-  // yesterday's session. It appears on the repaint a moment later.
-  const sessionHeatData = fromSnapshot ? null : computeSessionHeat(state.todaysSetsRaw || []);
-  const sessionHeatPillHtml = buildSessionHeatPillHtml(sessionHeatData);
-  const sessionHeatHtml = state.heatExpanded ? buildSessionHeatHtml(sessionHeatData) : '';
   const tripIdeasHtml = ((isTripActive() || isAnyDay(state.selectedDay)) && visibleExercises.length === 0)
     ? buildTripIdeasHtml(effectiveDayTypeLabel) : '';
 
@@ -5271,8 +5260,6 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
           ${isAnyDay(state.selectedDay) && workingExercises.length > 0 ? `<button id="toolbarClearAnyBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:var(--panel); border:1px solid var(--line); color:var(--slate);">
             <span style="font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px;">CLEAR</span>
           </button>` : ''}
-          ${ghostPillHtml}
-          ${sessionHeatPillHtml}
           <button id="toolbarTimerBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:rgba(255,107,26,0.10); border:1px solid rgba(255,107,26,0.45); color:var(--flame);">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg>
             <span style="font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px;">TIMER</span>
@@ -5286,8 +5273,6 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
         </div>
         ${workingExercises.length > 0 ? groupByToggleHtml(groupBy) : ''}
         ${mainEventHtml}
-        ${ghostRaceHtml}
-        ${sessionHeatHtml}
         ${listHtml}
         <div id="suggestionsSlot">${suggestionsHtml}</div>
         ${tripIdeasHtml}
@@ -5436,10 +5421,6 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   if (retryBtn) retryBtn.onclick = () => { state.exercises = []; renderTrack(); };
   const clearLocBtn = document.getElementById('clearLocationBtn');
   if (clearLocBtn) clearLocBtn.onclick = () => openLocationPicker(allLocations, currentLocationId);
-  const ghostPill = document.getElementById('ghostRacePill');
-  if (ghostPill) ghostPill.onclick = () => { state.ghostExpanded = !state.ghostExpanded; renderTrack(); };
-  const heatPill = document.getElementById('sessionHeatPill');
-  if (heatPill) heatPill.onclick = () => { state.heatExpanded = !state.heatExpanded; renderTrack(); };
   const mainCard = document.getElementById('mainEventCard');
   if (mainCard) mainCard.onclick = () => openLogForm(mainCard.dataset.exId, mainCard.dataset.exName);
   document.querySelectorAll('.trip-idea-add').forEach(btn => {
@@ -15725,106 +15706,6 @@ function buildChargeCellsHtml(recovery){
 // have stakes.
 // Data only - shared by the toolbar pill and the expanded detail card, so
 // the two can never disagree about whether there's a race on.
-function ghostRaceData(hs, list){
-  if (!hs || !hs.targetDateIsToday) return null;
-  const last = hs.lastWeekVolumeKg;
-  if (last === null || last <= 0) return null;
-  const total = (list || []).length;
-  const done = (list || []).filter(ex => ex.loggedToday || ex.completeVia).length;
-  if (done === 0 || done >= total || total < 2) return null;
-  const now = hs.volumeKg || 0;
-  if (now <= 0) return null;
-  const ghostNow = Math.round(last * (done / total));
-  const delta = now - ghostNow;
-  const ahead = delta >= 0;
-  const pct = Math.max(4, Math.min(100, Math.round((now / Math.max(1, last)) * 100)));
-  const ghostPct = Math.max(2, Math.min(100, Math.round((ghostNow / Math.max(1, last)) * 100)));
-  return { now, last, done, total, delta, ahead, pct, ghostPct };
-}
-
-// Small pill for the toolbar row - always visible, costs almost no vertical
-// space. Tap to expand the full detail card below the toggle.
-function buildGhostRacePillHtml(g){
-  if (!g) return '';
-  return `<button id="ghostRacePill" class="badge-pill" style="height:38px; padding:0 12px; border-radius:10px; background:rgba(255,107,26,0.09); border:1px solid rgba(255,107,26,0.35); color:var(--flame); display:flex; align-items:center; gap:5px; font-size:12px;">
-    👻 <span style="font-family:'JetBrains Mono',monospace; font-size:11px;">${g.ahead ? '+' : ''}${g.delta.toLocaleString()}kg</span>
-  </button>`;
-}
-
-function buildGhostRaceHtml(g){
-  if (!g) return '';
-  return `
-    <div style="margin:9px 18px 0 18px; background:linear-gradient(150deg,#1e2024,#171819); border:1px solid #2a2c30; border-radius:15px; padding:13px 14px 14px 14px;">
-      <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:13px;">
-        <span class="small" style="color:var(--slate);">Against last week, same point</span>
-        <span style="font-family:'Bebas Neue',sans-serif; font-size:24px; line-height:1; color:${g.ahead ? 'var(--good)' : 'var(--flame)'};">${g.ahead ? '+' : ''}${g.delta.toLocaleString()}kg</span>
-      </div>
-      <div style="position:relative; height:32px; border-radius:8px; background:#141517; overflow:hidden;">
-        <div style="position:absolute; inset:0 auto 0 0; width:${g.pct}%; display:flex; align-items:center; padding-left:9px;
-          background:linear-gradient(90deg, ${g.ahead ? 'rgba(143,191,122,.9), rgba(143,191,122,.3)' : 'rgba(255,107,26,.9), rgba(255,107,26,.3)'});
-          border-right:2px solid ${g.ahead ? 'var(--good)' : 'var(--flame)'};
-          font-size:10.5px; font-weight:600; color:#17181A; white-space:nowrap; transition:width .6s cubic-bezier(.2,.8,.3,1);">
-          ${g.now.toLocaleString()}kg · ${g.done} of ${g.total}
-        </div>
-        <div style="position:absolute; top:-2px; bottom:-2px; left:${g.ghostPct}%; width:2px;
-          background:repeating-linear-gradient(180deg,#8C8E94 0 4px,transparent 4px 8px);"></div>
-      </div>
-    </div>`;
-}
-
-// Session heat. Density of work, cooling while you rest.
-//
-// The obvious version of this rewards rushing, which is actively bad advice -
-// a heavy compound NEEDS three minutes and an accessory does not. So the
-// cooling window scales with how heavy the last set actually was: a big
-// single buys far more rest before heat decays than a light isolation set.
-// Without that it's a fun mechanic that quietly pushes you to train worse.
-function computeSessionHeat(todaysSets){
-  if (!todaysSets || todaysSets.length < 2) return null;
-  const withTime = todaysSets.filter(s => s.created_at).sort((a,b) => new Date(a.created_at) - new Date(b.created_at));
-  if (withTime.length < 2) return null;
-  const lastSet = withTime[withTime.length - 1];
-  const minsSince = (Date.now() - new Date(lastSet.created_at)) / 60000;
-  const w = Number(lastSet.weight);
-  const kg = isFinite(w) && w > 0 ? (lastSet.weight_unit === 'lb' ? w * 0.453592 : w) : 0;
-  // Heavier work earns a longer window before it counts as cooling.
-  const allowedRest = kg >= 80 ? 5 : kg >= 40 ? 3.5 : 2.5;
-  const span = (new Date(lastSet.created_at) - new Date(withTime[0].created_at)) / 60000;
-  const pace = span > 0 ? withTime.length / span : 0; // sets per minute
-  const heat = Math.max(0, Math.min(1, (pace / 0.35) * Math.max(0, 1 - (minsSince / (allowedRest * 2)))));
-  return { heat, minsSince, allowedRest, sets: withTime.length, span: Math.round(span) };
-}
-
-function buildSessionHeatPillHtml(h){
-  if (!h || h.sets < 3) return '';
-  const pct = Math.round(h.heat * 100);
-  const word = pct >= 70 ? 'Hot' : pct >= 40 ? 'Warm' : 'Cooling';
-  const colour = pct >= 70 ? 'var(--flame)' : pct >= 40 ? 'var(--brass)' : 'var(--slate)';
-  return `<button id="sessionHeatPill" class="badge-pill" style="height:38px; padding:0 12px; border-radius:10px; background:rgba(255,107,26,0.09); border:1px solid rgba(255,107,26,0.35); color:${colour}; display:flex; align-items:center; gap:5px; font-size:12px;">
-    🔥 <span style="font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.3px;">${word}</span>
-  </button>`;
-}
-
-function buildSessionHeatHtml(h){
-  if (!h || h.sets < 3) return '';
-  const pct = Math.round(h.heat * 100);
-  const word = pct >= 70 ? 'Hot' : pct >= 40 ? 'Warm' : 'Cooling';
-  const colour = pct >= 70 ? 'var(--flame)' : pct >= 40 ? 'var(--brass)' : 'var(--slate)';
-  const left = Math.max(0, h.allowedRest - h.minsSince);
-  return `
-    <div style="margin:10px 18px 0 18px; background:var(--panel); border-radius:14px; padding:13px 14px;">
-      <div style="display:flex; justify-content:space-between; align-items:baseline;">
-        <span class="small">Session heat</span>
-        <span style="font-family:'Bebas Neue',sans-serif; font-size:19px; color:${colour};">${word}</span>
-      </div>
-      <div style="height:9px; border-radius:5px; background:#141517; overflow:hidden; margin:9px 0 7px 0;">
-        <div style="height:100%; width:${pct}%; border-radius:5px; background:linear-gradient(90deg,#C9A227,#FF6B1A,#E8261A); transition:width .6s ease;"></div>
-      </div>
-      <div class="small" style="color:var(--slate);">${h.sets} sets in ${h.span} min.${left > 0.3 ? ` Stays hot for another ${Math.ceil(left)} min — heavier sets buy more rest.` : ' Next set brings it back up.'}</div>
-    </div>`;
-}
-
-
 function buildTripIdeasHtml(dayTypeLabel){
   const label = (dayTypeLabel || '').toLowerCase();
   const wants = [];
