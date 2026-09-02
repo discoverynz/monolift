@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.293';
+const APP_VERSION = 'Beta 5.294';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Rings","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -8189,6 +8189,23 @@ function openRestoreConfirmScreen(backup, listOverlay, onDone){
 // somewhere else (an AI, a note, a message), not rendered as UI. Deliberately
 // simple: pipe-delimited columns rather than a markdown table, since the
 // point is to be trivially parseable by something that isn't this app.
+// Groups a flat set list into one "best set" per calendar date - heaviest
+// per-side-kg-normalized weight logged that day, but the returned set keeps
+// its original unit so it still formats exactly as logged. Only weight-based
+// sets (kg/lb) are considered, same filter detectWeightStagnation already
+// uses - band/bodyweight/time/pin sets have no comparable "heaviest" sense.
+function bestSetPerDate(setsForExercise){
+  const byDate = {};
+  (setsForExercise || []).forEach(s => {
+    if (typeof s.weight !== 'number' || (s.weight_unit !== 'kg' && s.weight_unit !== 'lb')) return;
+    const kg = s.weight_unit === 'lb' ? convertWeight(s.weight, 'lb', 'kg') : s.weight;
+    const perSideKg = s.weight_type === 'per' ? kg * 2 : kg;
+    const current = byDate[s.logged_at];
+    if (!current || perSideKg > current.kg) byDate[s.logged_at] = { kg: perSideKg, set: s };
+  });
+  return byDate;
+}
+
 async function buildPlanExportText(){
   const userData = { user: await getCurrentUser() };
   if (!userData.user) return '';
@@ -8210,19 +8227,36 @@ async function buildPlanExportText(){
 
   const setIdOf = (ex) => useMaster ? ex.masterId : ex.id;
   const uniqueSetIds = [...new Set(placed.map(setIdOf).filter(Boolean))];
-  let lastSetById = {};
+  // Full history per exercise this time, not just the most recent set -
+  // starting/middle/last all need to be picked out of the same timeline.
+  // Same history window the rest of the app already uses.
+  let setsById = {};
   if (uniqueSetIds.length){
     const setsResult = await withTimeout(
       supabaseClient.from('sets')
         .select(`${idField}, weight, weight_unit, weight_type, reps, num_sets, logged_at, measurement_type, band_snapshot, band_resistance, band_resistance_unit`)
-        .in(idField, uniqueSetIds).order('logged_at', { ascending: false }).limit(4000),
+        .in(idField, uniqueSetIds).gte('logged_at', setHistoryCutoff()).order('logged_at', { ascending: false }).limit(4000),
       15000
     );
     const sets = setsResult.__timeout || setsResult.error ? [] : (setsResult.data || []);
-    // First row per id wins - already sorted newest first, so that's the
-    // most recent set regardless of which location it happened at.
-    sets.forEach(s => { const k = s[idField]; if (lastSetById[k] === undefined) lastSetById[k] = s; });
+    sets.forEach(s => { const k = s[idField]; (setsById[k] = setsById[k] || []).push(s); });
   }
+
+  // Picks starting (second-earliest session), middle (positional midpoint
+  // between earliest and latest), and last (most recent session) from an
+  // exercise's own dated history. Each needs enough distinct sessions to be
+  // meaningful - a "middle" that's actually just the earliest or latest
+  // entry again would be misleading rather than informative.
+  const weightCheckpoints = (setsForExercise) => {
+    const byDate = bestSetPerDate(setsForExercise);
+    const dates = Object.keys(byDate).sort();
+    const label = (d) => d ? formatSetValue(byDate[d].set) : null;
+    return {
+      starting: dates.length >= 2 ? label(dates[1]) : null,
+      middle: dates.length >= 3 ? label(dates[Math.floor((dates.length - 1) / 2)]) : null,
+      last: dates.length >= 1 ? label(dates[dates.length - 1]) : null
+    };
+  };
 
   const WEEKDAY_ORDER = ['MON','TUE','WED','THU','FRI','SAT','SUN'];
   const WEEKDAY_LABEL = { MON:'MONDAY', TUE:'TUESDAY', WED:'WEDNESDAY', THU:'THURSDAY', FRI:'FRIDAY', SAT:'SATURDAY', SUN:'SUNDAY', ANY:'ANY DAY' };
@@ -8236,12 +8270,14 @@ async function buildPlanExportText(){
     const list = byDay[day];
     if (!list || !list.length) return;
     lines.push(WEEKDAY_LABEL[day] || day);
-    lines.push('Exercise | Alt Group | Last Weight');
+    lines.push('Exercise | Alt Group | Starting Weight | Middle Weight | Last Weight');
     list.forEach(ex => {
       const altName = ex.alt_group_id ? (altGroupNameById[ex.alt_group_id] || '') : '';
-      const s = lastSetById[setIdOf(ex)];
-      const weightLabel = s ? formatSetValue(s) : 'not logged yet';
-      lines.push(`${ex.name} | ${altName} | ${weightLabel}`);
+      const cp = weightCheckpoints(setsById[setIdOf(ex)] || []);
+      const starting = cp.starting || 'n/a';
+      const middle = cp.middle || 'n/a';
+      const last = cp.last || 'not logged yet';
+      lines.push(`${ex.name} | ${altName} | ${starting} | ${middle} | ${last}`);
     });
     lines.push('');
   });
@@ -8254,7 +8290,7 @@ async function openExportPlanTextScreen(){
   overlay.innerHTML = `
     <div class="form-header"><button id="closeExportPlan">✕</button><h1>Export Plan as Text</h1><div style="width:18px;"></div></div>
     <div class="overlay-scroll">
-      <div class="small" style="padding:10px 18px; color:var(--slate); line-height:1.5;">Every day, every exercise, its alt group, and the last weight you logged - plain text, ready to paste anywhere.</div>
+      <div class="small" style="padding:10px 18px; color:var(--slate); line-height:1.5;">Every day, every exercise, its alt group, and starting/middle/latest weight - plain text, ready to paste anywhere.</div>
       <div style="padding:0 18px;">
         <textarea id="exportPlanTextArea" readonly style="width:100%; min-height:340px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px; color:var(--slate); font-family:'JetBrains Mono',monospace; font-size:11.5px; line-height:1.5; resize:vertical;">Loading…</textarea>
       </div>
@@ -16021,7 +16057,7 @@ async function renderMe(){
           <div class="chev" style="margin-top:2px;">›</div>
         </div>
         <div class="me-item" id="exportPlanTextBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
-          <div><div>Export Plan as Text</div><div class="small" style="color:var(--slate); margin-top:2px;">Every day, every exercise, alt group and last weight - plain text, ready to paste to an AI</div></div>
+          <div><div>Export Plan as Text</div><div class="small" style="color:var(--slate); margin-top:2px;">Every day, every exercise, alt group and weight progression - plain text, ready to paste to an AI</div></div>
           <div class="chev" style="margin-top:2px;">›</div>
         </div>
         <div class="section-label">App</div>
