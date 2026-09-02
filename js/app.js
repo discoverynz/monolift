@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.279';
+const APP_VERSION = 'Beta 5.280';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -2250,72 +2250,7 @@ async function quickSaveSet(exerciseId, exerciseName, best){
   return true;
 }
 
-// The active exercise during a session, expanded in place. Every other row
-// in the list stays exactly as it is - nothing new appears on screen, one
-// card is simply larger than its neighbours.
-function sessionActiveCard(ex){
-  const st = sessionStateFor(ex.id);
-  // Only the exercise the session is pointed at expands. Without this every
-  // card in the list would render expanded the moment a session started.
-  if (!st || !st.isActive) return null;
-  const restLeft = sessionRestLeft();
-  const last = ex.lastSet;
-  const w = last && last.weight != null ? last.weight : '';
-  const r = last && last.reps != null ? last.reps : '';
-  const unit = (last && last.weight_unit) || 'kg';
-  const pips = Array.from({ length: Math.max(st.target, st.done) }, (_, i) =>
-    `<div style="flex:1; height:5px; border-radius:3px; background:${i < st.done ? 'var(--good)' : i === st.done ? 'var(--flame)' : '#2c2e33'};"></div>`).join('');
-
-  if (restLeft > 0){
-    // Resting: the card itself fills left to right as the timer runs, so the
-    // countdown is spatial rather than only a number - catchable from across
-    // a gym without reading it.
-    const total = (readSession() || {}).restTotal || 90;
-    const pct = Math.max(0, Math.min(100, ((total - restLeft) / total) * 100));
-    return `<div class="ex-card session-card" data-id="${ex.id}" style="position:relative; overflow:hidden; background:var(--panel); border:1px solid rgba(201,162,39,0.5); border-radius:13px; padding:13px; margin-bottom:8px;">
-      <div style="position:absolute; left:0; top:0; bottom:0; width:${pct}%; background:rgba(201,162,39,0.13); transition:width 1s linear;"></div>
-      <div style="position:relative; display:flex; justify-content:space-between; align-items:center; gap:10px;">
-        <div style="min-width:0;">
-          <div style="font-family:'Oswald',sans-serif; font-size:15px;">${ex.name}</div>
-          <div class="small" style="color:var(--brass); margin-top:2px;">Resting — set ${st.done + 1} next</div>
-        </div>
-        <div style="display:flex; align-items:center; gap:9px; flex-shrink:0;">
-          <span style="font-family:'Bebas Neue',sans-serif; font-size:26px; color:var(--brass);">${Math.floor(restLeft/60)}:${String(restLeft%60).padStart(2,'0')}</span>
-          <button class="sess-skip-rest" style="background:var(--ink); border:1px solid var(--line); color:var(--slate); border-radius:8px; padding:7px 10px; font-size:11px;">Skip</button>
-        </div>
-      </div>
-    </div>`;
-  }
-
-  return `<div class="ex-card session-card" data-id="${ex.id}" style="background:linear-gradient(160deg, rgba(255,107,26,0.11), rgba(255,107,26,0.03)); border:1px solid rgba(255,107,26,0.45); border-radius:13px; padding:13px; margin-bottom:8px;">
-    <div style="display:flex; justify-content:space-between; align-items:baseline; gap:8px;">
-      <div style="font-family:'Oswald',sans-serif; font-size:15px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${ex.name}</div>
-      <div class="small" style="color:var(--flame); flex-shrink:0;">set ${st.done + 1} of ${st.target}</div>
-    </div>
-    <div style="display:flex; gap:5px; margin:10px 0 11px 0;">${pips}</div>
-    <div style="display:flex; gap:8px; align-items:center;">
-      <div style="flex:1; background:var(--ink); border:1px solid var(--line); border-radius:9px; padding:7px 10px;">
-        <div style="font-size:9px; color:var(--slate);">Weight</div>
-        <input id="sessW" inputmode="decimal" value="${w}" style="width:100%; background:none; border:none; color:var(--chalk); font-family:'Bebas Neue',sans-serif; font-size:21px; padding:0;">
-      </div>
-      <div style="flex:1; background:var(--ink); border:1px solid var(--line); border-radius:9px; padding:7px 10px;">
-        <div style="font-size:9px; color:var(--slate);">Reps</div>
-        <input id="sessR" inputmode="numeric" value="${r}" style="width:100%; background:none; border:none; color:var(--chalk); font-family:'Bebas Neue',sans-serif; font-size:21px; padding:0;">
-      </div>
-      <button class="sess-log" data-unit="${unit}" style="background:var(--flame); border:none; color:var(--ink); border-radius:9px; padding:13px 17px; font-family:'Bebas Neue',sans-serif; font-size:14px; letter-spacing:0.5px;">LOG</button>
-    </div>
-    <div style="display:flex; gap:7px; margin-top:9px;">
-      <button class="sess-done-ex" style="flex:1; background:none; border:1px solid var(--line); color:var(--slate); border-radius:8px; padding:7px; font-size:11px;">Done with this</button>
-      <button class="sess-skip-ex" style="flex:1; background:none; border:1px solid var(--line); color:var(--slate); border-radius:8px; padding:7px; font-size:11px;">Skip</button>
-    </div>
-  </div>`;
-}
-
 function exerciseRow(ex){
-  // During a session the current exercise renders as an expanded card
-  // instead of a normal row.
-  const sessCard = sessionActiveCard(ex);
-  if (sessCard) return sessCard;
   const groupNameRaw = ex.alt_groups ? ex.alt_groups.name : null;
   // Never show a day-of-week reference in the tag itself - a group can
   // legitimately apply regardless of which day it's viewed from, so a name
@@ -3557,8 +3492,6 @@ async function openResetDayLogging(dateStr, label){
       warmInvalidate();
       // A session covering that day is meaningless once its sets are gone.
       try {
-        const sess = readSession();
-        if (sess && sess.date === dateStr) writeSession(null);
         localStorage.removeItem(`zealift_session_done_${dateStr}_${state.selectedDay}`);
       } catch(e){}
       renderTrack();
@@ -5270,30 +5203,6 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   // obvious place in the app for ideas - and it was showing nothing at all,
   // because the normal suggestion engine needs existing exercises to work
   // from and an empty day has none.
-  // Sits directly above the toolbar, offered whenever there's something left
-  // to do.
-  const remaining = visibleExercises.filter(ex => !ex.loggedToday && !ex.completeVia);
-  const resumable = readSession();
-  // Deliberately NOT gated on the selected weekday being today. Working
-  // Thursday's plan on a Wednesday is normal, and sets are recorded against
-  // the real date either way - so the only thing that matters is whether
-  // there's anything left to do on the plan you're looking at.
-  // A finished day shows a way back in rather than nothing. Wanting to add
-  // more after completing the plan is normal - and it should never require
-  // deleting real history to make the app usable again, which is what a
-  // "reset the day" button quietly encourages.
-  const dayAlreadyDone = remaining.length === 0 && visibleExercises.length > 0;
-  const sessionStartHtml = dayAlreadyDone
-    ? `<div style="padding:10px 18px 0 18px;">
-        <div style="background:var(--panel); border:1px solid rgba(143,191,122,0.3); border-radius:13px; padding:13px 14px; display:flex; justify-content:space-between; align-items:center; gap:10px;">
-          <div style="min-width:0;">
-            <div style="font-family:'Oswald',sans-serif; font-size:13.5px; color:var(--good);">Everything logged</div>
-            <div class="small" style="color:var(--slate); margin-top:2px;">Add more if you're not done.</div>
-          </div>
-          <button class="btn-primary" id="addMoreTodayBtn" style="flex-shrink:0; width:auto; padding:9px 14px; font-size:12.5px;">Add exercise</button>
-        </div>
-      </div>`
-    : '';
   const ghostRaceHtml = buildGhostRaceHtml(headerStats, visibleExercises);
   const mainEventHtml = buildMainEventHtml(visibleExercises);
   // Session heat needs per-set timestamps, which only the live header fetch
@@ -5333,16 +5242,6 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
           </div>
           <div style="flex:1; text-align:center; padding:14px 6px; border-right:1px solid rgba(255,255,255,0.06);">
             ${(() => {
-              // While a session runs, this slot shows elapsed time instead of
-              // the streak - reusing furniture that already exists rather
-              // than adding a row, and the streak isn't what you need to
-              // know mid-workout anyway. It returns the moment you finish.
-              const sess = readSession();
-              if (sess){
-                const mins = Math.max(0, Math.floor((Date.now() - new Date(sess.startedAt)) / 60000));
-                return `<div style="font-family:'JetBrains Mono',monospace; font-size:17px; font-weight:600; color:var(--flame);">${mins}m</div>
-                  <div style="font-size:8.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px; margin-top:2px;">Session</div>`;
-              }
               return `<div class="${headerStats.streak > 0 ? 'streak-alive' : ''}" style="font-family:'JetBrains Mono',monospace; font-size:17px; font-weight:600; color:var(--flame);">${headerStats.streak > 0 ? '🔥 ' : ''}${headerStats.streak}</div>
                 <div style="font-size:8.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px; margin-top:2px;">Day Streak</div>`;
             })()}
@@ -5352,13 +5251,9 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
             <div style="font-size:8.5px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px; margin-top:2px;">Sets ${headerStats.targetDateIsToday ? 'Today' : dayLabelOf(headerStats.targetWeekday)}</div>
           </div>
         </div>
-        ${sessionStartHtml}
         <div style="padding:8px 18px 0 18px; display:flex; gap:8px; flex-wrap:wrap;">
           ${isAnyDay(state.selectedDay) && workingExercises.length > 0 ? `<button id="toolbarClearAnyBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:var(--panel); border:1px solid var(--line); color:var(--slate);">
             <span style="font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px;">CLEAR</span>
-          </button>` : ''}
-          ${remaining.length >= 2 || resumable ? `<button id="startSessionBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:${resumable ? 'var(--flame)' : 'rgba(255,107,26,0.10)'}; border:1px solid ${resumable ? 'var(--flame)' : 'rgba(255,107,26,0.45)'}; color:${resumable ? 'var(--ink)' : 'var(--flame)'};">
-            <span style="font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px;">${resumable ? `END · ${resumable.idx + 1}/${resumable.order.length}` : 'START'}</span>
           </button>` : ''}
           <button id="toolbarTimerBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:rgba(255,107,26,0.10); border:1px solid rgba(255,107,26,0.45); color:var(--flame);">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 13V9"/><path d="M9 2h6"/></svg>
@@ -5526,88 +5421,6 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   if (retryBtn) retryBtn.onclick = () => { state.exercises = []; renderTrack(); };
   const clearLocBtn = document.getElementById('clearLocationBtn');
   if (clearLocBtn) clearLocBtn.onclick = () => openLocationPicker(allLocations, currentLocationId);
-  const addMoreBtn = document.getElementById('addMoreTodayBtn');
-  if (addMoreBtn) addMoreBtn.onclick = () => openPicker();
-  // --- in-place session card handlers ---
-  const sessLogBtn = document.querySelector('.sess-log');
-  if (sessLogBtn) sessLogBtn.onclick = async () => {
-    const sess = readSession();
-    if (!sess) return;
-    const cur = sess.order[sess.idx];
-    const ex = (state.exercises || []).find(e => e.id === cur.id);
-    if (!ex) return;
-    sessLogBtn.textContent = '…';
-    const ok = await sessionLogSet(ex, document.getElementById('sessW').value, document.getElementById('sessR').value, sessLogBtn.dataset.unit);
-    if (!ok){ sessLogBtn.textContent = 'LOG'; return; }
-    const done = (sess.setsDone[cur.id] || 0) + 1;
-    const target = sess.targetSets[cur.id] || (ex.lastSet && Number(ex.lastSet.num_sets)) || 3;
-    sess.setsDone[cur.id] = done;
-    sess.targetSets[cur.id] = target;
-    if (done >= target){
-      // Exercise finished - move on rather than resting into nothing.
-      sess.idx++;
-      sess.restUntil = null;
-      writeSession(sess);
-      if (sess.idx >= sess.order.length) return finishSession(sess);
-    } else {
-      const secs = restSecondsFor(ex);
-      sess.restUntil = new Date(Date.now() + secs * 1000).toISOString();
-      sess.restTotal = secs;
-      writeSession(sess);
-    }
-    await loadExercises();
-    renderTrack();
-  };
-  const sessSkipRest = document.querySelector('.sess-skip-rest');
-  if (sessSkipRest) sessSkipRest.onclick = () => {
-    const sess = readSession();
-    if (!sess) return;
-    sess.restUntil = null; writeSession(sess); renderTrack();
-  };
-  const sessDoneEx = document.querySelector('.sess-done-ex');
-  if (sessDoneEx) sessDoneEx.onclick = () => {
-    const sess = readSession();
-    if (!sess) return;
-    sess.idx++; sess.restUntil = null; writeSession(sess);
-    if (sess.idx >= sess.order.length) return finishSession(sess);
-    renderTrack();
-  };
-  const sessSkipEx = document.querySelector('.sess-skip-ex');
-  if (sessSkipEx) sessSkipEx.onclick = () => {
-    const sess = readSession();
-    if (!sess) return;
-    sess.idx++; sess.restUntil = null; writeSession(sess);
-    if (sess.idx >= sess.order.length) return finishSession(sess);
-    renderTrack();
-  };
-  // Tick the rest countdown without re-rendering the whole screen, which
-  // would fight any input the user is mid-way through typing.
-  if (window.__sessTick) clearInterval(window.__sessTick);
-  if (sessionRestLeft() > 0){
-    window.__sessTick = setInterval(() => {
-      const left = sessionRestLeft();
-      const card = document.querySelector('.session-card');
-      if (!card){ clearInterval(window.__sessTick); return; }
-      if (left <= 0){
-        clearInterval(window.__sessTick);
-        const sess = readSession();
-        if (sess){ sess.restUntil = null; writeSession(sess); }
-        if (!document.hidden) playTimerSound();
-        renderTrack();
-        return;
-      }
-      const clock = card.querySelector('span[style*="Bebas"]');
-      if (clock) clock.textContent = `${Math.floor(left/60)}:${String(left%60).padStart(2,'0')}`;
-      const fill = card.querySelector('div[style*="position:absolute"]');
-      const total = (readSession() || {}).restTotal || 90;
-      if (fill) fill.style.width = Math.max(0, Math.min(100, ((total - left) / total) * 100)) + '%';
-    }, 500);
-  }
-  const startSessBtn = document.getElementById('startSessionBtn');
-  if (startSessBtn) startSessBtn.onclick = () => {
-    if (readSession()) endSessionEarly();
-    else startSession(visibleExercises);
-  };
   const mainCard = document.getElementById('mainEventCard');
   if (mainCard) mainCard.onclick = () => openLogForm(mainCard.dataset.exId, mainCard.dataset.exName);
   document.querySelectorAll('.trip-idea-add').forEach(btn => {
@@ -10064,7 +9877,7 @@ function maybeShowSessionComplete(){
   showSessionCompleteScreen(list);
 }
 
-async function showSessionCompleteScreen(list, elapsedMins){
+async function showSessionCompleteScreen(list){
   const stats = await fetchTrackHeaderStats().catch(() => null);
   const volume = stats ? stats.volumeKg : 0;
   const setsToday = stats ? stats.setsToday : 0;
@@ -10077,7 +9890,7 @@ async function showSessionCompleteScreen(list, elapsedMins){
       <div style="padding:0 18px;">
         <div class="session-done-hero">SESSION DONE</div>
         <div class="small" style="color:var(--slate); margin-top:4px; animation:ml-rise .5s ease both; animation-delay:.1s;">
-          ${dayLabelOf(state.selectedDay)}${elapsedMins ? ` · ${elapsedMins} min` : ''} · ${list.length} exercise${list.length===1?'':'s'} complete
+          ${dayLabelOf(state.selectedDay)} · ${list.length} exercise${list.length===1?'':'s'} complete
         </div>
         <div style="display:flex; gap:9px; margin-top:18px;">
           <div class="session-done-stat" style="animation-delay:.2s;"><div class="n" style="color:var(--flame);">${volume.toLocaleString()}</div><div class="l">kg moved</div></div>
@@ -15891,159 +15704,6 @@ function buildChargeCellsHtml(recovery){
 // session was at the same point. Every gym app tells you how it went
 // afterwards, when nothing can be done - this makes the middle of a session
 // have stakes.
-// ---------- SESSION MODE ----------
-// A guided run through the day, as an alternative to the list rather than a
-// replacement for it. Every set writes immediately through the normal save
-// path, so the session is only a wrapper - close the app mid-workout and
-// nothing is lost, and quitting drops you back to the list with everything
-// already logged. That property is what stops a guided flow becoming a cage
-// the first time something interrupts it.
-const SESSION_KEY = 'zealift_active_session';
-function readSession(){
-  try {
-    const raw = localStorage.getItem(SESSION_KEY);
-    if (!raw) return null;
-    const sess = JSON.parse(raw);
-    // A session belongs to the day it started. Finding yesterday's still
-    // open means it was abandoned, not paused.
-    if (sess.date !== todayStr()){ localStorage.removeItem(SESSION_KEY); return null; }
-    return sess;
-  } catch(e){ return null; }
-}
-function writeSession(sess){
-  try {
-    if (sess) localStorage.setItem(SESSION_KEY, JSON.stringify(sess));
-    else localStorage.removeItem(SESSION_KEY);
-  } catch(e){}
-}
-
-// Rest length from the exercise itself, not one global setting. A heavy
-// compound genuinely needs three minutes and a cable fly does not - using
-// one number for both is how rest timers end up ignored.
-function restSecondsFor(ex){
-  const s = ex && (ex.lastSet || ex.maxSet);
-  const w = s ? Number(s.weight) : 0;
-  if (!isFinite(w) || w <= 0) return 75;
-  const kg = (s.weight_unit === 'lb' ? w * 0.453592 : w) * (s.weight_type === 'per' ? 2 : 1);
-  if (kg >= 100) return 180;
-  if (kg >= 60) return 150;
-  if (kg >= 30) return 105;
-  return 75;
-}
-
-function startSession(list){
-  const items = (list || []).filter(ex => !ex.loggedToday && !ex.completeVia);
-  if (!items.length) return;
-  writeSession({
-    date: todayStr(),
-    weekday: state.selectedDay,
-    startedAt: new Date().toISOString(),
-    order: items.map(ex => ({ id: ex.id, name: ex.name })),
-    idx: 0,
-    setsDone: {},          // exerciseId -> count logged this session
-    targetSets: {}         // exerciseId -> how many planned
-  });
-  renderTrack();
-}
-
-function endSession(){
-  writeSession(null);
-  state.currentTab = 'track';
-  renderTrack();
-}
-
-// Ending from the toolbar. If everything got logged it's a finish worth
-// marking; if not, it's just stopping, and nothing should be celebrated.
-// Writes through the same insert as every other logging path, including PR
-// detection - the session card had been silently skipping this entirely.
-async function sessionLogSet(ex, weightRaw, repsRaw, unitOverride){
-  const userData = { user: await getCurrentUser() };
-  if (!userData.user) return false;
-  const idField = setExerciseIdField();
-  const unit = unitOverride || (ex.lastSet && ex.lastSet.weight_unit) || 'kg';
-  const weight = weightRaw ? parseFloat(weightRaw) : null;
-  const weightType = (ex.lastSet && ex.lastSet.weight_type) || 'total';
-
-  let priorBest = null;
-  if (weight !== null && (unit === 'kg' || unit === 'lb')){
-    const prev = await withTimeout(
-      supabaseClient.from('sets').select('weight, weight_unit')
-        .eq('user_id', userData.user.id).eq(idField, ex.id)
-        .not('weight', 'is', null).limit(60), 10000);
-    if (!prev.__timeout && !prev.error && prev.data && prev.data.length){
-      priorBest = Math.max(...prev.data.map(s => convertWeight(s.weight, s.weight_unit, unit)));
-    }
-  }
-
-  const payload = {
-    user_id: userData.user.id, weight, weight_unit: unit, weight_type: weightType,
-    reps: repsRaw ? parseInt(repsRaw, 10) : ASSUMED_REPS,
-    num_sets: 1, logged_at: todayStr(), location_id: effectiveLocationId()
-  };
-  payload[idField] = ex.id;
-  invalidateTrackSnapshots();
-  let error = null;
-  try {
-    const res = await withTimeout(supabaseClient.from('sets').insert(payload).select(), 12000);
-    error = res.__timeout ? { message: 'timed out' } : res.error;
-  } catch(e){ error = { message: e.message || 'network' }; }
-  if (error){
-    queueSetLocally(payload);
-    showQueuedSetToast();
-    return true;
-  }
-  const btn = document.querySelector('.sess-log');
-  if (priorBest !== null && weight !== null && weight > priorBest + 0.01){
-    celebratePR(ex.name, weight, unit, priorBest);
-  } else {
-    celebrateLoggedSet(btn, weight, unit, weightType, payload.reps, 1);
-  }
-  return true;
-}
-
-function endSessionEarly(){
-  const sess = readSession();
-  if (!sess) return;
-  const list = (state.exercises || []).filter(ex => isAvailableOnSelectedDay(ex));
-  const allDone = list.length > 0 && list.every(ex => ex.loggedToday || ex.completeVia);
-  if (allDone) finishSession(sess);
-  else endSession();
-}
-
-// Which exercise the session is currently pointed at, and how far into it.
-function sessionStateFor(exId){
-  const sess = readSession();
-  if (!sess) return null;
-  const cur = sess.order[sess.idx];
-  const done = sess.setsDone[exId] || 0;
-  const target = sess.targetSets[exId] || 3;
-  return { sess, isActive: cur && cur.id === exId, done, target };
-}
-
-// Rest is stored on the session rather than in a component, so it survives
-// a re-render, a tab switch, or the app being backgrounded - and is derived
-// from an absolute end time so locking the phone can't pause it.
-function sessionRestLeft(){
-  const sess = readSession();
-  if (!sess || !sess.restUntil) return 0;
-  return Math.max(0, Math.ceil((new Date(sess.restUntil) - Date.now()) / 1000));
-}
-
-// Session state lives on the exercise card itself rather than on a separate
-// screen. Replacing the whole Lift screen meant losing the exercise list,
-// the stats and the heat - a worse app wearing a guided-flow costume, and it
-// forced a fixed order on someone who might superset or jump around. The
-// session is now an annotation ON the list rather than a replacement for it,
-// which also removes the "don't trap the user" problem structurally: there's
-// nothing to escape from because you were never taken anywhere.
-async function finishSession(sess){
-  const mins = Math.max(1, Math.round((Date.now() - new Date(sess.startedAt)) / 60000));
-  writeSession(null);
-  const list = (state.exercises || []).filter(ex => isAvailableOnSelectedDay(ex));
-  renderTrack();
-  setTimeout(() => showSessionCompleteScreen(list, mins), 350);
-}
-
 function buildGhostRaceHtml(hs, list){
   if (!hs || !hs.targetDateIsToday) return '';
   const last = hs.lastWeekVolumeKg;
