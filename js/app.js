@@ -13,7 +13,7 @@ function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
 function dayLabelOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_LABEL : DAY_LABELS[weekday]; }
 const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders & Arms","Legs & Abs","Hybrid Circuit","Rest / Walk"];
-const APP_VERSION = 'Beta 5.291';
+const APP_VERSION = 'Beta 5.292';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Rings","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -10057,7 +10057,6 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
         <div class="chip-row" id="logLocationChipRow" style="padding:0;"></div>
       </div>
       <div id="guideArea" style="margin-bottom:18px;"></div>
-      <div id="sessionGhostArea" style="display:none;"></div>
       <div id="sameAsLastArea" style="margin-bottom:18px;"></div>
       <button class="save-btn" id="saveSetBtn" style="margin-bottom:18px;">Save Set</button>
       <div style="height:1px; background:var(--line); margin:0 18px 18px 18px;"></div>
@@ -10367,45 +10366,9 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
   }
 
   // SESSION GHOST. What you did the last time you trained this - shown while
-  // you're entering today's numbers, so there's always a version of yourself
-  // to race. Reuses the history query already running rather than adding
-  // another fetch, since it needs exactly the same rows.
-  function renderSessionGhost(sets){
-    const area = overlay.querySelector('#sessionGhostArea');
-    if (!area) return;
-    const today = todayStr();
-    // The most recent session that ISN'T today - comparing today against
-    // sets already logged today would just be racing yourself mid-workout.
-    const prior = (sets || []).filter(s => s.logged_at !== today);
-    if (!prior.length){ area.style.display = 'none'; return; }
-    const lastDate = prior[0].logged_at;
-    const lastSession = prior.filter(s => s.logged_at === lastDate);
-    // Best set of that session, by weight then reps - what you'd actually
-    // be trying to beat, not an arbitrary first row.
-    const best = lastSession.reduce((m, s) => {
-      const w = Number(s.weight) || 0, mw = m ? Number(m.weight) || 0 : -1;
-      if (w > mw || (w === mw && (Number(s.reps)||0) > (Number(m.reps)||0))) return s;
-      return m;
-    }, null);
-    if (!best) { area.style.display = 'none'; return; }
-    // formatSetValue is the app's own set formatter - it already handles
-    // bands, pins, levels, seconds and per-side correctly, so the ghost
-    // reads identically to the same set shown anywhere else.
-    // formatSetValue already appends sets/reps internally - adding
-    // formatSetsReps again here would print them twice.
-    const label = formatSetValue(best);
-    const daysAgo = Math.round((new Date(today+'T00:00:00') - new Date(lastDate+'T00:00:00')) / 86400000);
-    area.style.display = 'block';
-    area.innerHTML = `
-      <div style="margin:0 18px 14px 18px; background:rgba(255,255,255,0.02); border:1px dashed var(--line); border-radius:12px; padding:11px 13px;">
-        <div style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;">
-          <span style="font-family:'JetBrains Mono',monospace; font-size:9.5px; color:var(--slate); letter-spacing:1px; text-transform:uppercase;">👻 Last time</span>
-          <span style="font-size:10px; color:var(--slate);">${daysAgo === 1 ? 'yesterday' : daysAgo + ' days ago'}</span>
-        </div>
-        <div style="font-family:'Oswald',sans-serif; font-size:16px; color:var(--slate); margin-top:3px;">${label}</div>
-        <div style="font-size:10.5px; color:var(--flame); margin-top:3px;">Beat it.</div>
-      </div>`;
-  }
+  // (renderSessionGhost removed - "↻ Same as last time" already surfaces
+  // the same set, this was a second, more elaborate rendering of identical
+  // information right above it.)
 
   async function loadHistory(){
     const userData = { user: await getCurrentUser() };
@@ -10448,7 +10411,6 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
     const list = overlay.querySelector('#historyList');
     if (result.__timeout || result.error){ list.innerHTML = '<div class="empty-state" style="padding:20px;">Could not load history.</div>'; return; }
     const sets = result.data || [];
-    renderSessionGhost(sets);
     if (sets.length === 0){
       list.innerHTML = '<div class="empty-state" style="padding:20px;">No history yet — this will be your first entry.</div>';
       return;
