@@ -17,7 +17,7 @@ const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders &
 // after a set is saved (see exerciseRow's `justLogged`) - every other time
 // the "Logged today" pill renders, it's the plain ✓ text, unanimated.
 const SET_COMPLETE_TICK_SVG = `<svg class="set-complete-tick" width="16" height="16" viewBox="0 0 24 24" style="flex-shrink:0;"><circle class="tick-ring" cx="12" cy="12" r="10" fill="none" stroke="#0F1A0C" stroke-width="2"></circle><path class="tick-check" d="M7 12.5 L10.5 16 L17 8.5" fill="none" stroke="#0F1A0C" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>`;
-const APP_VERSION = 'Beta 5.301';
+const APP_VERSION = 'Beta 5.302';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Rings","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -5519,7 +5519,6 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
         // destroy this exact DOM node.
         state._justLoggedExId = el.dataset.id;
         renderTrack();
-        showMiniRestTimer(getTimerDefault());
         // Quick-save is the single most-used way to log a set in the whole
         // app, and previously the ONLY place offering Undo was the separate
         // "same as last time" button in the full log form - a much less
@@ -10212,10 +10211,6 @@ function maybeShowSessionComplete(){
 }
 
 async function showSessionCompleteScreen(list){
-  // The session is over - a lingering "rest before your next set" prompt
-  // doesn't make sense once there's no next set, and it would otherwise
-  // render on top of this sheet at a higher z-index.
-  hideMiniRestTimer();
   const stats = await fetchTrackHeaderStats().catch(() => null);
   const volume = stats ? stats.volumeKg : 0;
   const setsToday = stats ? stats.setsToday : 0;
@@ -11044,7 +11039,6 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
       state._justLoggedExId = exerciseId;
       overlay.remove();
       if (state.currentTab === 'track') renderTrack();
-      showMiniRestTimer(getTimerDefault());
       // Same existing toast "same as last time" already uses - this is the
       // PRIMARY save path (typing a weight and hitting Save Set) and never
       // offered Undo at all before, even though the shortcut button right
@@ -11150,92 +11144,6 @@ async function playTimerSound(){
     _timerAlertEl.play().catch(() => {});
   } catch(e){}
 }
-
-// ---------- FLOATING MINI REST-TIMER ----------
-// Auto-appears after logging a set, docked at the bottom of Track rather
-// than taking over the screen the way the full Timer overlay does - you
-// keep browsing/scrolling the exercise list while it counts down. Tapping
-// it opens the full Timer for presets/custom time/sound picking; tapping ✕
-// dismisses it outright. Deliberately its own small wall-clock-based
-// countdown rather than sharing _timerState/openTimer's machinery - this is
-// meant to be a lightweight ambient nudge, not a second copy of the full
-// timer's preset/sound-picker UI.
-let _miniTimerState = { endAt:null, interval:null, total:0 };
-
-function hideMiniRestTimer(){
-  if (_miniTimerState.interval){ clearInterval(_miniTimerState.interval); _miniTimerState.interval = null; }
-  _miniTimerState.endAt = null;
-  const pill = document.getElementById('miniRestPill');
-  if (pill) pill.classList.remove('show');
-  setTimeout(() => { const p = document.getElementById('miniRestPill'); if (p && !p.classList.contains('show')) p.remove(); }, 350);
-}
-
-// Standalone rather than a closure inside showMiniRestTimer, so the single
-// module-level visibilitychange listener below can call it directly without
-// needing to re-register a fresh listener (and closure) every time a rest
-// period starts.
-function miniRestTimerTick(){
-  const pill = document.getElementById('miniRestPill');
-  const ringFill = document.getElementById('miniRestRingFill');
-  const textEl = document.getElementById('miniRestText');
-  if (!pill || !ringFill || !textEl || !_miniTimerState.endAt) return;
-  const CIRC = 2 * Math.PI * 14;
-  const remaining = Math.max(0, Math.ceil((_miniTimerState.endAt - Date.now()) / 1000));
-  const pct = _miniTimerState.total > 0 ? remaining / _miniTimerState.total : 0;
-  ringFill.style.strokeDasharray = String(CIRC);
-  ringFill.style.strokeDashoffset = String(CIRC * (1 - pct));
-  const m = Math.floor(remaining/60), s = remaining%60;
-  textEl.textContent = `${m}:${s.toString().padStart(2,'0')}`;
-  ringFill.classList.toggle('timer-breathing', remaining > 0 && remaining <= 5);
-  if (remaining <= 0){
-    playTimerSound();
-    if (_miniTimerState.interval){ clearInterval(_miniTimerState.interval); _miniTimerState.interval = null; }
-    textEl.textContent = 'GO';
-    setTimeout(hideMiniRestTimer, 2200);
-  }
-}
-
-function showMiniRestTimer(seconds){
-  if (!seconds || seconds <= 0) return;
-  // Re-tapping quick-save while already resting just restarts the clock
-  // fresh, rather than stacking a second pill or fighting over the DOM node.
-  hideMiniRestTimer();
-  let pill = document.getElementById('miniRestPill');
-  if (!pill){
-    pill = document.createElement('div');
-    pill.id = 'miniRestPill';
-    pill.className = 'mini-rest-pill';
-    pill.innerHTML = `
-      <svg class="mini-rest-ring" width="34" height="34" viewBox="0 0 34 34">
-        <circle class="track" cx="17" cy="17" r="14"></circle>
-        <circle class="fill" id="miniRestRingFill" cx="17" cy="17" r="14"></circle>
-      </svg>
-      <div style="flex:1; min-width:0;">
-        <div id="miniRestText" style="font-family:'JetBrains Mono',monospace; font-size:15px; font-weight:600;"></div>
-        <div style="font-size:9px; color:var(--slate); text-transform:uppercase; letter-spacing:0.4px;">Resting — tap to expand</div>
-      </div>
-      <div id="miniRestClose" style="font-size:16px; color:var(--slate); padding:6px;">✕</div>`;
-    document.body.appendChild(pill);
-    pill.querySelector('#miniRestClose').onclick = (e) => { e.stopPropagation(); hideMiniRestTimer(); };
-    pill.onclick = () => { hideMiniRestTimer(); openTimer(); };
-  }
-  requestAnimationFrame(() => pill.classList.add('show'));
-
-  _miniTimerState.total = seconds;
-  _miniTimerState.endAt = Date.now() + seconds * 1000;
-  miniRestTimerTick();
-  // Wall-clock based (recomputed from endAt each tick), same reasoning as
-  // the main timer - a naive per-tick decrement drifts or stalls outright
-  // if the interval gets throttled while the screen is locked between sets.
-  if (_miniTimerState.interval) clearInterval(_miniTimerState.interval);
-  _miniTimerState.interval = setInterval(miniRestTimerTick, 250);
-}
-// Registered once, not per-call - re-syncs the mini timer's display the
-// moment the screen wakes/tab refocuses, rather than accumulating a fresh
-// listener every time a rest period starts.
-document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && _miniTimerState.endAt) miniRestTimerTick();
-});
 
 function openTimer(){
   if (_timerState.interval){ clearInterval(_timerState.interval); _timerState.interval = null; }
