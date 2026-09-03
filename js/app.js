@@ -17,7 +17,7 @@ const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders &
 // after a set is saved (see exerciseRow's `justLogged`) - every other time
 // the "Logged today" pill renders, it's the plain ✓ text, unanimated.
 const SET_COMPLETE_TICK_SVG = `<svg class="set-complete-tick" width="16" height="16" viewBox="0 0 24 24" style="flex-shrink:0;"><circle class="tick-ring" cx="12" cy="12" r="10" fill="none" stroke="#0F1A0C" stroke-width="2"></circle><path class="tick-check" d="M7 12.5 L10.5 16 L17 8.5" fill="none" stroke="#0F1A0C" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>`;
-const APP_VERSION = 'Beta 5.303';
+const APP_VERSION = 'Beta 5.304';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Rings","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -12544,22 +12544,22 @@ async function buildPhaseHeroHtml(phase, weightEntries){
   let gapMessage = null;
   if (hasBulk && hasCut){
     if (today < phase.bulk_start){
-      gapMessage = `Your Bulk is scheduled to start ${formatLoggedDate(phase.bulk_start)}.`;
+      gapMessage = `Your ${phaseKindLabel(phase, 'bulk')} is scheduled to start ${formatLoggedDate(phase.bulk_start)}.`;
     } else if (today > phase.bulk_end && today < phase.cut_start){
       const daysSince = Math.round((new Date(today) - new Date(phase.bulk_end)) / 86400000);
-      gapMessage = `Your Bulk ended ${daysSince} day${daysSince===1?'':'s'} ago. Cut is scheduled to start ${formatLoggedDate(phase.cut_start)}.`;
+      gapMessage = `Your ${phaseKindLabel(phase, 'bulk')} ended ${daysSince} day${daysSince===1?'':'s'} ago. ${phaseKindLabel(phase, 'cut')} is scheduled to start ${formatLoggedDate(phase.cut_start)}.`;
     } else if (today > phase.cut_end){
       const daysSince = Math.round((new Date(today) - new Date(phase.cut_end)) / 86400000);
-      gapMessage = `Your Cut ended ${daysSince} day${daysSince===1?'':'s'} ago.`;
+      gapMessage = `Your ${phaseKindLabel(phase, 'cut')} ended ${daysSince} day${daysSince===1?'':'s'} ago.`;
     }
   } else if (hasBulk && today < phase.bulk_start){
-    gapMessage = `Your Bulk is scheduled to start ${formatLoggedDate(phase.bulk_start)}.`;
+    gapMessage = `Your ${phaseKindLabel(phase, 'bulk')} is scheduled to start ${formatLoggedDate(phase.bulk_start)}.`;
   } else if (hasBulk && today > phase.bulk_end){
-    gapMessage = `Your Bulk ended ${formatLoggedDate(phase.bulk_end)}.`;
+    gapMessage = `Your ${phaseKindLabel(phase, 'bulk')} ended ${formatLoggedDate(phase.bulk_end)}.`;
   } else if (hasCut && today < phase.cut_start){
-    gapMessage = `Your Cut is scheduled to start ${formatLoggedDate(phase.cut_start)}.`;
+    gapMessage = `Your ${phaseKindLabel(phase, 'cut')} is scheduled to start ${formatLoggedDate(phase.cut_start)}.`;
   } else if (hasCut && today > phase.cut_end){
-    gapMessage = `Your Cut ended ${formatLoggedDate(phase.cut_end)}.`;
+    gapMessage = `Your ${phaseKindLabel(phase, 'cut')} ended ${formatLoggedDate(phase.cut_end)}.`;
   }
 
   return `<div class="phase-hero none">
@@ -13869,12 +13869,18 @@ async function openEditPhaseForm(existing){
   };
   // Optional per-cycle name ("The Winter Bulk", "The Lean Cut") - purely
   // cosmetic, shown wherever this phase's kind label would otherwise
-  // appear. Seeded from the existing row only when THIS is the currently
-  // locked/running cycle - a not-yet-started "Next" card starts blank
-  // rather than carrying over whatever the previous occurrence was called.
+  // appear. Always seeded straight from whatever is actually stored,
+  // regardless of whether this kind happens to be the currently-locked/
+  // active one - a previous bug here only showed the name back when the
+  // phase was live today, so a saved name silently reset to blank in the
+  // edit form (and the hero) the moment that phase wasn't the active one
+  // anymore. Auto-repeat clearing the name on cycle-advance (see
+  // advanceAutoScheduleIfNeeded) is what actually prevents a stale name
+  // from carrying into an unrelated future cycle - this seeding doesn't
+  // need to duplicate that job.
   let phaseNames = {
-    bulk: (lockedKind === 'bulk' && existing) ? (existing.bulk_name || '') : '',
-    cut: (lockedKind === 'cut' && existing) ? (existing.cut_name || '') : ''
+    bulk: (existing && existing.bulk_name) || '',
+    cut: (existing && existing.cut_name) || ''
   };
 
   const durationCardHtml = (kind, isLocked) => {
@@ -14092,7 +14098,21 @@ async function openEditPhaseForm(existing){
       };
     }
     warmInvalidate('phase');
-    const { error } = await supabaseClient.from('phase_settings').upsert(payload, { onConflict: 'user_id' });
+    let { error } = await supabaseClient.from('phase_settings').upsert(payload, { onConflict: 'user_id' });
+    // bulk_name/cut_name are new columns - if that migration hasn't been
+    // run against this database yet, the upsert fails on those two fields
+    // specifically. Retry without them rather than losing the date save
+    // entirely (same pattern used elsewhere in this file for equipment_tags/
+    // notes/muscle_override), and say so plainly instead of a raw Postgres
+    // error, since "column does not exist" means nothing to fix here.
+    if (error && /bulk_name|cut_name|column/i.test(error.message || '')){
+      const { bulk_name, cut_name, ...withoutNames } = payload;
+      const retry = await supabaseClient.from('phase_settings').upsert(withoutNames, { onConflict: 'user_id' });
+      error = retry.error;
+      if (!error){
+        alert("Dates saved, but the phase-naming feature needs a database column that hasn't been added yet - the name wasn't saved this time.");
+      }
+    }
     if (error){ alert(error.message); return; }
     overlay.remove();
     renderScale();
