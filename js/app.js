@@ -16,8 +16,20 @@ const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders &
 // Animated ring+checkmark draw-on shown once, on the exact render right
 // after a set is saved (see exerciseRow's `justLogged`) - every other time
 // the "Logged today" pill renders, it's the plain ✓ text, unanimated.
-const SET_COMPLETE_TICK_SVG = `<svg class="set-complete-tick" width="16" height="16" viewBox="0 0 24 24" style="flex-shrink:0;"><circle class="tick-ring" cx="12" cy="12" r="10" fill="none" stroke="#0F1A0C" stroke-width="2"></circle><path class="tick-check" d="M7 12.5 L10.5 16 L17 8.5" fill="none" stroke="#0F1A0C" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>`;
-const APP_VERSION = 'Beta 5.310';
+const SET_COMPLETE_TICK_SVG = `<svg class="set-complete-tick" id="setCompleteTick" width="16" height="16" viewBox="0 0 24 24" style="flex-shrink:0;"><circle class="tick-ring" cx="12" cy="12" r="10" fill="none" stroke="#0F1A0C" stroke-width="2"></circle><path class="tick-check" d="M7 12.5 L10.5 16 L17 8.5" fill="none" stroke="#0F1A0C" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>`;
+// The tick above only ever exists on the one card that was JUST logged, so a
+// fixed id is safe - at most one instance is in the DOM at a time. Swaps
+// itself back to the plain ✓ once the draw-on animation has actually
+// finished playing (see the CSS timing: ~0.5s), rather than lingering
+// permanently as a visually different icon from every other "done" card on
+// the screen. Previously this never reverted, so a just-logged card looked
+// like a different, inconsistent kind of checkmark for as long as you
+// stayed on the screen, not just for the brief moment it was meant to mark.
+function revertSetCompleteTick(){
+  const el = document.getElementById('setCompleteTick');
+  if (el) el.outerHTML = '✓';
+}
+const APP_VERSION = 'Beta 5.311';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -5563,6 +5575,10 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
         // destroy this exact DOM node.
         state._justLoggedExId = el.dataset.id;
         renderTrack();
+        // The tick/pulse are a brief "this just happened" cue, not a
+        // permanent different-looking checkmark - revert once the draw-on
+        // animation has actually finished playing.
+        setTimeout(revertSetCompleteTick, 650);
         // Quick-save is the single most-used way to log a set in the whole
         // app, and previously the ONLY place offering Undo was the separate
         // "same as last time" button in the full log form - a much less
@@ -10847,8 +10863,16 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
       lastEntry.reps || null, lastEntry.num_sets || null, null
     );
     if (insertedId){
+      // This is a third way to save a set, alongside quick-save and the
+      // main Save Set button - it was missing the same just-logged flag
+      // both of those set, so a set logged via "same as last time" never
+      // got the punch/pulse/tick treatment, and never checked for session
+      // completion either.
+      state._justLoggedExId = exerciseId;
       overlay.remove();
       if (state.currentTab === 'track') renderTrack();
+      setTimeout(revertSetCompleteTick, 650);
+      setTimeout(() => maybeShowSessionComplete(), 700);
       // A queued set has no server row yet, so there's nothing for Undo to
       // delete - offering it would fail against an id that doesn't exist.
       // The queued toast already told the user what happened.
@@ -11148,6 +11172,10 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
       state._justLoggedExId = exerciseId;
       overlay.remove();
       if (state.currentTab === 'track') renderTrack();
+      // Same as the quick-save path - revert once the draw-on animation has
+      // actually finished, so this doesn't linger as a permanently
+      // different-looking checkmark from every other done card.
+      setTimeout(revertSetCompleteTick, 650);
       // Same existing toast "same as last time" already uses - this is the
       // PRIMARY save path (typing a weight and hitting Save Set) and never
       // offered Undo at all before, even though the shortcut button right
