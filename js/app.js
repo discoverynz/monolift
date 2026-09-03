@@ -17,7 +17,7 @@ const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders &
 // after a set is saved (see exerciseRow's `justLogged`) - every other time
 // the "Logged today" pill renders, it's the plain ✓ text, unanimated.
 const SET_COMPLETE_TICK_SVG = `<svg class="set-complete-tick" width="16" height="16" viewBox="0 0 24 24" style="flex-shrink:0;"><circle class="tick-ring" cx="12" cy="12" r="10" fill="none" stroke="#0F1A0C" stroke-width="2"></circle><path class="tick-check" d="M7 12.5 L10.5 16 L17 8.5" fill="none" stroke="#0F1A0C" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>`;
-const APP_VERSION = 'Beta 5.302';
+const APP_VERSION = 'Beta 5.303';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Rings","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -12309,6 +12309,18 @@ async function renderPhaseTab(){
 // full-cycle timeline bar. weightEntries is the already-loaded body_weight
 // list (avoids a second query) used to compute the start->current->change
 // stats for the active phase from real weigh-ins during that window.
+// A bulk or cut can optionally have its own name ("The Winter Bulk", "The
+// Lean Cut") instead of just the generic kind - falls back to that generic
+// label wherever no custom name was set. Deliberately NOT applied to
+// projected/upcoming future cycles (see renderUpNextList) - those are
+// speculative extrapolations of an auto-repeating schedule that hasn't
+// concretely happened yet, so naming today's Winter Bulk shouldn't silently
+// rename next summer's cycle too.
+function phaseKindLabel(phase, kind){
+  const name = phase && phase[`${kind}_name`];
+  return (name && String(name).trim()) ? String(name).trim() : (kind === 'bulk' ? 'Bulk' : 'Cut');
+}
+
 async function buildPhaseHeroHtml(phase, weightEntries){
   const editLinkHtml = `<div style="padding:0 18px; margin-top:14px; display:flex; gap:18px; align-items:center;"><a class="edit-link" id="editPhaseLink">Edit phase dates</a><a class="edit-link" id="pausePhaseBtn">Pause cycle</a></div>`;
   const editOnlyLinkHtml = `<div style="padding:0 18px; margin-top:14px;"><a class="edit-link" id="editPhaseLink">Edit phase dates</a></div>`;
@@ -12335,7 +12347,7 @@ async function buildPhaseHeroHtml(phase, weightEntries){
     let heldDetail = '';
     if (heldKind){
       const w = weeksBetweenAtDate(phase[`${heldKind}_start`], phase[`${heldKind}_end`], pausedOn);
-      heldDetail = `Your ${heldKind === 'bulk' ? 'Bulk' : 'Cut'} is on hold${w ? ` at Week ${w.elapsedWeeks} of ${w.totalWeeks}` : ''}.`;
+      heldDetail = `Your ${phaseKindLabel(phase, heldKind)} is on hold${w ? ` at Week ${w.elapsedWeeks} of ${w.totalWeeks}` : ''}.`;
     } else {
       heldDetail = 'Your cycle is on hold.';
     }
@@ -12400,19 +12412,19 @@ async function buildPhaseHeroHtml(phase, weightEntries){
       const otherHasFutureDates = phase[`${otherKind}_start`] && phase[`${otherKind}_start`] >= end;
       if (otherHasFutureDates){
         nudgeHtml = `<div class="ending-soon-nudge">
-          <div class="txt">Your ${kind === 'bulk' ? 'Bulk' : 'Cut'} ends in <b>${daysLeft} day${daysLeft===1?'':'s'}</b>. ${otherKind === 'bulk' ? 'Bulk' : 'Cut'} is already scheduled to start right after.</div>
+          <div class="txt">Your ${phaseKindLabel(phase, kind)} ends in <b>${daysLeft} day${daysLeft===1?'':'s'}</b>. ${phaseKindLabel(phase, otherKind)} is already scheduled to start right after.</div>
           <button id="phaseNudgeBtn">Review</button>
         </div>`;
       } else {
         nudgeHtml = `<div class="ending-soon-nudge">
-          <div class="txt">Your ${kind === 'bulk' ? 'Bulk' : 'Cut'} ends in <b>${daysLeft} day${daysLeft===1?'':'s'}</b>. What's next?</div>
+          <div class="txt">Your ${phaseKindLabel(phase, kind)} ends in <b>${daysLeft} day${daysLeft===1?'':'s'}</b>. What's next?</div>
           <button id="phaseNudgeBtn">Schedule</button>
         </div>`;
       }
     }
     return `<div class="phase-hero ${kind}">
       <div class="eyebrow-row"><div class="tag">Active Phase</div><div class="daysleft">${daysLeft} day${daysLeft===1?'':'s'} left</div></div>
-      <div class="big-name">${kind === 'bulk' ? 'Bulk' : 'Cut'}${repeatBadge}</div>
+      <div class="big-name">${phaseKindLabel(phase, kind)}${repeatBadge}</div>
       <div class="week-of">${w ? `Week ${w.elapsedWeeks} of ${w.totalWeeks} · ` : ''}${formatLoggedDate(start)} — ${formatLoggedDate(end)}</div>
       ${w ? `<div class="progress-track"><div class="progress-fill" style="width:${w.pct}%;"></div></div><div class="progress-labels"><span>${w.pct}% through</span><span>Week ${w.elapsedWeeks}/${w.totalWeeks}</span></div>` : ''}
       ${statsHtml}
@@ -12421,7 +12433,7 @@ async function buildPhaseHeroHtml(phase, weightEntries){
   };
 
   const renderMiniFor = (kind, start, end, status) => `<div class="phase-mini ${kind}">
-    <div class="left"><div class="dot"></div><div><div class="name">${kind === 'bulk' ? 'Bulk' : 'Cut'}</div><div class="dates">${formatLoggedDate(start)} → ${formatLoggedDate(end)}</div></div></div>
+    <div class="left"><div class="dot"></div><div><div class="name">${phaseKindLabel(phase, kind)}</div><div class="dates">${formatLoggedDate(start)} → ${formatLoggedDate(end)}</div></div></div>
     <div class="status-tag">${status}</div>
   </div>`;
 
@@ -13754,10 +13766,14 @@ async function advanceAutoScheduleIfNeeded(phase){
     newDates = computeChainedDates(newAnchor, order, phase.bulk_weeks, phase.cut_weeks);
     newCycleEnd = newDates.bulk_end > newDates.cut_end ? newDates.bulk_end : newDates.cut_end;
   }
-  const updated = { ...phase, ...newDates };
+  const updated = { ...phase, ...newDates, bulk_name: null, cut_name: null };
   const userData = { user: await getCurrentUser() };
   if (userData && userData.user){
-    await supabaseClient.from('phase_settings').update(newDates).eq('user_id', userData.user.id);
+    // Names are deliberately cleared on auto-advance, not carried forward -
+    // "The Winter Bulk" silently reappearing on a cycle that actually lands
+    // in summer would be worse than just showing the generic label until
+    // the user renames it for this new occurrence.
+    await supabaseClient.from('phase_settings').update({ ...newDates, bulk_name: null, cut_name: null }).eq('user_id', userData.user.id);
   }
   return updated;
 }
@@ -13851,6 +13867,15 @@ async function openEditPhaseForm(existing){
     bulk: (existing && existing.bulk_weeks) || (lockedKind === 'bulk' && existing && weeksBetween(existing.bulk_start, existing.bulk_end) ? weeksBetween(existing.bulk_start, existing.bulk_end).totalWeeks : 12),
     cut: (existing && existing.cut_weeks) || (lockedKind === 'cut' && existing && weeksBetween(existing.cut_start, existing.cut_end) ? weeksBetween(existing.cut_start, existing.cut_end).totalWeeks : 8)
   };
+  // Optional per-cycle name ("The Winter Bulk", "The Lean Cut") - purely
+  // cosmetic, shown wherever this phase's kind label would otherwise
+  // appear. Seeded from the existing row only when THIS is the currently
+  // locked/running cycle - a not-yet-started "Next" card starts blank
+  // rather than carrying over whatever the previous occurrence was called.
+  let phaseNames = {
+    bulk: (lockedKind === 'bulk' && existing) ? (existing.bulk_name || '') : '',
+    cut: (lockedKind === 'cut' && existing) ? (existing.cut_name || '') : ''
+  };
 
   const durationCardHtml = (kind, isLocked) => {
     const preset = PHASE_DURATION_PRESETS[kind];
@@ -13859,6 +13884,7 @@ async function openEditPhaseForm(existing){
         <div class="phase-name"><span class="dot"></span> ${isLocked ? 'Current: ' : (lockedKind ? 'Next: ' : '')}${kind === 'bulk' ? 'Bulk' : 'Cut'}</div>
         ${isLocked ? `<div class="lock-tag">🔒 Start Locked</div>` : `<button class="dur-info-btn" aria-label="Duration guidance">?</button>`}
       </div>
+      <div class="field-card" style="margin:0 0 10px 0;"><input class="field-input phase-name-input" data-kind="${kind}" type="text" maxlength="40" placeholder="Name this ${kind === 'bulk' ? 'bulk' : 'cut'} (optional)" style="font-size:13.5px;" value="${(phaseNames[kind] || '').replace(/"/g,'&quot;')}"></div>
       <div class="stepper-row">
         <button class="stepper-btn" data-act="dec" data-kind="${kind}">–</button>
         <div class="stepper-value" id="durVal-${kind}">${durations[kind]}<span class="unit">wks</span></div>
@@ -13903,10 +13929,14 @@ async function openEditPhaseForm(existing){
 
       <div id="manualSection" style="display:${mode==='manual'?'block':'none'};">
         <div class="form-sub" style="margin-top:0;">Which phase is active is worked out automatically from today's date against these ranges - no need to set it manually.</div>
+        <div class="field-label">Bulk Name (optional)</div>
+        <div class="field-card"><input class="field-input" id="manualBulkName" type="text" maxlength="40" placeholder="e.g. The Winter Bulk" style="font-size:14px;" value="${(existing && existing.bulk_name ? existing.bulk_name : '').replace(/"/g,'&quot;')}"></div>
         <div class="field-label">Bulk Start</div>
         <div class="field-card"><input class="field-input" id="bulkStart" type="date" style="font-size:14px;" value="${existing && existing.bulk_start ? existing.bulk_start : ''}"></div>
         <div class="field-label">Bulk End</div>
         <div class="field-card"><input class="field-input" id="bulkEnd" type="date" style="font-size:14px;" value="${existing && existing.bulk_end ? existing.bulk_end : ''}"></div>
+        <div class="field-label">Cut Name (optional)</div>
+        <div class="field-card"><input class="field-input" id="manualCutName" type="text" maxlength="40" placeholder="e.g. The Lean Cut" style="font-size:14px;" value="${(existing && existing.cut_name ? existing.cut_name : '').replace(/"/g,'&quot;')}"></div>
         <div class="field-label">Cut Start</div>
         <div class="field-card"><input class="field-input" id="cutStart" type="date" style="font-size:14px;" value="${existing && existing.cut_start ? existing.cut_start : ''}"></div>
         <div class="field-label">Cut End</div>
@@ -13961,7 +13991,7 @@ async function openEditPhaseForm(existing){
     document.getElementById('lockedCallout').innerHTML = `
       <div class="icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
       <div>
-        <div class="title">You're in Week ${w ? w.elapsedWeeks : 1} of your ${lockedKind === 'bulk' ? 'Bulk' : 'Cut'}</div>
+        <div class="title">You're in Week ${w ? w.elapsedWeeks : 1} of your ${phaseKindLabel(existing, lockedKind)}</div>
         <div class="sub">Started ${startedLabel} — that start date is locked so your weight-change stats stay accurate. Only the end date (and anything after it) will move.</div>
       </div>`;
   }
@@ -14020,6 +14050,9 @@ async function openEditPhaseForm(existing){
       };
     });
     overlay.querySelectorAll('.dur-info-btn').forEach(b => { b.onclick = () => openPhaseDurationInfoSheet(); });
+    overlay.querySelectorAll('.phase-name-input').forEach(inp => {
+      inp.oninput = () => { phaseNames[inp.dataset.kind] = inp.value; };
+    });
   }
   wireDurationCardHandlers();
   recomputeAuto();
@@ -14042,7 +14075,9 @@ async function openEditPhaseForm(existing){
         cut_weeks: durations.cut,
         auto_repeat: autoRepeat,
         bulk_start: dates.bulk_start, bulk_end: dates.bulk_end,
-        cut_start: dates.cut_start, cut_end: dates.cut_end
+        cut_start: dates.cut_start, cut_end: dates.cut_end,
+        bulk_name: (phaseNames.bulk || '').trim() || null,
+        cut_name: (phaseNames.cut || '').trim() || null
       };
     } else {
       payload = {
@@ -14051,7 +14086,9 @@ async function openEditPhaseForm(existing){
         bulk_start: document.getElementById('bulkStart').value || null,
         bulk_end: document.getElementById('bulkEnd').value || null,
         cut_start: document.getElementById('cutStart').value || null,
-        cut_end: document.getElementById('cutEnd').value || null
+        cut_end: document.getElementById('cutEnd').value || null,
+        bulk_name: document.getElementById('manualBulkName').value.trim() || null,
+        cut_name: document.getElementById('manualCutName').value.trim() || null
       };
     }
     warmInvalidate('phase');
