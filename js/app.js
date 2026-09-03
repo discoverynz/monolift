@@ -17,8 +17,16 @@ const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders &
 // after a set is saved (see exerciseRow's `justLogged`) - every other time
 // the "Logged today" pill renders, it's the plain ✓ text, unanimated.
 const SET_COMPLETE_TICK_SVG = `<svg class="set-complete-tick" width="16" height="16" viewBox="0 0 24 24" style="flex-shrink:0;"><circle class="tick-ring" cx="12" cy="12" r="10" fill="none" stroke="#0F1A0C" stroke-width="2"></circle><path class="tick-check" d="M7 12.5 L10.5 16 L17 8.5" fill="none" stroke="#0F1A0C" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>`;
-const APP_VERSION = 'Beta 5.309';
-const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Rings","Cardio","Other"];
+const APP_VERSION = 'Beta 5.310';
+// This exact order is what actually drives the Lift screen's category
+// headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
+// last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
+// alphabetically (between "Free Weights..." and "Pin-Loaded") reads worse
+// than it does as a clear catch-all at the end. "Bands" keeps this exact
+// slot even though it's expanded into per-anchor-level sub-headers at
+// render time - wherever "Bands" sits here is where those sub-groups
+// appear too.
+const CATEGORIES = ["Bands","Cable","Cardio","Free Weights - Bench","Free Weights - No Bench","Pin-Loaded","Plate-Loaded","Rings","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
   try { return JSON.parse(localStorage.getItem(CUSTOM_CATEGORIES_KEY) || '[]'); } catch(e){ return []; }
@@ -9593,7 +9601,12 @@ async function createLocation(name){
 
 // ---------- NEW EXERCISE FORM ----------
 async function openNewExerciseForm(opts){
-  let selectedCategory = CATEGORIES[0];
+  // A literal default, not CATEGORIES[0] - that's the display order for the
+  // Lift screen's category headers, which has nothing to do with which
+  // category makes sense to pre-select for a brand-new exercise. Tying
+  // those together meant reordering CATEGORIES for display would silently
+  // change this default too.
+  let selectedCategory = 'Free Weights - Bench';
   let categoryManuallyPicked = false;
   let selectedDay = state.selectedDay;
   let pickedAltGroup = null;
