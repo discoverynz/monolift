@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.311';
+const APP_VERSION = 'Beta 5.312';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -5660,6 +5660,13 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   // later, unrelated re-render (switching days and back, a background
   // refresh) never replays it against a card it no longer applies to.
   state._justLoggedExId = null;
+
+  // Once-a-day briefing - only on today's own page (or the Anytime slot
+  // during a trip), never while browsing a different day, and only once it
+  // has genuinely finished rendering everything else first.
+  if ((state.selectedDay === todayWeekday() || isAnyDay(state.selectedDay)) && shouldShowDailyBrief()){
+    showDailyBrief(visibleExercises, effectiveDayTypeLabel);
+  }
 }
 
 // Shared by the inline render and the deferred injection - suggestion rows
@@ -16417,6 +16424,145 @@ function buildMainEventHtml(list){
       <div style="font-family:'Bebas Neue',sans-serif; font-size:27px; line-height:1; margin:5px 0 3px 0;">${ex.name}</div>
       <div class="small" style="color:var(--slate);">${label ? `${label} last time. ` : ''}${subtext}</div>
     </div>`;
+}
+
+// ---------- DAILY HYPERTROPHY BRIEF ----------
+// Once-a-day, 3-screen briefing: today's main event, which whole muscle
+// group is most worth pushing today, and today's phase/streak context.
+// Shows once per calendar day (localStorage-gated), only when actually
+// viewing today's own page (not a different day being browsed), and only
+// when there's enough of a real day to brief - reuses pickMainEvent's own
+// "need at least 3 candidates" bar so this never fires on a near-empty day.
+function dailyBriefShownDate(){ return localStorage.getItem('zealift_daily_brief_date'); }
+function markDailyBriefShown(){ localStorage.setItem('zealift_daily_brief_date', todayStr()); }
+function shouldShowDailyBrief(){ return dailyBriefShownDate() !== todayStr(); }
+
+// Which whole muscle group is most worth pushing today - not a specific
+// exercise, a muscle. Prefers whichever broad muscle group has a stagnant
+// lift somewhere in today's session (the most actionable "push here"
+// signal available), tie-broken by whichever muscle has the most presence
+// in today's plan. Falls back to the muscle with the most presence overall
+// if nothing's flagged stagnant.
+function pickMuscleToPush(list, db){
+  const byMuscle = {};
+  (list || []).filter(ex => !ex.completeVia).forEach(ex => {
+    const fine = getEffectiveMuscleLabel(ex, db);
+    const broad = REGION_BROAD[fine];
+    if (!broad) return;
+    if (!byMuscle[broad]) byMuscle[broad] = { count: 0, stagnantCount: 0 };
+    byMuscle[broad].count++;
+    if (ex.stagnant) byMuscle[broad].stagnantCount++;
+  });
+  const entries = Object.entries(byMuscle);
+  if (!entries.length) return null;
+  entries.sort((a, b) => (b[1].stagnantCount - a[1].stagnantCount) || (b[1].count - a[1].count));
+  const [broad, d] = entries[0];
+  return { label: BALANCE_LABELS[broad] || broad, hasStagnant: d.stagnantCount > 0, exerciseCount: d.count };
+}
+
+async function showDailyBrief(list, dayTypeLabel){
+  const mainEx = pickMainEvent(list);
+  if (!mainEx) return; // pickMainEvent's own 3-candidate floor already gates this - not enough of a day to brief
+  markDailyBriefShown();
+
+  const db = await loadExerciseDB();
+  const pushMuscle = pickMuscleToPush(list, db);
+
+  const wPhase = warmGet('phase', loadPhase);
+  const phase = wPhase.value !== undefined ? wPhase.value : await wPhase.refresh;
+  const activeKind = phase ? determineActivePhase(phase) : null;
+
+  const s = mainEx.lastSet || mainEx.maxSet;
+  const mainLabel = s ? formatSetValue(s) : '';
+  const isStale = mainEx.staleDays !== null && mainEx.staleDays !== undefined;
+  const mainSub = isStale ? staleDaysPhrase(mainEx.staleDays) : 'The lift that decides today.';
+
+  const dayLabel = (dayTypeLabel && dayTypeLabel !== '—') ? dayTypeLabel : 'Today';
+
+  // Screen 3: phase context if one's actually running, otherwise the streak
+  // - always something, never an empty final screen.
+  let ctxEyebrow = 'Context', ctxTitle, ctxSub;
+  if (activeKind && phase[`${activeKind}_start`] && phase[`${activeKind}_end`]){
+    const w = weeksBetween(phase[`${activeKind}_start`], phase[`${activeKind}_end`]);
+    const wNow = w ? weeksBetweenAtDate(phase[`${activeKind}_start`], phase[`${activeKind}_end`], todayStr()) : null;
+    ctxEyebrow = 'Phase';
+    ctxTitle = phaseKindLabel(phase, activeKind);
+    ctxSub = wNow ? `Week ${wNow.elapsedWeeks} of ${wNow.totalWeeks}.` : 'In progress.';
+  } else {
+    const stats = await fetchTrackHeaderStats().catch(() => null);
+    ctxEyebrow = 'Streak';
+    ctxTitle = stats && stats.streak > 0 ? `${stats.streak} day${stats.streak===1?'':'s'}` : 'Day one';
+    ctxSub = stats && stats.streak > 0 ? 'Keep it alive today.' : 'Every streak starts with a single day.';
+  }
+
+  const pages = [
+    { eyebrow: 'Main Event', title: mainEx.name, sub: `${mainLabel ? mainLabel + ' last time. ' : ''}${mainSub}`, accent: 'var(--flame)' },
+    pushMuscle
+      ? { eyebrow: 'Push Yourself On', title: pushMuscle.label, sub: pushMuscle.hasStagnant ? `Hasn't moved in a few sessions - today's the day.` : `${dayLabel}'s biggest focus. Make it count.`, accent: 'var(--good)' }
+      : { eyebrow: 'Push Yourself On', title: dayLabel, sub: 'Show up and give it everything.', accent: 'var(--good)' },
+    { eyebrow: ctxEyebrow, title: ctxTitle, sub: ctxSub, accent: 'var(--brass)' }
+  ];
+
+  const scrim = document.createElement('div');
+  scrim.className = 'brief-scrim';
+  const card = document.createElement('div');
+  card.className = 'brief-card';
+  card.innerHTML = `
+    <button id="briefClose" class="brief-close" aria-label="Close">✕</button>
+    <div class="brief-track" id="briefTrack">
+      ${pages.map((p, i) => `
+        <div class="brief-page">
+          <img src="icons/logo.svg" alt="" class="brief-logo">
+          <div class="brief-eyebrow" style="color:${p.accent};">${p.eyebrow}</div>
+          <div class="brief-title">${p.title}</div>
+          <div class="brief-sub">${p.sub}</div>
+        </div>`).join('')}
+    </div>
+    <div class="brief-dots" id="briefDots">
+      ${pages.map((_, i) => `<div class="brief-dot${i===0?' active':''}" data-i="${i}"></div>`).join('')}
+    </div>
+    <button class="brief-next" id="briefNext">Next</button>
+  `;
+  document.body.appendChild(scrim);
+  document.body.appendChild(card);
+  requestAnimationFrame(() => { scrim.classList.add('show'); card.classList.add('show'); });
+
+  let pageIndex = 0;
+  const track = card.querySelector('#briefTrack');
+  const dots = card.querySelectorAll('.brief-dot');
+  const nextBtn = card.querySelector('#briefNext');
+  const paint = () => {
+    // .brief-track is width:300% (3 pages at 33.333% each), and CSS
+    // translateX(%) is relative to the element's OWN width - so moving to
+    // page i needs -(i * 100/3)%, not -(i * 100)%, or it would overshoot by
+    // 3x the intended distance per page.
+    track.style.transform = `translateX(-${pageIndex * (100 / pages.length)}%)`;
+    dots.forEach((d, i) => d.classList.toggle('active', i === pageIndex));
+    nextBtn.textContent = pageIndex === pages.length - 1 ? "Let's Lift" : 'Next';
+  };
+  const dismiss = () => {
+    scrim.classList.remove('show'); card.classList.remove('show');
+    setTimeout(() => { scrim.remove(); card.remove(); }, 300);
+  };
+  const goTo = (i) => { pageIndex = Math.max(0, Math.min(pages.length - 1, i)); paint(); };
+
+  card.querySelector('#briefClose').onclick = dismiss;
+  scrim.onclick = dismiss;
+  nextBtn.onclick = () => { if (pageIndex === pages.length - 1) dismiss(); else goTo(pageIndex + 1); };
+  dots.forEach(d => { d.onclick = () => goTo(parseInt(d.dataset.i, 10)); });
+
+  // Threshold-based swipe, same pattern used for the guide-preview screen's
+  // paging and the session-complete sheet's swipe-down dismiss - a
+  // start/end distance check rather than a live finger-follow drag.
+  let touchStartX = null;
+  track.addEventListener('touchstart', (e) => { touchStartX = e.touches[0].clientX; }, { passive: true });
+  track.addEventListener('touchend', (e) => {
+    if (touchStartX === null) return;
+    const dx = e.changedTouches[0].clientX - touchStartX;
+    touchStartX = null;
+    if (dx < -50) goTo(pageIndex + 1);
+    else if (dx > 50) goTo(pageIndex - 1);
+  }, { passive: true });
 }
 
 // Recovery as a battery rather than a list of dates. A level that drains and
