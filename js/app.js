@@ -17,8 +17,8 @@ const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders &
 // after a set is saved (see exerciseRow's `justLogged`) - every other time
 // the "Logged today" pill renders, it's the plain ✓ text, unanimated.
 const SET_COMPLETE_TICK_SVG = `<svg class="set-complete-tick" width="16" height="16" viewBox="0 0 24 24" style="flex-shrink:0;"><circle class="tick-ring" cx="12" cy="12" r="10" fill="none" stroke="#0F1A0C" stroke-width="2"></circle><path class="tick-check" d="M7 12.5 L10.5 16 L17 8.5" fill="none" stroke="#0F1A0C" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>`;
-const APP_VERSION = 'Beta 5.307';
-const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Rings","Other"];
+const APP_VERSION = 'Beta 5.308';
+const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Rings","Cardio","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
   try { return JSON.parse(localStorage.getItem(CUSTOM_CATEGORIES_KEY) || '[]'); } catch(e){ return []; }
@@ -1250,7 +1250,14 @@ function detectWeightStagnation(setsForExercise){
     if (typeof s.weight !== 'number' || (s.weight_unit !== 'kg' && s.weight_unit !== 'lb')) return;
     const kg = s.weight_unit === 'lb' ? convertWeight(s.weight, 'lb', 'kg') : s.weight;
     const perSideKg = s.weight_type === 'per' ? kg * 2 : kg;
-    if (!byDate[s.logged_at] || perSideKg > byDate[s.logged_at]) byDate[s.logged_at] = perSideKg;
+    // Total reps at the heaviest weight of the day - if weight ties, keep
+    // whichever entry has more reps rather than an arbitrary one, so the
+    // rep-volume comparison below reflects the actual best effort that day.
+    const repVolume = (Number(s.reps) || 0) * (Number(s.num_sets) || 1);
+    const current = byDate[s.logged_at];
+    if (!current || perSideKg > current.weight || (perSideKg === current.weight && repVolume > current.repVolume)){
+      byDate[s.logged_at] = { weight: perSideKg, repVolume };
+    }
   });
   const today = todayStr();
   // Need at least 3 completed (pre-today) sessions before judging anything -
@@ -1260,12 +1267,18 @@ function detectWeightStagnation(setsForExercise){
     .sort((a,b) => b[0].localeCompare(a[0]))
     .slice(0, 4);
   if (priorSessions.length < 3) return false;
-  const oldestWeight = priorSessions[priorSessions.length-1][1];
+  const oldest = priorSessions[priorSessions.length-1][1];
   // Whatever's most recent overall - today's own log if it exists, otherwise
   // the last completed session - is what actually gets compared. A real
   // increase logged today clears the note immediately, same day.
-  const mostRecentWeight = byDate[today] !== undefined ? byDate[today] : priorSessions[0][1];
-  return mostRecentWeight <= oldestWeight + 0.01;
+  const mostRecent = byDate[today] !== undefined ? byDate[today] : priorSessions[0][1];
+  const weightStagnant = mostRecent.weight <= oldest.weight + 0.01;
+  // Reps or sets climbing at an unchanged weight is still progressive
+  // overload - only the combination of flat weight AND flat rep volume
+  // counts as genuinely stagnant. A half-rep of noise doesn't count as
+  // meaningful growth, hence the +0.5 tolerance rather than a bare >.
+  const repVolumeStagnant = mostRecent.repVolume <= oldest.repVolume + 0.5;
+  return weightStagnant && repVolumeStagnant;
 }
 
 // How long ago the top weight for this exercise actually went up - not the
@@ -1274,19 +1287,36 @@ function detectWeightStagnation(setsForExercise){
 // moved is the answer. Needs 3+ distinct sessions before judging, same bar
 // as detectWeightStagnation, so a brand-new exercise doesn't read as
 // maximally stale just because it has no history to compare against.
+// A "increase" here also counts rep/set volume climbing at an unchanged
+// weight - same broadened definition of progress detectWeightStagnation
+// uses, so the Main Event card (which reads this to find whichever lift
+// has stalled longest) doesn't call a lift stale while it's still visibly
+// progressing via reps instead of weight.
 function daysSinceLastIncrease(setsForExercise){
   const byDate = {};
   setsForExercise.forEach(s => {
     if (typeof s.weight !== 'number' || (s.weight_unit !== 'kg' && s.weight_unit !== 'lb')) return;
     const kg = s.weight_unit === 'lb' ? convertWeight(s.weight, 'lb', 'kg') : s.weight;
     const perSideKg = s.weight_type === 'per' ? kg * 2 : kg;
-    if (!byDate[s.logged_at] || perSideKg > byDate[s.logged_at]) byDate[s.logged_at] = perSideKg;
+    const repVolume = (Number(s.reps) || 0) * (Number(s.num_sets) || 1);
+    const current = byDate[s.logged_at];
+    if (!current || perSideKg > current.weight || (perSideKg === current.weight && repVolume > current.repVolume)){
+      byDate[s.logged_at] = { weight: perSideKg, repVolume };
+    }
   });
   const dates = Object.keys(byDate).sort();
   if (dates.length < 3) return null;
-  let runningMax = -Infinity, lastIncreaseDate = dates[0];
+  let runningMaxWeight = -Infinity, runningMaxRepVolume = -Infinity, lastIncreaseDate = dates[0];
   dates.forEach(d => {
-    if (byDate[d] > runningMax + 0.01){ runningMax = byDate[d]; lastIncreaseDate = d; }
+    const entry = byDate[d];
+    const weightUp = entry.weight > runningMaxWeight + 0.01;
+    // Only credit a rep-volume increase while weight is at (or above) the
+    // best seen so far - more reps at a much lighter weight than a prior
+    // session isn't the same kind of progress and shouldn't reset the clock.
+    const repVolumeUp = entry.weight >= runningMaxWeight - 0.01 && entry.repVolume > runningMaxRepVolume + 0.5;
+    if (weightUp || repVolumeUp) lastIncreaseDate = d;
+    if (entry.weight > runningMaxWeight) runningMaxWeight = entry.weight;
+    if (entry.repVolume > runningMaxRepVolume) runningMaxRepVolume = entry.repVolume;
   });
   return Math.round((new Date(todayStr()+'T00:00:00') - new Date(lastIncreaseDate+'T00:00:00')) / 86400000);
 }
@@ -2153,6 +2183,7 @@ function formatSetValue(s, withAlt){
   if (u === 'pin') return `Pin ${s.weight}`;
   if (u === 'level') return `Level ${s.weight}`;
   if (u === 'sec') return `${s.weight} sec${s.num_sets ? ' × ' + s.num_sets : ''}`;
+  if (u === 'min') return `${s.weight} min${s.num_sets ? ' × ' + s.num_sets : ''}`;
   if (u === 'steps') return `${s.weight} steps`;
   if (u === 'bodyweight') return `Bodyweight${formatSetsReps(s)}`;
   if (u === 'lb-assist' || u === 'kg-assist') return `${s.weight}${u.replace('-assist','')} assist`;
@@ -10232,12 +10263,43 @@ function maybeShowSessionComplete(){
   showSessionCompleteScreen(list);
 }
 
+// Endurance/conditioning signal derived from data the app already logs -
+// how tightly packed a session actually was, using the real timestamp each
+// set was SAVED at (created_at) rather than just the date. This can't know
+// how long a set itself took (only when it was logged), so "rest" here is
+// really "time between saves" - for typical strength training the large
+// majority of that gap genuinely is rest, so it's a fair proxy without
+// pretending to a precision the data doesn't support.
+function computeSessionDensity(sets){
+  if (!sets || sets.length < 2) return null;
+  const times = sets.map(s => new Date(s.created_at).getTime()).filter(t => !isNaN(t)).sort((a, b) => a - b);
+  if (times.length < 2) return null;
+  const spanMs = times[times.length - 1] - times[0];
+  // A session spanning many hours (logged sporadically, phone put down and
+  // picked back up) would otherwise produce a meaningless multi-hour "span"
+  // and a wildly inflated "avg rest" - cap at a sensible single-session
+  // ceiling rather than reporting a number nobody would recognize as real.
+  if (spanMs > 4 * 3600000) return null;
+  const gaps = [];
+  for (let i = 1; i < times.length; i++) gaps.push(times[i] - times[i - 1]);
+  const avgGapMs = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+  return {
+    spanMinutes: Math.round(spanMs / 60000),
+    avgRestSeconds: Math.round(avgGapMs / 1000)
+  };
+}
+
 async function showSessionCompleteScreen(list){
   const stats = await fetchTrackHeaderStats().catch(() => null);
   const volume = stats ? stats.volumeKg : 0;
   const setsToday = stats ? stats.setsToday : 0;
   const streak = stats ? stats.streak : 0;
   const prCount = list.filter(ex => ex.showPr).length;
+  // Endurance-relevant conditioning signal that was sitting unused in data
+  // the app already logs - fetchTrackHeaderStats (just called above) stashes
+  // today's individually-timestamped sets in state.todaysSetsRaw for the
+  // session heat feature. Reusing that here instead of a fresh query.
+  const density = computeSessionDensity(state.todaysSetsRaw);
   // A bottom sheet rather than the old full-screen takeover - the Track
   // list is still visible (dimmed) behind it, and swiping down or tapping
   // the scrim dismisses it exactly like closing any other sheet, instead of
@@ -10266,6 +10328,13 @@ async function showSessionCompleteScreen(list){
           <div class="milestone-card" style="margin-top:9px; background:var(--panel); border:1px solid rgba(201,162,39,0.3); border-radius:13px; padding:13px 14px; animation-delay:${0.55 + i * 0.12}s;">
             <div style="font-family:'Oswald',sans-serif; font-size:13.5px; color:var(--brass);">${m.icon} ${m.text}</div>
           </div>`).join('')}
+        ${density ? `<div class="milestone-card" style="margin-top:9px; background:var(--panel); border:1px solid var(--line); border-radius:13px; padding:13px 14px;">
+          <div style="font-family:'Oswald',sans-serif; font-size:11px; text-transform:uppercase; letter-spacing:0.4px; color:var(--slate); margin-bottom:6px;">Session Density</div>
+          <div style="display:flex; gap:14px; font-size:12.5px; color:var(--chalk);">
+            <div><b style="font-family:'JetBrains Mono',monospace;">${density.spanMinutes}</b> min span</div>
+            <div><b style="font-family:'JetBrains Mono',monospace;">${density.avgRestSeconds}</b>s avg rest</div>
+          </div>
+        </div>` : ''}
         <div style="margin-top:12px; background:var(--panel); border-radius:13px; padding:14px; animation:ml-rise .5s ease both; animation-delay:.5s;">
           <div class="small" style="color:var(--chalk); line-height:1.6;">Everything on ${dayLabelOf(state.selectedDay)} is logged. Nothing left to chase today. Swipe down or tap outside any time to keep browsing.</div>
         </div>
@@ -10474,7 +10543,7 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
         <div class="field-card">
           <input class="field-input" id="weightInput" type="number" inputmode="decimal" placeholder="0">
           <div class="unit-toggle">
-            <button class="active" data-u="kg">kg</button><button data-u="lb">lb</button><button data-u="sec">sec</button><button data-u="pin">pin</button>
+            <button class="active" data-u="kg">kg</button><button data-u="lb">lb</button><button data-u="sec">sec</button><button data-u="min">min</button><button data-u="pin">pin</button>
           </div>
         </div>
         <div class="field-label">Per Side or Total?</div>
@@ -10830,7 +10899,7 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
       : null;
     lastEntry = setAtCurrentLoc || sets[0];
     // Default the unit toggle to match the last logged unit
-    if (lastEntry.weight_unit && ['kg','lb','sec','pin'].includes(lastEntry.weight_unit)){
+    if (lastEntry.weight_unit && ['kg','lb','sec','min','pin'].includes(lastEntry.weight_unit)){
       unit = lastEntry.weight_unit;
       overlay.querySelectorAll('.unit-toggle button').forEach(b => b.classList.toggle('active', b.dataset.u === unit));
     }
@@ -11167,6 +11236,37 @@ async function playTimerSound(){
   } catch(e){}
 }
 
+// Biases the timer's default duration toward whichever training zone your
+// most recent set actually falls in - low reps (strength) want longer rest,
+// higher reps (endurance/conditioning) want shorter rest. Only applies when
+// there's a genuinely recent set to go on (within the last 10 minutes) and
+// _timerState hasn't already got an explicit total from earlier in this
+// session; otherwise this defers entirely to the user's own saved default.
+function suggestedTimerDefault(){
+  const sets = state.todaysSetsRaw;
+  if (sets && sets.length){
+    const mostRecent = [...sets].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+    const ageMs = Date.now() - new Date(mostRecent.created_at).getTime();
+    if (!isNaN(ageMs) && ageMs <= 10 * 60000 && mostRecent.reps){
+      if (mostRecent.reps <= 5) return { seconds: 180, reason: `${mostRecent.reps} reps · strength range` };
+      if (mostRecent.reps <= 12) return { seconds: 90, reason: `${mostRecent.reps} reps · hypertrophy range` };
+      return { seconds: 45, reason: `${mostRecent.reps} reps · endurance range` };
+    }
+  }
+  // No recent-set rep signal to lean on - fall back to the active bulk/cut
+  // phase, if one happens to already be warmly cached (this stays
+  // synchronous on purpose, so opening the timer never waits on a fresh
+  // phase fetch just to pick a starting number). A cut generally leans
+  // toward more conditioning-style work; a bulk toward the app's existing
+  // flat default, which already assumes moderate hypertrophy-style rest -
+  // so only the cut case actually changes anything here.
+  const phase = warmPeek('phase');
+  if (phase && determineActivePhase(phase) === 'cut'){
+    return { seconds: 60, reason: `${phaseKindLabel(phase, 'cut')} in progress` };
+  }
+  return { seconds: getTimerDefault(), reason: null };
+}
+
 function openTimer(){
   if (_timerState.interval){ clearInterval(_timerState.interval); _timerState.interval = null; }
   const overlay = document.createElement('div');
@@ -11177,6 +11277,7 @@ function openTimer(){
     <div class="form-header"><button id="closeTimer">✕</button><h1>Timer</h1><div style="width:18px;"></div></div>
     <div class="overlay-scroll" style="display:flex; flex-direction:column; align-items:center;">
       <div id="timerDisplay" style="font-family:'JetBrains Mono',monospace; font-size:84px; font-weight:600; margin:24px 0 8px 0; letter-spacing:1px;">0:00</div>
+      <div id="timerSuggestHint" style="font-size:10.5px; color:var(--slate); margin-bottom:10px; height:14px;"></div>
       <div id="timerRing" style="width:230px; height:6px; background:var(--panel); border-radius:6px; overflow:hidden; margin-bottom:26px;">
         <div id="timerRingFill" style="height:100%; width:0%; background:#FF6B1A; transition:width 0.3s linear;"></div>
       </div>
@@ -11206,9 +11307,15 @@ function openTimer(){
     </div>`;
   document.body.appendChild(overlay);
 
-  _timerState.total = _timerState.total || getTimerDefault();
+  const timerWasEmpty = !_timerState.total;
+  const timerSuggestion = suggestedTimerDefault();
+  _timerState.total = _timerState.total || timerSuggestion.seconds;
   _timerState.remaining = _timerState.total;
   _timerState.running = false;
+  const suggestHintEl = overlay.querySelector('#timerSuggestHint');
+  if (suggestHintEl && timerWasEmpty && timerSuggestion.reason){
+    suggestHintEl.textContent = `Suggested from your last set: ${timerSuggestion.reason}`;
+  }
 
   const disp = overlay.querySelector('#timerDisplay');
   const fill = overlay.querySelector('#timerRingFill');
@@ -11262,6 +11369,10 @@ function openTimer(){
     _timerState.total = sec; _timerState.remaining = sec; _timerState.running = false;
     _timerState.endAt = null;
     setTimerDefault(sec);
+    // Manually picking a time overrides whatever suggested it, if anything -
+    // the hint text applies to how the current number GOT there, and a
+    // fresh manual choice makes that history irrelevant.
+    if (suggestHintEl) suggestHintEl.textContent = '';
     paint();
   };
 
@@ -14661,6 +14772,30 @@ function heatmapBodySvg(regions, counts, mx, pid){
 </svg>`;
 }
 
+// Same fine-region resolution heatmapCounts uses, but also tracks which
+// distinct dates each broad muscle group was actually trained on - volume
+// alone can't tell "20 sets spread across 2 sessions" apart from "20 sets
+// in one sitting", and those train differently for hypertrophy.
+function aggregateBroadMuscleStats(sets){
+  const stats = {};
+  (sets || []).forEach(s => {
+    let fine = null;
+    if (s._fine && REGION_BROAD[s._fine] !== undefined) fine = s._fine;
+    else if (s._muscle){
+      const regions = Object.keys(REGION_BROAD).filter(r => REGION_BROAD[r] === s._muscle);
+      if (regions.length) fine = regions[0];
+    }
+    if (!fine) return;
+    const broad = REGION_BROAD[fine];
+    if (!stats[broad]) stats[broad] = { count: 0, days: new Set() };
+    stats[broad].count += Number(s.num_sets) || 1;
+    if (s.logged_at) stats[broad].days.add(s.logged_at);
+  });
+  return stats;
+}
+
+// General weekly-sets guidance for hypertrophy, applied per BROAD muscle
+// group (via REGION_BROAD) rather than per fine sub-region - the landmark
 function buildMuscleHeatmapHtml(sets, mode){
   const counts = heatmapCounts(sets);
   const mx = Math.max(1, ...Object.values(counts));
@@ -15165,7 +15300,27 @@ function balanceBarsHtml(tally, mode, prevTally, weeks){
   }).join('');
 }
 
-function computeBalanceInsights(tally, prevTally, mode){
+// A gentle, honest heuristic - not a real recovery/fatigue model, just "have
+// the last several weeks all stayed near peak volume with no real let-up".
+// Requires the 4 most recently COMPLETED weeks (the current, possibly still
+// in-progress week is deliberately excluded - it hasn't finished yet, so a
+// naturally lower running total isn't a real down week). Also requires a
+// real volume floor so someone training lightly/consistently doesn't get a
+// deload suggestion they don't need.
+function detectDeloadSuggestion(weeklyBuckets){
+  if (!weeklyBuckets || weeklyBuckets.length < 5) return null;
+  const completed = weeklyBuckets.slice(0, -1);
+  const totals = completed.map(w => w.sets.reduce((sum, s) => sum + (Number(s.num_sets) || 1), 0));
+  if (totals.length < 4) return null;
+  const last4 = totals.slice(-4);
+  const peak = Math.max(...last4);
+  if (peak < 40) return null;
+  const noDownWeek = last4.every(t => t >= peak * 0.8);
+  if (!noDownWeek) return null;
+  return { avgSets: Math.round(last4.reduce((a, b) => a + b, 0) / last4.length) };
+}
+
+function computeBalanceInsights(tally, prevTally, mode, thisWeekSets, weeklyBuckets){
   const insights = [];
   const trained = BALANCE_MUSCLES.filter(m => tally[m] > 0);
   const grand = BALANCE_MUSCLES.reduce((sum, m) => sum + tally[m], 0);
@@ -15186,6 +15341,28 @@ function computeBalanceInsights(tally, prevTally, mode){
       insights.push({ icon: '💤', tone: 'warn', text: `${untouched.map(m => BALANCE_LABELS[m]).join(', ')} ${untouched.length===1?'hasn\u2019t':'haven\u2019t'} been trained this week.` });
     } else if (untouched.length > 4){
       insights.push({ icon: '💤', tone: 'warn', text: `${untouched.length} muscle groups are sitting at zero this week - a lot of ground still uncovered.` });
+    }
+
+    // Volume alone can't tell "spread across 2 sessions" apart from "all in
+    // one sitting" - hitting a muscle 2x/week generally beats 1x/week at
+    // equal volume for hypertrophy, so a muscle with real volume but only
+    // one training day this week gets its own flag here, distinct from the
+    // target-zone status above (which only knows the total, not how it was
+    // distributed).
+    if (thisWeekSets && thisWeekSets.length){
+      const broadStats = aggregateBroadMuscleStats(thisWeekSets);
+      const oneSession = Object.entries(broadStats)
+        .filter(([m, d]) => d.days.size === 1 && d.count >= 6)
+        .sort((a, b) => b[1].count - a[1].count);
+      if (oneSession.length){
+        const [muscle, d] = oneSession[0];
+        insights.push({ icon: '📅', tone: 'warn', text: `${BALANCE_LABELS[muscle] || muscle} - all ${d.count} sets landed in one session this week. Splitting across 2 sessions generally works better at equal volume.` });
+      }
+    }
+
+    const deload = detectDeloadSuggestion(weeklyBuckets);
+    if (deload){
+      insights.push({ icon: '🪫', tone: 'warn', text: `4 straight weeks around ${deload.avgSets} sets/week with no real let-up. A lighter week can help you keep progressing - not a rule, just worth considering.` });
     }
 
     const inTarget = BALANCE_MUSCLES.filter(m => tally[m] >= BALANCE_TARGET_MIN && tally[m] <= BALANCE_TARGET_MAX);
@@ -15357,7 +15534,9 @@ async function renderBalance(mode, view){
       if (JSON.stringify(fresh[0]) !== before) renderBalance(mode, view);
     }).catch(() => {});
   }
-  const insights = computeBalanceInsights(tally, prevTally, mode);
+  const thisWeekSets = (mode === 'logged' && extended && extended.length) ? bucketSetsByWeek(extended, 1)[0].sets : null;
+  const weeklyBucketsForInsights = (mode === 'logged' && extended && extended.length) ? bucketSetsByWeek(extended, 5) : null;
+  const insights = computeBalanceInsights(tally, prevTally, mode, thisWeekSets, weeklyBucketsForInsights);
 
   let weeks = null, lifetimeStats = null, recentPRs = [], repRanges = null;
   let streak = null, heatmapDays = null, oneRms = [], biggestGainer = null, leaderboard = null, badges = [], mostLogged = null;
