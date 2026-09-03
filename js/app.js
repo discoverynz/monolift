@@ -17,7 +17,7 @@ const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders &
 // after a set is saved (see exerciseRow's `justLogged`) - every other time
 // the "Logged today" pill renders, it's the plain ✓ text, unanimated.
 const SET_COMPLETE_TICK_SVG = `<svg class="set-complete-tick" width="16" height="16" viewBox="0 0 24 24" style="flex-shrink:0;"><circle class="tick-ring" cx="12" cy="12" r="10" fill="none" stroke="#0F1A0C" stroke-width="2"></circle><path class="tick-check" d="M7 12.5 L10.5 16 L17 8.5" fill="none" stroke="#0F1A0C" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>`;
-const APP_VERSION = 'Beta 5.305';
+const APP_VERSION = 'Beta 5.306';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Rings","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -12313,10 +12313,12 @@ async function renderPhaseTab(){
 // "Greek God") which gets composed into "The {Nickname} Bulk/Cut" - the user
 // types just the nickname, not the full phrase, and this does the
 // templating. Falls back to the plain generic label wherever no nickname
-// was set. Deliberately NOT applied to projected/upcoming future cycles
-// (see renderUpNextList) - those are speculative extrapolations of an
-// auto-repeating schedule that hasn't concretely happened yet, so naming
-// today's Winter Bulk shouldn't silently rename next summer's cycle too.
+// was set. Deliberately NOT applied to the speculative entries in
+// renderUpNextList's Up Next list (isProjected: true) - those are
+// extrapolations of an auto-repeating schedule that haven't concretely
+// happened yet, so naming today's Winter Bulk shouldn't silently rename a
+// cycle six months out. The immediate next concrete cycle (isProjected:
+// false) IS this same phase row's real stored data and DOES get its name.
 function phaseKindLabel(phase, kind){
   const name = phase && phase[`${kind}_name`];
   const generic = kind === 'bulk' ? 'Bulk' : 'Cut';
@@ -12520,7 +12522,7 @@ async function buildPhaseHeroHtml(phase, weightEntries){
           <div class="left">
             <div class="dot"></div>
             <div>
-              <div class="name">${u.kind === 'bulk' ? 'Bulk' : 'Cut'} <span style="font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--slate); font-weight:400;">${weeks}wk</span></div>
+              <div class="name">${u.isProjected ? (u.kind === 'bulk' ? 'Bulk' : 'Cut') : phaseKindLabel(phase, u.kind)} <span style="font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--slate); font-weight:400;">${weeks}wk</span></div>
               <div class="dates">${formatLoggedDate(u.start)} → ${formatLoggedDate(u.end)}</div>
             </div>
           </div>
