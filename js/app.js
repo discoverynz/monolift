@@ -17,7 +17,7 @@ const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders &
 // after a set is saved (see exerciseRow's `justLogged`) - every other time
 // the "Logged today" pill renders, it's the plain ✓ text, unanimated.
 const SET_COMPLETE_TICK_SVG = `<svg class="set-complete-tick" width="16" height="16" viewBox="0 0 24 24" style="flex-shrink:0;"><circle class="tick-ring" cx="12" cy="12" r="10" fill="none" stroke="#0F1A0C" stroke-width="2"></circle><path class="tick-check" d="M7 12.5 L10.5 16 L17 8.5" fill="none" stroke="#0F1A0C" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>`;
-const APP_VERSION = 'Beta 5.306';
+const APP_VERSION = 'Beta 5.307';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Rings","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -5654,6 +5654,29 @@ function showExerciseActionsMenu(exerciseId, exerciseName){
   overlay.querySelector('#menuRemove').onclick = () => { overlay.remove(); confirmRemoveExercise(exerciseId, exerciseName); };
 }
 
+// Applies the same field update across every id in the list, with timeout
+// protection and error tracking. The "sync this change to every duplicate
+// row sharing this exercise's name" loops (alt group, category, muscle
+// override, rename) all used to fire blind updates with no timeout and no
+// error checking at all - the screen would close and act like it succeeded
+// even if some duplicate rows never actually got updated, silently letting
+// ghosts drift back out of sync with the copy the user was looking at.
+async function syncFieldAcrossDuplicates(table, ids, updatePayload){
+  let succeeded = 0;
+  const failed = [];
+  for (const id of ids){
+    const result = await withTimeout(supabaseClient.from(table).update(updatePayload).eq('id', id), 15000);
+    if (result.__timeout || result.error) failed.push(id); else succeeded++;
+  }
+  return { succeeded, failed };
+}
+// Shared alert for the above - only shown when something actually failed,
+// so the common all-succeeded case stays silent like it always has.
+function reportDuplicateSyncFailures(succeeded, total, failed){
+  if (!failed.length) return;
+  alert(`Updated ${succeeded} of ${total} - ${failed.length} failed, usually a dropped connection. Try again to catch the rest.`);
+}
+
 function openRenameExerciseForm(exerciseId, exerciseName){
   let scope = 'everywhere'; // 'everywhere' or 'thisDay'
   const overlay = document.createElement('div');
@@ -5701,10 +5724,9 @@ function openRenameExerciseForm(exerciseId, exerciseName){
         );
         const ids = (sameNameResult.__timeout || sameNameResult.error) ? [exerciseId] : (sameNameResult.data || []).map(r => r.id);
         const idList = ids.length ? ids : [exerciseId];
-        for (const id of idList){
-          const { error: e } = await supabaseClient.from('exercise_master').update({ name: newName }).eq('id', id);
-          if (e){ error = e; break; }
-        }
+        const { succeeded, failed } = await syncFieldAcrossDuplicates('exercise_master', idList, { name: newName });
+        if (failed.length && succeeded === 0){ error = { message: `Could not rename - all ${idList.length} update${idList.length===1?'':'s'} failed, usually a dropped connection. Try again.` }; }
+        else { reportDuplicateSyncFailures(succeeded, idList.length, failed); }
       } else if (scope === 'everywhere'){
         // Rename all rows sharing the old name (an exercise can exist on multiple days), so history stays consistent.
         ({ error } = await supabaseClient.from('exercises')
@@ -5749,9 +5771,9 @@ function openEditAltGroupForm(exerciseId, exerciseName){
         15000
       );
       const ids = (sameNameResult.__timeout || sameNameResult.error) ? [exerciseId] : (sameNameResult.data || []).map(r => r.id);
-      for (const id of (ids.length ? ids : [exerciseId])){
-        await supabaseClient.from('exercise_master').update({ alt_group_id: picked ? picked.id : null }).eq('id', id);
-      }
+      const idList = ids.length ? ids : [exerciseId];
+      const { succeeded, failed } = await syncFieldAcrossDuplicates('exercise_master', idList, { alt_group_id: picked ? picked.id : null });
+      reportDuplicateSyncFailures(succeeded, idList.length, failed);
     } else {
       await supabaseClient.from(table).update({ alt_group_id: picked ? picked.id : null }).eq('id', exerciseId);
     }
@@ -5787,9 +5809,9 @@ function openEditMuscleForm(exerciseId, exerciseName){
         15000
       );
       const ids = (sameNameResult.__timeout || sameNameResult.error) ? [exerciseId] : (sameNameResult.data || []).map(r => r.id);
-      for (const id of (ids.length ? ids : [exerciseId])){
-        await supabaseClient.from('exercise_master').update({ muscle_override: muscleOverride }).eq('id', id);
-      }
+      const idListM = ids.length ? ids : [exerciseId];
+      const resM = await syncFieldAcrossDuplicates('exercise_master', idListM, { muscle_override: muscleOverride });
+      reportDuplicateSyncFailures(resM.succeeded, idListM.length, resM.failed);
       overlay.remove();
       if (state.currentTab === 'track') renderTrack();
       return;
@@ -5800,9 +5822,9 @@ function openEditMuscleForm(exerciseId, exerciseName){
       15000
     );
     const ids = (sameNameResult.__timeout || sameNameResult.error) ? [exerciseId] : (sameNameResult.data || []).map(r => r.id);
-    for (const id of (ids.length ? ids : [exerciseId])){
-      await supabaseClient.from('exercises').update({ muscle_override: muscleOverride }).eq('id', id);
-    }
+    const idListL = ids.length ? ids : [exerciseId];
+    const resL = await syncFieldAcrossDuplicates('exercises', idListL, { muscle_override: muscleOverride });
+    reportDuplicateSyncFailures(resL.succeeded, idListL.length, resL.failed);
     overlay.remove();
     if (state.currentTab === 'track') renderTrack();
   }
@@ -6310,9 +6332,9 @@ function openEditCategoryForm(exerciseId, exerciseName){
           15000
         );
         const ids = (sameNameResult.__timeout || sameNameResult.error) ? [exerciseId] : (sameNameResult.data || []).map(r => r.id);
-        for (const id of (ids.length ? ids : [exerciseId])){
-          await supabaseClient.from('exercise_master').update({ category: selectedCategory }).eq('id', id);
-        }
+        const idListM = ids.length ? ids : [exerciseId];
+        const resM = await syncFieldAcrossDuplicates('exercise_master', idListM, { category: selectedCategory });
+        reportDuplicateSyncFailures(resM.succeeded, idListM.length, resM.failed);
         overlay.remove();
         if (state.currentTab === 'track') renderTrack();
         return;
@@ -6323,9 +6345,9 @@ function openEditCategoryForm(exerciseId, exerciseName){
         15000
       );
       const ids = (sameNameResult.__timeout || sameNameResult.error) ? [exerciseId] : (sameNameResult.data || []).map(r => r.id);
-      for (const id of (ids.length ? ids : [exerciseId])){
-        await supabaseClient.from('exercises').update({ category: selectedCategory }).eq('id', id);
-      }
+      const idListL = ids.length ? ids : [exerciseId];
+      const resL = await syncFieldAcrossDuplicates('exercises', idListL, { category: selectedCategory });
+      reportDuplicateSyncFailures(resL.succeeded, idListL.length, resL.failed);
       overlay.remove();
       if (state.currentTab === 'track') renderTrack();
     });
@@ -7462,9 +7484,9 @@ async function openPicker(initialTab, jumpToMuscle){
                   15000
                 );
                 if (!masterResult.__timeout && !masterResult.error && masterResult.data && masterResult.data.length){
-                  for (const row of masterResult.data){
-                    await supabaseClient.from('exercise_master').update({ name: newName }).eq('id', row.id);
-                  }
+                  const ids = masterResult.data.map(row => row.id);
+                  const res = await syncFieldAcrossDuplicates('exercise_master', ids, { name: newName });
+                  reportDuplicateSyncFailures(res.succeeded, ids.length, res.failed);
                 }
               } else {
                 await supabaseClient.from('exercises').update({ name: newName }).eq('user_id', userData.user.id).ilike('name', item.name);
