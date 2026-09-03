@@ -17,7 +17,7 @@ const DAY_TYPES = ["Chest & Triceps","Back & Biceps","Chest & Back","Shoulders &
 // after a set is saved (see exerciseRow's `justLogged`) - every other time
 // the "Logged today" pill renders, it's the plain ✓ text, unanimated.
 const SET_COMPLETE_TICK_SVG = `<svg class="set-complete-tick" width="16" height="16" viewBox="0 0 24 24" style="flex-shrink:0;"><circle class="tick-ring" cx="12" cy="12" r="10" fill="none" stroke="#0F1A0C" stroke-width="2"></circle><path class="tick-check" d="M7 12.5 L10.5 16 L17 8.5" fill="none" stroke="#0F1A0C" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>`;
-const APP_VERSION = 'Beta 5.308';
+const APP_VERSION = 'Beta 5.309';
 const CATEGORIES = ["Free Weights - Bench","Free Weights - No Bench","Plate-Loaded","Pin-Loaded","Cable","Bands","Rings","Cardio","Other"];
 const CUSTOM_CATEGORIES_KEY = 'zealift_custom_categories';
 function getCustomCategories(){
@@ -3665,8 +3665,6 @@ async function openClearDayScreen(){
 // selection can directly filter which exercises are realistic there.
 const EQUIPMENT_CATEGORIES = [
   { key: 'barbell', label: 'Barbell', dbValues: ['barbell', 'e-z curl bar'] },
-  { key: 'dumbbell', label: 'Dumbbells', dbValues: ['dumbbell'] },
-  { key: 'cable', label: 'Cable Machine', dbValues: ['cable'] },
   // No dbValues - the public exercise database has no standalone "bench"
   // equipment value (a bench is an accessory, not its own listed equipment
   // type there), so this can't drive an automatic suggestion the way Cable
@@ -3674,17 +3672,24 @@ const EQUIPMENT_CATEGORIES = [
   // just one the "Your Machines" matching below can inform better than the
   // public database ever could.
   { key: 'bench', label: 'Bench', dbValues: [] },
-  { key: 'machine', label: 'Machines (Other)', dbValues: ['machine'] },
-  { key: 'kettlebells', label: 'Kettlebells', dbValues: ['kettlebells'] },
-  { key: 'bands', label: 'Resistance Bands', dbValues: ['bands'] },
+  { key: 'bodyweight', label: 'Bodyweight Only', dbValues: ['body only'] },
+  { key: 'cable', label: 'Cable Machine', dbValues: ['cable'] },
+  { key: 'dumbbell', label: 'Dumbbells', dbValues: ['dumbbell'] },
+  { key: 'exercise ball', label: 'Exercise Ball', dbValues: ['exercise ball'] },
+  { key: 'foam roll', label: 'Foam Roller', dbValues: ['foam roll'] },
   // No dbValues either, same reason as Bench - the public exercise database
   // predates gymnastic rings being common home-gym equipment, so there's no
   // "rings" value in it to auto-match against. Real equipment tag regardless.
   { key: 'rings', label: 'Gymnastic Rings', dbValues: [] },
-  { key: 'bodyweight', label: 'Bodyweight Only', dbValues: ['body only'] },
+  { key: 'kettlebells', label: 'Kettlebells', dbValues: ['kettlebells'] },
+  { key: 'machine', label: 'Machines (Other)', dbValues: ['machine'] },
   { key: 'medicine ball', label: 'Medicine Ball', dbValues: ['medicine ball'] },
-  { key: 'exercise ball', label: 'Exercise Ball', dbValues: ['exercise ball'] },
-  { key: 'foam roll', label: 'Foam Roller', dbValues: ['foam roll'] },
+  { key: 'bands', label: 'Resistance Bands', dbValues: ['bands'] },
+  // Pinned last on purpose, not alphabetized in with the rest - "Other"
+  // landing mid-list (between Medicine Ball and Resistance Bands, where it
+  // would fall alphabetically) reads worse than it does as a clear catch-all
+  // at the end.
+
   { key: 'other', label: 'Other / Misc', dbValues: ['other'] }
 ];
 
