@@ -595,10 +595,10 @@ input:focus, button:focus{ outline:none; }
   color:var(--slate); font-size:16px; padding:8px; cursor:pointer;
 }
 .brief-track{
-  display:flex; width:300%; transition:transform 0.38s cubic-bezier(.2,.9,.3,1);
+  display:flex; transition:transform 0.38s cubic-bezier(.2,.9,.3,1);
 }
 .brief-page{
-  width:33.333%; flex-shrink:0; padding:38px 30px 6px 30px; text-align:center;
+  flex-shrink:0; padding:38px 30px 6px 30px; text-align:center;
   display:flex; flex-direction:column; align-items:center;
 }
 .brief-logo{ width:34px; height:34px; margin-bottom:16px; opacity:0.9; }
@@ -610,7 +610,7 @@ input:focus, button:focus{ outline:none; }
   font-family:'Bebas Neue', sans-serif; font-size:34px; line-height:1.05; color:var(--chalk);
   margin-bottom:12px; word-break:break-word;
 }
-.brief-sub{ font-size:13.5px; color:var(--slate); line-height:1.5; max-width:290px; }
+.brief-sub{ font-size:13.5px; color:var(--slate); line-height:1.55; max-width:320px; }
 .brief-dots{ display:flex; justify-content:center; gap:7px; margin:22px 0 16px 0; }
 .brief-dot{
   width:6px; height:6px; border-radius:50%; background:var(--line);

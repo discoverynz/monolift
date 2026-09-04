@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.313';
+const APP_VERSION = 'Beta 5.314';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -16462,7 +16462,89 @@ function pickMuscleToPush(list, db){
   if (!entries.length) return null;
   entries.sort((a, b) => (b[1].stagnantCount - a[1].stagnantCount) || (b[1].count - a[1].count));
   const [broad, d] = entries[0];
-  return { label: BALANCE_LABELS[broad] || broad, hasStagnant: d.stagnantCount > 0, exerciseCount: d.count };
+  return { key: broad, label: BALANCE_LABELS[broad] || broad, hasStagnant: d.stagnantCount > 0, exerciseCount: d.count };
+}
+
+// Curated hypertrophy tips per broad muscle group - three each, deterministically
+// rotated by date (same tip all day, changes tomorrow) rather than random, so
+// it's predictable enough not to feel like noise but still varies day to day.
+// General technique guidance, not personalized - same "informational, not
+// clinical/individualized" framing already used for MUSCLE_VOLUME_LANDMARK
+// and PHASE_RATE_PER_WEEK.
+const HYPERTROPHY_TIPS = {
+  chest: [
+    "Control the eccentric - a slow 2-3 second lowering phase recruits more fibers than just dropping the weight.",
+    "Full range of motion beats heavier partial reps here - the stretch at the bottom matters as much as the squeeze at the top.",
+    "Vary your pressing angle across the week (flat, incline, decline) so no single section gets left behind."
+  ],
+  lats: [
+    "Lead with the elbow, not the hand - focusing on driving the elbow back or down keeps the lats doing the work instead of the biceps taking over.",
+    "A brief pause at full contraction (top of a pulldown, top of a row) tends to beat rushing straight into the next rep.",
+    "Vary your grip width and angle across sessions - lats respond to being hit from more than one line of pull."
+  ],
+  traps: [
+    "Shrugs work best without momentum - a controlled lift and a real pause at the top beats bouncing through reps.",
+    "Straps can help once grip becomes the limiting factor before the traps do, especially on heavier pulls.",
+    "Traps recover fast - they can usually handle being trained more frequently than most other muscle groups."
+  ],
+  'lower back': [
+    "Brace your core before every rep, not just the heavy ones - it's the habit that protects the spine.",
+    "Controlled tempo matters more here than almost anywhere else - this is not a muscle group worth rushing.",
+    "If form starts breaking down, that's the set - lower back is one place where an extra rep isn't worth it."
+  ],
+  shoulders: [
+    "Side and rear delts often need direct, isolated work - pressing alone rarely trains them enough on its own.",
+    "A slight lean or angle change on lateral raises can shift emphasis between front and side delts.",
+    "Rear delts are easy to undertrain because they're hard to see and feel working - direct volume here tends to pay off."
+  ],
+  biceps: [
+    "Keep the elbow pinned in place through the rep - letting it drift forward turns the curl into a shoulder movement.",
+    "A slow, controlled lowering phase is often where most of the growth stimulus actually happens.",
+    "Varying grip (hammer, underhand, wide, narrow) shifts emphasis across the long and short heads."
+  ],
+  triceps: [
+    "Full lockout matters more here than in most other pushing movements - triceps are worked hardest at full extension.",
+    "Overhead extensions bias the long head differently than pushdowns do - both are worth including across a week.",
+    "Keep the elbow position fixed through the movement - a wandering elbow usually means momentum is doing the work."
+  ],
+  forearms: [
+    "Grip and forearm work tends to tolerate - and often wants - higher frequency than bigger muscle groups.",
+    "Both flexion and extension movements are worth including, not just curls - the extensors are easy to neglect.",
+    "Fatigue here shows up as grip giving out before the target muscle does - that's a sign to train grip separately, not harder."
+  ],
+  abdominals: [
+    "Controlled, full range of motion beats speed here - fast crunches mostly just build momentum, not strength.",
+    "Loading up (added weight, harder variations) works the abs the same way progressive overload works anywhere else.",
+    "Anti-rotation and anti-extension work (planks, carries) trains the core in ways pure flexion movements don't."
+  ],
+  quadriceps: [
+    "Depth matters - a full range squat or leg press tends to outperform a partial one for growth, even at lower weight.",
+    "Front-loaded variations (front squat, hack squat) bias the quads more directly than back-loaded ones.",
+    "A brief pause at the bottom of a rep removes the bounce and keeps tension on the muscle instead of the joint."
+  ],
+  hamstrings: [
+    "Hamstrings cross two joints - both hip-dominant (RDLs, hip thrusts) and knee-dominant (leg curls) work earn a place.",
+    "A slow eccentric on Romanian deadlifts tends to be where most of the actual growth stimulus comes from.",
+    "Don't neglect this group just because it's harder to see in the mirror than quads - imbalance here is a common injury risk."
+  ],
+  glutes: [
+    "A genuine pause and squeeze at the top of a hip thrust or bridge makes a real difference here.",
+    "Foot position (stance width, toe angle) shifts emphasis between glutes and quads on squat variations.",
+    "Glutes generally respond well to higher rep ranges alongside heavier compound work, not instead of it."
+  ],
+  calves: [
+    "Full stretch at the bottom of every rep matters more here than almost anywhere else - don't cut the range short.",
+    "Calves are notoriously stubborn - higher frequency (more sessions per week) tends to help more than higher volume in one sitting.",
+    "A brief pause at full contraction beats bouncing through reps using the stretch reflex to move the weight."
+  ]
+};
+function tipForMuscle(muscleKey){
+  const tips = HYPERTROPHY_TIPS[muscleKey];
+  if (!tips || !tips.length) return null;
+  // Deterministic by date (not random) - same tip all day, a different one
+  // tomorrow, so it's varied without feeling arbitrary if you check twice.
+  const seed = todayStr().split('-').reduce((sum, part) => sum + parseInt(part, 10), 0);
+  return tips[seed % tips.length];
 }
 
 async function showDailyBrief(list, dayTypeLabel, preview){
@@ -16509,11 +16591,16 @@ async function showDailyBrief(list, dayTypeLabel, preview){
     ctxSub = stats && stats.streak > 0 ? 'Keep it alive today.' : 'Every streak starts with a single day.';
   }
 
+  const pushMuscleTip = pushMuscle ? tipForMuscle(pushMuscle.key) : null;
   const pages = [
     { eyebrow: 'Main Event', title: mainEx.name, sub: `${mainLabel ? mainLabel + ' last time. ' : ''}${mainSub}`, accent: 'var(--flame)' },
     pushMuscle
       ? { eyebrow: 'Push Yourself On', title: pushMuscle.label, sub: pushMuscle.hasStagnant ? `Hasn't moved in a few sessions - today's the day.` : `${dayLabel}'s biggest focus. Make it count.`, accent: 'var(--good)' }
       : { eyebrow: 'Push Yourself On', title: dayLabel, sub: 'Show up and give it everything.', accent: 'var(--good)' },
+    // Only added when there's an actual muscle to attach a tip to - a genuine
+    // "nothing to show" page would be worse than just having 3 screens
+    // instead of 4 that day.
+    ...(pushMuscleTip ? [{ eyebrow: "Today's Tip", title: pushMuscle.label, sub: pushMuscleTip, accent: 'var(--flame)' }] : []),
     { eyebrow: ctxEyebrow, title: ctxTitle, sub: ctxSub, accent: 'var(--brass)' }
   ];
 
@@ -16523,9 +16610,9 @@ async function showDailyBrief(list, dayTypeLabel, preview){
   card.className = 'brief-card';
   card.innerHTML = `
     <button id="briefClose" class="brief-close" aria-label="Close">✕</button>
-    <div class="brief-track" id="briefTrack">
+    <div class="brief-track" id="briefTrack" style="width:${pages.length * 100}%;">
       ${pages.map((p, i) => `
-        <div class="brief-page">
+        <div class="brief-page" style="width:${100 / pages.length}%;">
           <img src="icons/logo.svg" alt="" class="brief-logo">
           <div class="brief-eyebrow" style="color:${p.accent};">${p.eyebrow}</div>
           <div class="brief-title">${p.title}</div>
