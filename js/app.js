@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.312';
+const APP_VERSION = 'Beta 5.313';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -5664,6 +5664,11 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   // Once-a-day briefing - only on today's own page (or the Anytime slot
   // during a trip), never while browsing a different day, and only once it
   // has genuinely finished rendering everything else first.
+  // Stashed every render (not just when the brief actually fires) so the
+  // Me screen's "Preview Daily Brief" button always has today's real data
+  // to work with, without needing its own separate fetch.
+  state._lastVisibleExercises = visibleExercises;
+  state._lastDayTypeLabel = effectiveDayTypeLabel;
   if ((state.selectedDay === todayWeekday() || isAnyDay(state.selectedDay)) && shouldShowDailyBrief()){
     showDailyBrief(visibleExercises, effectiveDayTypeLabel);
   }
@@ -16460,10 +16465,19 @@ function pickMuscleToPush(list, db){
   return { label: BALANCE_LABELS[broad] || broad, hasStagnant: d.stagnantCount > 0, exerciseCount: d.count };
 }
 
-async function showDailyBrief(list, dayTypeLabel){
+async function showDailyBrief(list, dayTypeLabel, preview){
   const mainEx = pickMainEvent(list);
-  if (!mainEx) return; // pickMainEvent's own 3-candidate floor already gates this - not enough of a day to brief
-  markDailyBriefShown();
+  if (!mainEx){
+    // A real (non-preview) call already only fires when pickMainEvent would
+    // succeed, so this branch only realistically happens from the preview
+    // button on a too-short day - say so instead of just doing nothing.
+    if (preview) alert("Not enough exercises on today's plan yet to preview this - pickMainEvent needs at least 3 unlogged exercises to pick from.");
+    return;
+  }
+  // Preview mode (the Me screen's test button) deliberately does NOT mark
+  // today as shown - it's for looking at the brief, not for consuming or
+  // replacing today's real once-a-day trigger.
+  if (!preview) markDailyBriefShown();
 
   const db = await loadExerciseDB();
   const pushMuscle = pickMuscleToPush(list, db);
@@ -16563,6 +16577,20 @@ async function showDailyBrief(list, dayTypeLabel){
     if (dx < -50) goTo(pageIndex + 1);
     else if (dx > 50) goTo(pageIndex - 1);
   }, { passive: true });
+}
+
+// Me screen's test button - uses whatever renderTrackFromData most recently
+// computed (stashed on state every render) rather than fetching separately,
+// so the preview always reflects your actual current plan/history. Falls
+// back to asking the user to open Lift first only if nothing's been
+// computed yet at all (unlikely in practice - the app opens to Lift by
+// default).
+function previewDailyBrief(){
+  if (!state._lastVisibleExercises || !state._lastVisibleExercises.length){
+    alert("Open Lift first so there's real data to preview this with, then try again.");
+    return;
+  }
+  showDailyBrief(state._lastVisibleExercises, state._lastDayTypeLabel, true);
 }
 
 // Recovery as a battery rather than a list of dates. A level that drains and
@@ -16782,6 +16810,10 @@ async function renderMe(){
           <div><div>Export Plan as Text</div><div class="small" style="color:var(--slate); margin-top:2px;">Every day, every exercise, alt group and weight progression - plain text, ready to paste to an AI</div></div>
           <div class="chev" style="margin-top:2px;">›</div>
         </div>
+        <div class="me-item" id="previewBriefBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+          <div><div>Preview Daily Brief</div><div class="small" style="color:var(--slate); margin-top:2px;">See today's Main Event / Push / Context popup on demand - doesn't use up today's real one</div></div>
+          <div class="chev" style="margin-top:2px;">›</div>
+        </div>
         <div class="section-label">App</div>
         <div class="me-item" id="shareAppBtn"><div>Share MonoLift</div><div class="chev">›</div></div>
         <div class="me-item" id="updateAppBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
@@ -16811,6 +16843,7 @@ async function renderMe(){
   if (isOwner) document.getElementById('approveContributorsBtn').onclick = () => openApproveContributorsScreen();
   document.getElementById('planSubPageBtn').onclick = () => openPlanSubPage();
   document.getElementById('exportPlanTextBtn').onclick = () => openExportPlanTextScreen();
+  document.getElementById('previewBriefBtn').onclick = () => previewDailyBrief();
   document.getElementById('shareAppBtn').onclick = async () => {
     const shareUrl = `${location.origin}${location.pathname}`.replace(/\/index\.html$/, '/');
     const shareData = { title: 'MonoLift', text: 'Check out MonoLift - a gym tracking app I use.', url: shareUrl };
