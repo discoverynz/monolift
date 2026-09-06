@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.315';
+const APP_VERSION = 'Beta 5.316';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -7122,7 +7122,15 @@ async function openPicker(initialTab, jumpToMuscle){
   overlay.querySelector('#closePicker').onclick = () => { removeSideIndex(); overlay.remove(); };
 
   const userData = { user: await getCurrentUser() };
-  const all = await fetchAllExercisesCompat(userData.user.id);
+  // Kicked off immediately but NOT awaited here - Mine and Database need
+  // this (exercise history, equipment filtering), but Ideas is pure static
+  // data (HOME_GYM_IDEAS) and was previously waiting on this full fetch for
+  // no reason before it could render anything at all, making Ideas feel
+  // just as slow as the tabs that actually need the data. getAll()/
+  // getAllowedEquipmentValues() resolve it lazily, right where it's
+  // actually used, and only once (a promise only ever resolves once, so
+  // repeated awaits after the first are effectively free).
+  const allPromise = fetchAllExercisesCompat(userData.user.id);
   // Matches Track's own location resolution - an exercise linked to today but
   // hidden from Track's display because it's tagged for a different location
   // shouldn't claim "on [Day]" here either, or the badge contradicts what's
@@ -7131,17 +7139,28 @@ async function openPicker(initialTab, jumpToMuscle){
   // If the active location has equipment set up, expand its selected
   // categories into the actual exercise-database equipment values they cover -
   // an empty set here means "no filter", not "nothing available".
-  let allowedEquipmentValues = null;
-  if (currentLocationId){
+  const allowedEquipmentValuesPromise = (async () => {
+    if (!currentLocationId) return null;
     const allLocations = await loadLocations();
     const activeLoc = allLocations.find(l => l.id === currentLocationId);
-    if (activeLoc && activeLoc.equipment_tags && activeLoc.equipment_tags.length){
-      allowedEquipmentValues = new Set();
-      activeLoc.equipment_tags.forEach(key => {
-        const cat = EQUIPMENT_CATEGORIES.find(c => c.key === key);
-        if (cat) cat.dbValues.forEach(v => allowedEquipmentValues.add(v));
-      });
-    }
+    if (!activeLoc || !activeLoc.equipment_tags || !activeLoc.equipment_tags.length) return null;
+    const values = new Set();
+    activeLoc.equipment_tags.forEach(key => {
+      const cat = EQUIPMENT_CATEGORIES.find(c => c.key === key);
+      if (cat) cat.dbValues.forEach(v => values.add(v));
+    });
+    return values;
+  })();
+  const getAll = () => allPromise;
+  // Starts unresolved (undefined, distinct from a resolved `null` meaning
+  // "no filter") - resolved exactly once, on whichever render actually
+  // needs it (renderDatabaseTab), then left alone so the "Show all" button
+  // can override it to null afterward without a later re-render silently
+  // re-fetching and undoing that override.
+  let allowedEquipmentValues;
+  async function ensureAllowedEquipmentValues(){
+    if (allowedEquipmentValues === undefined) allowedEquipmentValues = await allowedEquipmentValuesPromise;
+    return allowedEquipmentValues;
   }
 
   // Multi-select state, shared across both tabs since a long-press should be
@@ -7333,6 +7352,7 @@ async function openPicker(initialTab, jumpToMuscle){
 
     async function renderList(filter){
       const f = (filter || '').toLowerCase();
+      const all = await getAll();
       const byName = {};
       all.forEach(ex => {
         const key = ex.name.toLowerCase();
@@ -7469,6 +7489,7 @@ async function openPicker(initialTab, jumpToMuscle){
           // Capture at tap time - state.selectedDay could shift under the
           // async flow if another handler fires.
           const targetDay = state.selectedDay;
+          const all = await getAll();
           const picked = all.find(ex => (ex.masterId || ex.id) === el.dataset.id);
           overlay.remove();
           if (!picked || picked.weekday === targetDay){
@@ -7516,6 +7537,7 @@ async function openPicker(initialTab, jumpToMuscle){
           const targetDay = state.selectedDay;
           await withButtonLoading(btn, 'Adding…', async () => {
             const userData = { user: await getCurrentUser() };
+            const all = await getAll();
             const errors = [];
             const allLocs = await loadLocations(); // fetched once for the whole batch, not per item
             for (const item of items){
@@ -7584,6 +7606,8 @@ async function openPicker(initialTab, jumpToMuscle){
     const body = overlay.querySelector('#pickerBody');
     body.innerHTML = `<div class="small" style="padding:12px 18px; color:var(--slate);">Loading database…</div>`;
     const [publicDb, zealiftDb] = await Promise.all([loadExerciseDB(), loadMonoLiftExerciseDB()]);
+    const all = await getAll();
+    await ensureAllowedEquipmentValues();
     if (!publicDb){
       body.innerHTML = `<div class="empty-state">Database unavailable offline.</div>`;
       return;
@@ -11555,6 +11579,15 @@ const HOME_GYM_IDEAS = [
   { name:'Ring Face Pull', equip:'rings', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:'Rings at chest height, lean back and pull them to your face, elbows high - rear delts and upper back, the same gap Banded Face Pull covers if you have a band instead.',
     muscle:'shoulders' },
+  { name:'Backpack Row', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:"Fill a backpack with books or water bottles, hinge at the hips, row it to your ribs one arm at a time - a genuine improvised weight for days you have neither a band nor a bar.",
+    muscle:'lats' },
+  { name:'Water Jug Row', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'A filled water jug or laundry detergent bottle makes a surprisingly solid single-arm row weight - the handle is already built in.',
+    muscle:'lats' },
+  { name:'Isometric Towel Pull', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:"Hold a towel taut in both hands out in front of you and pull them apart against your own resistance - trains the same pulling muscles with literally nothing but a towel.",
+    muscle:'lats' },
 
   // ---- Push ----
   { name:'Handle Push-Ups', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
@@ -11614,6 +11647,9 @@ const HOME_GYM_IDEAS = [
   { name:'Ring Support Hold', equip:'rings', sub:'Push', measurementType:'time', usesDoorAnchor:false, anchorLevel:null,
     hint:'Rings at hip height, arms locked out, hold the top position without moving - builds the shoulder stability that everything else on rings depends on, and a fair place to start if a full dip is still out of reach.',
     muscle:'shoulders' },
+  { name:'Backpack-Loaded Push-Up', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:"Once bodyweight push-ups stop being enough, a weighted backpack across your upper back adds real load - the same 'load it with what you have' idea as the backpack row.",
+    muscle:'chest' },
 
   // ---- Legs ----
   { name:'Banded Squats', sub:'Legs', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
@@ -11664,6 +11700,24 @@ const HOME_GYM_IDEAS = [
   { name:'Curtsy Lunge', sub:'Legs', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:'Step one leg diagonally behind the other and lower - glute medius from a different angle than a monster walk.',
     muscle:'glutes' },
+  { name:'Pistol Squat', sub:'Legs', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:"Single-leg squat all the way down, other leg held out straight in front - hold a doorframe or table edge for balance while you build toward the unassisted version.",
+    muscle:'quadriceps' },
+  { name:'Shrimp Squat', sub:'Legs', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:"A step down from the pistol - grab your own back foot behind you and squat on the standing leg. Easier on balance than a full pistol, and a natural progression toward one.",
+    muscle:'quadriceps' },
+  { name:'Nordic Curl', sub:'Legs', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:"Hook your feet under a couch or heavy bed frame, kneel tall, and lower your torso forward as slowly as control allows before catching yourself - arguably the single best hamstring exercise there is, and it needs nothing but something to hook your feet under.",
+    muscle:'hamstrings' },
+  { name:'Reverse Lunge Off a Step', sub:'Legs', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Standing on a step or stair, step one foot back and down into a lunge - more range than a flat-ground lunge gives you.',
+    muscle:'quadriceps' },
+  { name:'Standing Broad Jump', sub:'Legs', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Swing your arms, jump forward for distance, and stick the landing - real explosive power work with zero equipment, just enough floor space to land safely.',
+    muscle:'quadriceps' },
+  { name:'Glute Bridge March', sub:'Legs', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:"Hold a glute bridge at the top and march your knees up one at a time without letting your hips drop or rotate - turns a static hold into continuous, harder work.",
+    muscle:'glutes' },
 
   // ---- Core ----
   { name:'Plank', sub:'Core', measurementType:'time', usesDoorAnchor:false, anchorLevel:null,
@@ -11705,6 +11759,44 @@ const HOME_GYM_IDEAS = [
   { name:'Ring Plank', equip:'rings', sub:'Core', measurementType:'time', usesDoorAnchor:false, anchorLevel:null,
     hint:'Feet in the rings (or hands on them for a push-up-position plank), everything else as a normal plank - the instability turns a familiar hold into a much harder one.',
     muscle:'abdominals' },
+  { name:'Towel Slide-Out', sub:'Core', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:"Hands on a towel on a smooth floor, kneeling, slide it out as far as control allows and pull yourself back - a genuine ab-wheel substitute using something already in the house.",
+    muscle:'abdominals' },
+  { name:'V-Up', sub:'Core', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Lying flat, raise your legs and torso together to touch your toes, then lower with control - a harder, fuller-range alternative to a crunch.',
+    muscle:'abdominals' },
+  { name:'Flutter Kicks', sub:'Core', measurementType:'time', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Lying on your back, small fast alternating leg kicks a few inches off the floor - lower abs, and it adds up faster than it looks like it should.',
+    muscle:'abdominals' },
+  { name:'Plank Shoulder Taps', sub:'Core', measurementType:'time', usesDoorAnchor:false, anchorLevel:null,
+    hint:"From a push-up-position plank, tap the opposite shoulder with each hand in turn without letting your hips rock - anti-rotation core strength, the pattern a plain hold doesn't train.",
+    muscle:'abdominals' },
+  { name:'Commando Plank', sub:'Core', measurementType:'time', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Alternate between a forearm plank and a full push-up-position plank, one arm at a time - core strength plus a genuine shoulder and tricep hit along the way.',
+    muscle:'abdominals' },
+
+  // ---- Full Body ----
+  // Compound, no-equipment movements that don't sit neatly under one of
+  // Pull/Push/Legs/Core - conditioning and full-body power work, exactly
+  // the kind of thing a hotel room or a small space is actually good for.
+  { name:'Burpee', sub:'Full Body', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Squat down, kick back to a plank, push-up, jump your feet back in, jump up - the classic full-body conditioning move, needs nothing but floor space.',
+    muscle:'quadriceps' },
+  { name:'Bear Crawl', sub:'Full Body', measurementType:'time', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Hands and feet on the floor, knees just off the ground, crawl forward a few steps and back - shoulders, core and legs working together the whole time.',
+    muscle:'abdominals' },
+  { name:'Inchworm', sub:'Full Body', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'From standing, hinge over and walk your hands out to a plank, then walk them back to your feet and stand - hamstrings, shoulders and core in one continuous movement.',
+    muscle:'hamstrings' },
+  { name:'Crab Walk', sub:'Full Body', measurementType:'time', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Seated, hands behind you, lift your hips and walk on hands and feet - triceps, glutes and core from an angle almost nothing else here trains.',
+    muscle:'triceps' },
+  { name:'Star Jump', sub:'Full Body', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Squat down, then jump up spreading your arms and legs out into a star shape before landing soft - explosive full-body power and a genuine cardio hit together.',
+    muscle:'quadriceps' },
+  { name:'High Knees', sub:'Full Body', measurementType:'time', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Run in place driving your knees up toward your chest as fast as you can hold form - hip flexors and a fast conditioning hit that needs no space at all.',
+    muscle:'quadriceps' },
 ];
 
 // How an exercise is measured. Null in the database means 'weight', so every
