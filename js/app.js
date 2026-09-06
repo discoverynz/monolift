@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.318';
+const APP_VERSION = 'Beta 5.319';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -16403,13 +16403,27 @@ async function performDaySwap(dayA, dayB){
     // so an exercise that happens to exist on both days already can be
     // detected and handled instead of colliding with itself mid-swap.
     const [resA, resB] = await Promise.all([
-      supabaseClient.from('exercise_days').select('id, exercise_master_id').eq('user_id', uid).eq('weekday', dayA),
-      supabaseClient.from('exercise_days').select('id, exercise_master_id').eq('user_id', uid).eq('weekday', dayB)
+      withTimeout(supabaseClient.from('exercise_days').select('id, exercise_master_id').eq('user_id', uid).eq('weekday', dayA), 15000),
+      withTimeout(supabaseClient.from('exercise_days').select('id, exercise_master_id').eq('user_id', uid).eq('weekday', dayB), 15000)
     ]);
+    if (resA.__timeout || resA.error || resB.__timeout || resB.error){
+      throw new Error("Couldn't read either day's current plan, so nothing was changed. Check your connection and try again.");
+    }
     const rowsA = resA.data || [];
     const rowsB = resB.data || [];
     const masterIdsOnB = new Set(rowsB.map(r => r.exercise_master_id));
     const masterIdsOnA = new Set(rowsA.map(r => r.exercise_master_id));
+
+    // Every row that actually gets moved is tracked here so a failure partway
+    // through can be rolled back cleanly. Previously a failure was recorded
+    // but the loop kept going and nothing already-moved was ever reverted -
+    // the comment below claimed exercises were "left in their original
+    // state" on failure, but that was never actually true once more than one
+    // row was involved. This is exactly how the "Lower day full of Shoulder
+    // Press" report happened: some exercises moved, others didn't, and the
+    // swap just stopped there.
+    const movedToB = [];
+    const movedToA = [];
 
     for (const row of rowsA){
       if (masterIdsOnB.has(row.exercise_master_id)){
@@ -16419,73 +16433,109 @@ async function performDaySwap(dayA, dayB){
         // entirely, which is what was happening here before.
         continue;
       }
-      const { data, error } = await supabaseClient.from('exercise_days').update({ weekday: dayB }).eq('id', row.id).select();
-      if (error || !data || !data.length) failures.push(`an exercise moving from ${DAY_NAMES[dayA]} to ${DAY_NAMES[dayB]}: ${error ? error.message : 'update matched zero rows'}`);
-    }
-    for (const row of rowsB){
-      if (masterIdsOnA.has(row.exercise_master_id)){
-        continue;
+      const result = await withTimeout(supabaseClient.from('exercise_days').update({ weekday: dayB }).eq('id', row.id).select(), 15000);
+      if (result.__timeout || result.error || !result.data || !result.data.length){
+        failures.push(`an exercise moving from ${DAY_NAMES[dayA]} to ${DAY_NAMES[dayB]}: ${result.error ? result.error.message : (result.__timeout ? 'timed out' : 'update matched zero rows')}`);
+        break; // stop immediately - every extra move here is one more to roll back
       }
-      const { data, error } = await supabaseClient.from('exercise_days').update({ weekday: dayA }).eq('id', row.id).select();
-      if (error || !data || !data.length) failures.push(`an exercise moving from ${DAY_NAMES[dayB]} to ${DAY_NAMES[dayA]}: ${error ? error.message : 'update matched zero rows'}`);
+      movedToB.push(row.id);
+    }
+    if (!failures.length){
+      for (const row of rowsB){
+        if (masterIdsOnA.has(row.exercise_master_id)){
+          continue;
+        }
+        const result = await withTimeout(supabaseClient.from('exercise_days').update({ weekday: dayA }).eq('id', row.id).select(), 15000);
+        if (result.__timeout || result.error || !result.data || !result.data.length){
+          failures.push(`an exercise moving from ${DAY_NAMES[dayB]} to ${DAY_NAMES[dayA]}: ${result.error ? result.error.message : (result.__timeout ? 'timed out' : 'update matched zero rows')}`);
+          break;
+        }
+        movedToA.push(row.id);
+      }
+    }
+
+    if (failures.length){
+      // Best-effort rollback - put back every row that DID succeed before
+      // the failure, so the net result is genuinely "nothing changed"
+      // rather than a plan with exercises scattered across both days and no
+      // label update to match. Not a true database transaction (this client
+      // has no way to get one against Supabase), but far better than the
+      // previous behaviour of just stopping wherever the failure happened.
+      await Promise.all([
+        ...movedToB.map(id => withTimeout(supabaseClient.from('exercise_days').update({ weekday: dayA }).eq('id', id), 15000)),
+        ...movedToA.map(id => withTimeout(supabaseClient.from('exercise_days').update({ weekday: dayB }).eq('id', id), 15000))
+      ]);
+      invalidateTrackSnapshots(); // rolled-back rows still need a fresh read to confirm
+      throw new Error(`Couldn't complete the swap, so it's been rolled back - nothing changed:\n${failures.join('\n')}`);
     }
   } else {
     // Old structure: rows are day-specific copies, so there's no shared-identity
     // collision risk the way there is under exercise_master - a plain bulk
     // update is safe, but still verified.
     const [resA, resB] = await Promise.all([
-      supabaseClient.from('exercises').select('id').eq('user_id', uid).eq('weekday', dayA),
-      supabaseClient.from('exercises').select('id').eq('user_id', uid).eq('weekday', dayB)
+      withTimeout(supabaseClient.from('exercises').select('id').eq('user_id', uid).eq('weekday', dayA), 15000),
+      withTimeout(supabaseClient.from('exercises').select('id').eq('user_id', uid).eq('weekday', dayB), 15000)
     ]);
+    if (resA.__timeout || resA.error || resB.__timeout || resB.error){
+      throw new Error("Couldn't read either day's current plan, so nothing was changed. Check your connection and try again.");
+    }
     const idsA = (resA.data || []).map(r => r.id);
     const idsB = (resB.data || []).map(r => r.id);
+    let movedA = false, movedB = false;
     if (idsA.length > 0){
-      const { data, error } = await supabaseClient.from('exercises').update({ weekday: dayB }).in('id', idsA).select();
-      if (error || !data || data.length !== idsA.length) failures.push(`exercises moving from ${DAY_NAMES[dayA]} to ${DAY_NAMES[dayB]}: ${error ? error.message : 'not all rows updated'}`);
+      const result = await withTimeout(supabaseClient.from('exercises').update({ weekday: dayB }).in('id', idsA).select(), 15000);
+      if (result.__timeout || result.error || !result.data || result.data.length !== idsA.length){
+        failures.push(`exercises moving from ${DAY_NAMES[dayA]} to ${DAY_NAMES[dayB]}: ${result.error ? result.error.message : (result.__timeout ? 'timed out' : 'not all rows updated')}`);
+      } else movedA = true;
     }
-    if (idsB.length > 0){
-      const { data, error } = await supabaseClient.from('exercises').update({ weekday: dayA }).in('id', idsB).select();
-      if (error || !data || data.length !== idsB.length) failures.push(`exercises moving from ${DAY_NAMES[dayB]} to ${DAY_NAMES[dayA]}: ${error ? error.message : 'not all rows updated'}`);
+    if (!failures.length && idsB.length > 0){
+      const result = await withTimeout(supabaseClient.from('exercises').update({ weekday: dayA }).in('id', idsB).select(), 15000);
+      if (result.__timeout || result.error || !result.data || result.data.length !== idsB.length){
+        failures.push(`exercises moving from ${DAY_NAMES[dayB]} to ${DAY_NAMES[dayA]}: ${result.error ? result.error.message : (result.__timeout ? 'timed out' : 'not all rows updated')}`);
+      } else movedB = true;
     }
-  }
-
-  // Check for failures BEFORE touching the day labels - if any exercise
-  // failed to actually move, the labels must not swap either, or the day
-  // ends up showing a label that no longer matches what's actually on it
-  // (exactly the "Lower day full of Shoulder Press" report). Better to leave
-  // both the labels and the exercises in their original, at-least-consistent
-  // state and surface the failure clearly than to half-apply a swap.
-  if (failures.length){
-    throw new Error(`Exercises did not all move, so nothing was swapped:\n${failures.join('\n')}`);
+    if (failures.length){
+      // Same best-effort rollback as the master-schema path above.
+      if (movedA) await withTimeout(supabaseClient.from('exercises').update({ weekday: dayA }).in('id', idsA), 15000);
+      if (movedB) await withTimeout(supabaseClient.from('exercises').update({ weekday: dayB }).in('id', idsB), 15000);
+      invalidateTrackSnapshots();
+      throw new Error(`Couldn't complete the swap, so it's been rolled back - nothing changed:\n${failures.join('\n')}`);
+    }
   }
 
   const [dtA, dtB] = await Promise.all([
-    supabaseClient.from('day_types').select('label').eq('user_id', uid).eq('weekday', dayA).maybeSingle(),
-    supabaseClient.from('day_types').select('label').eq('user_id', uid).eq('weekday', dayB).maybeSingle()
+    withTimeout(supabaseClient.from('day_types').select('label').eq('user_id', uid).eq('weekday', dayA).maybeSingle(), 15000),
+    withTimeout(supabaseClient.from('day_types').select('label').eq('user_id', uid).eq('weekday', dayB).maybeSingle(), 15000)
   ]);
   // Only use REAL labels the user actually set. Previously this silently
   // fell back to DAY_TYPES[dayA] (a hardcoded default like "Chest & Triceps"
   // that the user might have never chosen) and wrote it INTO the database
   // as if it were a real label - so a swap involving a day with no
   // day_types row could permanently bake a fake default into the plan.
-  const labelA = dtA.data ? dtA.data.label : null;
-  const labelB = dtB.data ? dtB.data.label : null;
+  const labelA = (!dtA.__timeout && !dtA.error && dtA.data) ? dtA.data.label : null;
+  const labelB = (!dtB.__timeout && !dtB.error && dtB.data) ? dtB.data.label : null;
   // Only write each side when there's a real label to write. Missing rows
   // stay missing after the swap (nothing to swap in), which is faithful to
   // "the user never set this" and won't pollute the database.
   if (labelB !== null){
     await supabaseClient.from('day_types').upsert({ user_id: uid, weekday: dayA, label: labelB }, { onConflict: 'user_id,weekday' });
-  } else if (dtA.data){
+  } else if (!dtA.__timeout && !dtA.error && dtA.data){
     // Day A had a label, Day B did not - after the swap, Day A should end
     // up empty, matching what Day B was.
     await supabaseClient.from('day_types').delete().eq('user_id', uid).eq('weekday', dayA);
   }
   if (labelA !== null){
     await supabaseClient.from('day_types').upsert({ user_id: uid, weekday: dayB, label: labelA }, { onConflict: 'user_id,weekday' });
-  } else if (dtB.data){
+  } else if (!dtB.__timeout && !dtB.error && dtB.data){
     await supabaseClient.from('day_types').delete().eq('user_id', uid).eq('weekday', dayB);
   }
   invalidateDayTypesCache();
+  // The swap changes which exercises live on which weekday - the exact
+  // thing a Track snapshot caches. Without this, either day could keep
+  // showing its pre-swap contents from the local cache after a genuinely
+  // successful swap, which looks indistinguishable from the swap itself
+  // being broken even though the database is correct.
+  invalidateTrackSnapshots();
 }
 
 // An honest read on what a trip actually cost, shown when it ends. The point
