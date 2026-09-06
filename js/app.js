@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.319';
+const APP_VERSION = 'Beta 5.320';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -11848,6 +11848,24 @@ const HOME_GYM_IDEAS = [
   { name:'Banded Anti-Rotation Hold', sub:'Core', measurementType:'time', usesDoorAnchor:true, anchorLevel:'Level 3',
     hint:'Anchor at chest height to your side, press the band straight out in front of you and just resist it pulling you toward the anchor - the isometric version of a Pallof Press, and an easier place to start.',
     muscle:'abdominals' },
+  { name:'Banded Pull-Apart', sub:'Pull', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Hold a band with straight arms out in front at chest height, pull it apart until it touches your chest, control it back - classic rear-delt and upper-back activation, and a genuinely good warm-up before anything else here.',
+    muscle:'shoulders' },
+  { name:'Banded Skull Crusher', sub:'Push', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 5',
+    hint:'Anchor high behind you, band running over your head, lie or kneel facing away and extend your forearms forward from a bent-elbow position - isolates the triceps the same way a lying skull crusher does.',
+    muscle:'triceps' },
+  { name:'Banded Fire Hydrant', sub:'Legs', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
+    hint:'On all fours with a small loop band above your knees, lift one knee out to the side keeping the hip square - glute medius from a quadruped position, a different angle than any standing hip abduction gives you.',
+    muscle:'glutes' },
+  { name:'Banded Donkey Kick', sub:'Legs', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
+    hint:'On all fours with the band above your knees or around one foot, kick that leg straight back and up, squeeze at the top - glute isolation, and the band adds real resistance to a move that\'s normally bodyweight-only.',
+    muscle:'glutes' },
+  { name:'Band-Resisted Push-Up', sub:'Push', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Loop a band across your upper back and hold the ends flat under your hands - adds resistance through the whole push-up range, a genuine way to progress once bodyweight alone stops being enough.',
+    muscle:'chest' },
+  { name:'Banded Bear Crawl', sub:'Full Body', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Small loop band around your wrists or ankles while bear crawling - adds resistance to a move that\'s normally just about coordination, turning it into real strength work too.',
+    muscle:'abdominals' },
 
   // ---- Kettlebell ----
   // The "complete home setup" tip above already recommends a kettlebell as
@@ -11884,6 +11902,30 @@ const HOME_GYM_IDEAS = [
   { name:'Kettlebell Farmer\'s Carry', equip:'kettlebell', sub:'Full Body', measurementType:'weight', usesDoorAnchor:false, anchorLevel:null,
     hint:"Pick it up and walk - grip, traps and core all working just to keep you upright and moving in a straight line. As simple as training gets, and still genuinely hard.",
     muscle:'forearms' },
+  { name:'Kettlebell Single-Leg Deadlift', equip:'kettlebell', sub:'Legs', measurementType:'weight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Bell in one hand, hinge forward on the opposite leg while the other extends straight back for balance - hamstrings and glutes plus a real balance demand a two-leg deadlift skips entirely.',
+    muscle:'hamstrings' },
+  { name:'Kettlebell Thruster', equip:'kettlebell', sub:'Full Body', measurementType:'weight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Front squat the bell to the bottom, then drive up and press it overhead in one continuous motion - legs and shoulders working together, and a genuine conditioning hit at almost any weight.',
+    muscle:'quadriceps' },
+  { name:'Kettlebell High Pull', equip:'kettlebell', sub:'Pull', measurementType:'weight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Swing the bell up and pull it toward your chin, elbow leading and staying high - traps and rear delts, with more speed and swing behind it than a standard upright row.',
+    muscle:'traps' },
+  { name:'Kettlebell Figure-8', equip:'kettlebell', sub:'Full Body', measurementType:'weight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Stand with feet wide, pass the bell around and between your legs in a figure-8 pattern from hand to hand - grip, core and coordination all at once, and harder to fake than it looks.',
+    muscle:'abdominals' },
+  { name:'Kettlebell Suitcase Carry', equip:'kettlebell', sub:'Full Body', measurementType:'weight', usesDoorAnchor:false, anchorLevel:null,
+    hint:"Carry a single bell at your side like a suitcase and walk without leaning toward it - resisting the pull to one side trains the core very differently than carrying a bell in each hand.",
+    muscle:'abdominals' },
+  { name:'Kettlebell Overhead Carry', equip:'kettlebell', sub:'Full Body', measurementType:'weight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Lock the bell out overhead and walk, keeping your ribs down and the arm dead straight the whole way - shoulder stability under load, and it exposes a wobbly overhead position fast.',
+    muscle:'shoulders' },
+  { name:'Kettlebell Push Press', equip:'kettlebell', sub:'Push', measurementType:'weight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Dip slightly at the knees, then drive up through the legs to help punch the bell overhead - lets you press more weight than a strict press by putting the legs to work too.',
+    muscle:'shoulders' },
+  { name:'Kettlebell Around the Body Pass', equip:'kettlebell', sub:'Core', measurementType:'weight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Pass the bell around your waist from hand to hand in a continuous circle, then reverse direction - core rotation and grip together, and a good way to warm the whole midsection up fast.',
+    muscle:'abdominals' },
 
   // ---- Medicine Ball ----
   { name:'Medicine Ball Slam', equip:'medball', sub:'Full Body', measurementType:'weight', usesDoorAnchor:false, anchorLevel:null,
@@ -11932,6 +11974,21 @@ const HOME_GYM_IDEAS = [
   { name:'Foam Roller Hamstring Bridge', equip:'foamroll', sub:'Legs', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:'Heels on the roller, lift your hips into a bridge - same idea as the stability ball version, using whichever one you actually own.',
     muscle:'hamstrings' },
+  { name:'Handstand Hold (Wall-Assisted)', sub:'Push', measurementType:'time', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Kick up into a handstand with your heels resting against a wall, hold - real shoulder and core strength, and needs nothing but a wall and some floor space.',
+    muscle:'shoulders' },
+  { name:'Lateral Bound', sub:'Legs', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Jump sideways off one leg and stick the landing on the other, then bound back - explosive lateral power and the kind of side-to-side control most straight-ahead exercises never train.',
+    muscle:'glutes' },
+  { name:'Single-Leg Calf Raise', sub:'Legs', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Standing on one foot with your heel hanging off a stair edge, raise up as high as you can - a full-range calf raise with real difficulty, unlike the two-foot version most people outgrow fast.',
+    muscle:'calves' },
+  { name:'Copenhagen Plank', sub:'Legs', measurementType:'time', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Side plank with your TOP foot resting on a chair or low bench and your bottom leg hanging free - a genuinely tough, well-regarded inner-thigh and hip exercise that almost nothing else here trains directly.',
+    muscle:'adductors' },
+  { name:'Superman Row', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Lying face down, lift your chest slightly and pull your elbows back like rowing, squeezing your shoulder blades together - the dynamic partner to a static Superman Hold, and a real (if light) way to train the upper back with nothing at all.',
+    muscle:'lats' },
 
   // ---- Full Body ----
   // Compound, no-equipment movements that don't sit neatly under one of
