@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.323';
+const APP_VERSION = 'Beta 5.324';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -6587,6 +6587,9 @@ async function deleteExerciseEntirelyNow(exerciseName){
   invalidateTrackSnapshots(); // day contents change - stale snapshot must not survive
   const userData = { user: await getCurrentUser() };
   const uid = userData.user.id;
+  // Permanent and irreversible - worth the wait even though this specific
+  // dialog is rarely opened right at boot.
+  await awaitMasterFlagHealed();
   if (getUseExerciseMasterFlag()){
     // Use select (multiple rows OK) instead of maybeSingle - if there are
     // any duplicate exercise_master rows sharing this name, the previous
@@ -6691,24 +6694,42 @@ function confirmRemoveExercise(exerciseId, exerciseName){
   overlay.querySelector('#cancelRemove').onclick = () => overlay.remove();
   overlay.querySelector('#confirmRemove').onclick = async () => {
     overlay.remove();
+    // Re-check after the heal rather than trusting the value captured when
+    // the dialog first opened - this is a permanent, irreversible delete,
+    // and the OTHER path to the same kind of delete (long-press ->
+    // "Delete Permanently") already properly waits for this.
+    await awaitMasterFlagHealed();
+    const useMasterNow = getUseExerciseMasterFlag();
     if (deleteEntirely){
-      if (useMaster){
-        await supabaseClient.from('sets').delete().eq('exercise_master_id', exerciseId);
-        await supabaseClient.from('exercise_days').delete().eq('exercise_master_id', exerciseId);
-        await supabaseClient.from('exercise_master').delete().eq('id', exerciseId);
+      invalidateTrackSnapshots(); // day contents change - stale snapshot must not survive
+      if (useMasterNow){
+        // Bounded, retried, and error-checked - a half-completed permanent
+        // delete leaves orphaned sets pointing at a row that no longer
+        // exists (invisible in the app, still counted in totals) if the
+        // later deletes proceed after an earlier one silently failed.
+        // Stopping on the first failure instead of barreling through means
+        // whatever's left is at least consistent, even if incomplete.
+        const r1 = await withBulkRetry(() => withTimeout(supabaseClient.from('sets').delete().eq('exercise_master_id', exerciseId), 20000));
+        if (r1 && r1.error){ alert(`Couldn't delete the logged history, so nothing else was touched: ${r1.error.message}`); return; }
+        const r2 = await withBulkRetry(() => withTimeout(supabaseClient.from('exercise_days').delete().eq('exercise_master_id', exerciseId), 20000));
+        if (r2 && r2.error){ alert(`History was deleted, but removing the day placements failed: ${r2.error.message}. The exercise itself is still there - try removing it again.`); return; }
+        const r3 = await withBulkRetry(() => withTimeout(supabaseClient.from('exercise_master').delete().eq('id', exerciseId), 20000));
+        if (r3 && r3.error){ alert(`History and day placements were cleared, but the exercise entry itself couldn't be deleted: ${r3.error.message}. Try removing it again.`); return; }
       } else {
-        await supabaseClient.from('sets').delete().eq('exercise_id', exerciseId);
-        await supabaseClient.from('exercises').delete().eq('id', exerciseId);
+        const r1 = await withBulkRetry(() => withTimeout(supabaseClient.from('sets').delete().eq('exercise_id', exerciseId), 20000));
+        if (r1 && r1.error){ alert(`Couldn't delete the logged history, so nothing else was touched: ${r1.error.message}`); return; }
+        const r2 = await withBulkRetry(() => withTimeout(supabaseClient.from('exercises').delete().eq('id', exerciseId), 20000));
+        if (r2 && r2.error){ alert(`History was deleted, but removing the exercise itself failed: ${r2.error.message}. Try removing it again.`); return; }
       }
       renderTrack();
       return;
     }
-    if (useMaster){
+    if (useMasterNow){
       // Capture the weekday at the moment of removal - not lazily inside
       // the undo callback, since state.selectedDay may have changed by
       // then (user switched days, or the day-rollover snap fired).
       const removalWeekday = state.selectedDay;
-      const { data, error } = await supabaseClient.from('exercise_days').delete().eq('exercise_master_id', exerciseId).eq('weekday', removalWeekday).select();
+      const { data, error } = await withTimeout(supabaseClient.from('exercise_days').delete().eq('exercise_master_id', exerciseId).eq('weekday', removalWeekday).select(), 15000);
       if (error || !data || !data.length){
         alert(`Could not remove "${exerciseName}": ${error ? error.message : 'no matching row found for today - it may already be gone, or something is out of sync. Try refreshing the app.'}`);
         renderTrack();
@@ -6716,15 +6737,15 @@ function confirmRemoveExercise(exerciseId, exerciseName){
       }
       showUndoToast(exerciseName, async () => {
         const userData = { user: await getCurrentUser() };
-        await supabaseClient.from('exercise_days').insert({ user_id: userData.user.id, exercise_master_id: exerciseId, weekday: removalWeekday });
+        await withTimeout(supabaseClient.from('exercise_days').insert({ user_id: userData.user.id, exercise_master_id: exerciseId, weekday: removalWeekday }), 15000);
         renderTrack();
       });
       renderTrack();
       return;
     }
-    await supabaseClient.from('exercises').update({ active: false }).eq('id', exerciseId);
+    await withTimeout(supabaseClient.from('exercises').update({ active: false }).eq('id', exerciseId), 15000);
     showUndoToast(exerciseName, async () => {
-      await supabaseClient.from('exercises').update({ active: true }).eq('id', exerciseId);
+      await withTimeout(supabaseClient.from('exercises').update({ active: true }).eq('id', exerciseId), 15000);
       renderTrack();
     });
     renderTrack();
