@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.320';
+const APP_VERSION = 'Beta 5.321';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -16361,6 +16361,27 @@ async function renderBalance(mode, view){
 
 
 // ---------- ME ----------
+// How many exercises exist on BOTH days already, before any swap happens -
+// performDaySwap deliberately leaves these untouched (they belong on both
+// days regardless of which one is "first" or "second"), but the preview
+// used to claim unconditionally that "every exercise moves with its day",
+// which is simply false whenever this number is nonzero. Someone reading
+// that promise, then watching an exercise not move, had no way to know
+// that was correct, expected behaviour rather than the swap being broken.
+async function getSharedExerciseCount(dayA, dayB){
+  const userData = { user: await getCurrentUser() };
+  if (!userData || !userData.user) return 0;
+  const uid = userData.user.id;
+  if (!getUseExerciseMasterFlag()) return 0; // legacy rows are day-specific copies - nothing can be "on both days" there
+  const [resA, resB] = await Promise.all([
+    withTimeout(supabaseClient.from('exercise_days').select('exercise_master_id').eq('user_id', uid).eq('weekday', dayA), 15000),
+    withTimeout(supabaseClient.from('exercise_days').select('exercise_master_id').eq('user_id', uid).eq('weekday', dayB), 15000)
+  ]);
+  if (resA.__timeout || resA.error || resB.__timeout || resB.error) return 0;
+  const idsA = new Set((resA.data || []).map(r => r.exercise_master_id));
+  return (resB.data || []).filter(r => idsA.has(r.exercise_master_id)).length;
+}
+
 async function getDayStats(weekday){
   const userData = { user: await getCurrentUser() };
   if (!userData || !userData.user) return { weekday, label: DAY_NAMES[weekday], exerciseCount: 0, setCount: 0 };
@@ -16405,7 +16426,7 @@ function openSwapDaysForm(){
     const previewEl = overlay.querySelector('#swapPreview');
     if (dayA === null || dayB === null || dayA === dayB){ previewEl.innerHTML = ''; return; }
     previewEl.innerHTML = `<div class="empty-state" style="padding:20px;">Loading…</div>`;
-    const [statsA, statsB] = await Promise.all([getDayStats(dayA), getDayStats(dayB)]);
+    const [statsA, statsB, sharedCount] = await Promise.all([getDayStats(dayA), getDayStats(dayB), getSharedExerciseCount(dayA, dayB)]);
     previewEl.innerHTML = `
       <div class="phase-card active" style="margin:14px 18px;">
         <div class="top-row"><div class="name" style="font-size:16px;">${DAY_LABELS[dayA]}</div></div>
@@ -16417,7 +16438,8 @@ function openSwapDaysForm(){
         <div class="dates">${statsB.label} · ${statsB.exerciseCount} exercises · ${statsB.setCount} logged sets</div>
       </div>
       <div class="action-row" style="border-color:rgba(143,191,122,0.3); background:rgba(143,191,122,0.06);">
-        <div style="font-size:11.5px; color:var(--good); line-height:1.6;">✓ After swapping: ${DAY_LABELS[dayB]} becomes "${statsA.label}," ${DAY_LABELS[dayA]} becomes "${statsB.label}." Every exercise, alt group, and logged set moves with its day.</div>
+        <div style="font-size:11.5px; color:var(--good); line-height:1.6;">✓ After swapping: ${DAY_LABELS[dayB]} becomes "${statsA.label}," ${DAY_LABELS[dayA]} becomes "${statsB.label}."${sharedCount ? '' : ' Every exercise, alt group, and logged set moves with its day.'}</div>
+        ${sharedCount ? `<div style="font-size:11.5px; color:var(--brass); line-height:1.6; margin-top:8px;">⚠️ ${sharedCount} exercise${sharedCount===1?'':'s'} already scheduled on BOTH ${DAY_LABELS[dayA]} and ${DAY_LABELS[dayB]} - those stay on both days after swapping too, since removing either placement would mean losing that exercise from a day it's meant to be on.</div>` : ''}
       </div>
       <button class="save-btn" id="confirmSwapBtn">Swap These Days</button>
     `;
