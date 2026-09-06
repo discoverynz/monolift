@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.316';
+const APP_VERSION = 'Beta 5.317';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -1894,7 +1894,16 @@ function getTripMode(){
     // Ends itself on the return date rather than lingering until someone
     // remembers - a mode you have to remember to turn off is one that
     // silently misreports your training for weeks after you're home.
-    if (t.endDate && todayStr() > t.endDate){ localStorage.removeItem(TRIP_KEY); return null; }
+    // Same cache invalidation setTripMode(null) does on a manual toggle -
+    // without it, Track snapshots and Balance/Phase caches computed while
+    // the trip was still active could keep being served for a while after
+    // returning, since this auto-expiry path used to skip that step.
+    if (t.endDate && todayStr() > t.endDate){
+      localStorage.removeItem(TRIP_KEY);
+      invalidateTrackSnapshots();
+      warmInvalidate();
+      return null;
+    }
     return t;
   } catch(e){ return null; }
 }
@@ -11588,6 +11597,21 @@ const HOME_GYM_IDEAS = [
   { name:'Isometric Towel Pull', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:"Hold a towel taut in both hands out in front of you and pull them apart against your own resistance - trains the same pulling muscles with literally nothing but a towel.",
     muscle:'lats' },
+  { name:'Banded High Row', sub:'Pull', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 5',
+    hint:'Anchor high, pull down and back toward your hip on one side - a different pulling angle than a straight pulldown, closer to a high cable row.',
+    muscle:'lats' },
+  { name:'Banded Low Row', sub:'Pull', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 1',
+    hint:'Anchor low near the floor, sit or stand facing it, pull to your ribs - the seated cable row angle, which the no-anchor Single-Arm Banded Row can\'t quite replicate.',
+    muscle:'lats' },
+  { name:'Banded Single-Arm Pulldown', sub:'Pull', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 5',
+    hint:'Anchor high, one arm at a time, pull down and across your body - the unilateral version of Banded Pulldown, useful for evening out a stronger side.',
+    muscle:'lats' },
+  { name:'Banded Rear Delt Row', sub:'Pull', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 3',
+    hint:'Anchor at chest height, wide grip, row with elbows flared high and wide rather than tucked - a different rear-delt emphasis than Banded Face Pull\'s narrower, higher pull.',
+    muscle:'shoulders' },
+  { name:'Banded Renegade Row', sub:'Pull', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 1',
+    hint:'Anchor low, hold a plank position facing away from the anchor, row one arm at a time without letting your hips rotate - back and core together, and genuinely hard to fake.',
+    muscle:'lats' },
 
   // ---- Push ----
   { name:'Handle Push-Ups', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
@@ -11650,6 +11674,21 @@ const HOME_GYM_IDEAS = [
   { name:'Backpack-Loaded Push-Up', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:"Once bodyweight push-ups stop being enough, a weighted backpack across your upper back adds real load - the same 'load it with what you have' idea as the backpack row.",
     muscle:'chest' },
+  { name:'Banded Incline Press', sub:'Push', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 1',
+    hint:'Anchor low behind you, press up and slightly forward at an angle - upper chest, the angle a flat Banded Chest Press misses.',
+    muscle:'chest' },
+  { name:'Banded Decline Press', sub:'Push', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 5',
+    hint:'Anchor high behind you, press down and forward at an angle - lower chest, the opposite end of the range from the incline version.',
+    muscle:'chest' },
+  { name:'Banded Single-Arm Chest Press', sub:'Push', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 3',
+    hint:'Anchor behind you at chest height, press one arm at a time - resisting the rotation the band creates trains the core along with the chest.',
+    muscle:'chest' },
+  { name:'Banded Landmine Press', sub:'Push', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 1',
+    hint:'Anchor low, hold the band at shoulder height, press up and across at an angle - an easier line on the shoulder joint than a straight overhead press.',
+    muscle:'shoulders' },
+  { name:'Banded Around the World', sub:'Push', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 1',
+    hint:'Anchor low, sweep one straight arm out to the side and all the way overhead in a wide arc - works the shoulder through a full range almost nothing else here covers.',
+    muscle:'shoulders' },
 
   // ---- Legs ----
   { name:'Banded Squats', sub:'Legs', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
@@ -11718,6 +11757,21 @@ const HOME_GYM_IDEAS = [
   { name:'Glute Bridge March', sub:'Legs', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:"Hold a glute bridge at the top and march your knees up one at a time without letting your hips drop or rotate - turns a static hold into continuous, harder work.",
     muscle:'glutes' },
+  { name:'Banded Cable Kickback', sub:'Legs', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 1',
+    hint:'Anchor low, band around your ankle, kick straight back and squeeze - the closest thing to a cable glute kickback machine you can build at home.',
+    muscle:'glutes' },
+  { name:'Banded Standing Hip Abduction', sub:'Legs', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 1',
+    hint:'Anchor low to your side, band around the far ankle, lift that leg out to the side against the resistance - glute medius, loaded rather than just bodyweight like Monster Walk.',
+    muscle:'glutes' },
+  { name:'Banded Hip Adduction', sub:'Legs', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 1',
+    hint:'Anchor low to your side, band around the near ankle, pull that leg across your body against the band - inner thigh, a muscle group almost nothing else here reaches.',
+    muscle:'adductors' },
+  { name:'Banded Good Morning', sub:'Legs', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Band across your upper back, stand on the other end, hinge forward at the hips keeping a flat back - posterior chain, closer to a barbell good morning than a Romanian deadlift is.',
+    muscle:'hamstrings' },
+  { name:'Banded Sumo Squat', sub:'Legs', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Stand on the band with a wide stance and toes turned out, squat down - shifts more emphasis onto the inner thigh and glutes than a standard-stance Banded Squat.',
+    muscle:'quadriceps' },
 
   // ---- Core ----
   { name:'Plank', sub:'Core', measurementType:'time', usesDoorAnchor:false, anchorLevel:null,
@@ -11773,6 +11827,15 @@ const HOME_GYM_IDEAS = [
     muscle:'abdominals' },
   { name:'Commando Plank', sub:'Core', measurementType:'time', usesDoorAnchor:false, anchorLevel:null,
     hint:'Alternate between a forearm plank and a full push-up-position plank, one arm at a time - core strength plus a genuine shoulder and tricep hit along the way.',
+    muscle:'abdominals' },
+  { name:'Banded Russian Twist', sub:'Core', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 3',
+    hint:'Anchor at chest height to your side, hold the band with both hands and rotate away from the anchor - loaded rotation, a step up from the bodyweight twist once that gets easy.',
+    muscle:'abdominals' },
+  { name:'Banded Dead Bug', sub:'Core', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 1',
+    hint:'Anchor low behind your head, band held in both hands, press against it as you lower the opposite arm and leg in a dead bug - adds real resistance to a move that\'s normally bodyweight-only.',
+    muscle:'abdominals' },
+  { name:'Banded Anti-Rotation Hold', sub:'Core', measurementType:'time', usesDoorAnchor:true, anchorLevel:'Level 3',
+    hint:'Anchor at chest height to your side, press the band straight out in front of you and just resist it pulling you toward the anchor - the isometric version of a Pallof Press, and an easier place to start.',
     muscle:'abdominals' },
 
   // ---- Full Body ----
