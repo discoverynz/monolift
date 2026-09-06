@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.314';
+const APP_VERSION = 'Beta 5.315';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -5669,7 +5669,11 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   // to work with, without needing its own separate fetch.
   state._lastVisibleExercises = visibleExercises;
   state._lastDayTypeLabel = effectiveDayTypeLabel;
-  if ((state.selectedDay === todayWeekday() || isAnyDay(state.selectedDay)) && shouldShowDailyBrief()){
+  // Skipped entirely during Trip Mode - a home-routine "here's your muscle
+  // focus for today" briefing doesn't fit resistance-band/away-from-gym
+  // training the same way, and trip days are already a smaller, more
+  // improvised session than this is written for.
+  if (!isTripActive() && (state.selectedDay === todayWeekday() || isAnyDay(state.selectedDay)) && shouldShowDailyBrief()){
     showDailyBrief(visibleExercises, effectiveDayTypeLabel);
   }
 }
