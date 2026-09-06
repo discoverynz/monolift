@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.321';
+const APP_VERSION = 'Beta 5.322';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -16372,6 +16372,12 @@ async function getSharedExerciseCount(dayA, dayB){
   const userData = { user: await getCurrentUser() };
   if (!userData || !userData.user) return 0;
   const uid = userData.user.id;
+  // Without this, a heal still in flight (a real, catchable window right
+  // after opening the app) could read the flag as false when the account
+  // has actually been on the master schema for months, quietly checking the
+  // wrong table here and reporting "nothing shared" when the truth is
+  // unknown, not zero.
+  await awaitMasterFlagHealed();
   if (!getUseExerciseMasterFlag()) return 0; // legacy rows are day-specific copies - nothing can be "on both days" there
   const [resA, resB] = await Promise.all([
     withTimeout(supabaseClient.from('exercise_days').select('exercise_master_id').eq('user_id', uid).eq('weekday', dayA), 15000),
@@ -16385,6 +16391,10 @@ async function getSharedExerciseCount(dayA, dayB){
 async function getDayStats(weekday){
   const userData = { user: await getCurrentUser() };
   if (!userData || !userData.user) return { weekday, label: DAY_NAMES[weekday], exerciseCount: 0, setCount: 0 };
+  // Same reasoning as getSharedExerciseCount and performDaySwap - this reads
+  // exerciseTable()/exercise_master_id vs exercise_id downstream via
+  // fetchAllExercisesCompat, so it needs the flag settled first too.
+  await awaitMasterFlagHealed();
   const useMaster = getUseExerciseMasterFlag();
   const allExercises = await fetchAllExercisesCompat(userData.user.id);
   const exercises = allExercises.filter(ex => ex.weekday === weekday);
@@ -16474,6 +16484,16 @@ function openSwapDaysForm(){
 async function performDaySwap(dayA, dayB){
   const userData = { user: await getCurrentUser() };
   const uid = userData.user.id;
+  // Without this, a heal still in flight when this runs (a real window right
+  // after opening the app - go straight to Plan, swap immediately) could
+  // read the flag as false even though the account has actually been on the
+  // master schema for months. That would silently route every read and
+  // write in this whole function to the OLD exercises table instead of
+  // exercise_master/exercise_days - the swap would report success while
+  // never touching the plan actually being shown on Track, or worse,
+  // manipulating stale pre-migration rows nothing else reads. This is the
+  // same established pattern several other write paths already use.
+  await awaitMasterFlagHealed();
   const useMaster = getUseExerciseMasterFlag();
   const failures = [];
 
