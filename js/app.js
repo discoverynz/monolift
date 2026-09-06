@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.322';
+const APP_VERSION = 'Beta 5.323';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -83,6 +83,12 @@ async function ensureBandCategoryMerged(){
   try {
     const u = await getCurrentUser();
     if (!u) return;
+    // Fires on every Track render, right at boot, in parallel with the
+    // master-flag heal - without this, a heal still in flight could send
+    // this write to the wrong table, and the _bandCategoryMergeAttempted
+    // guard above means it would never retry this session even after the
+    // heal completes.
+    await awaitMasterFlagHealed();
     const table = exerciseTable();
     const result = await supabaseClient.from(table).update({ category: 'Bands' }).eq('user_id', u.id).eq('category', 'Band').select();
     const customs = getCustomCategories().filter(c => c !== 'Band');
@@ -3571,6 +3577,9 @@ async function openWipeAltGroupsScreen(){
   body.querySelector('#confirmWipeBtn').onclick = () => {
     showConfirmDialog(`This clears alt group tags from ${taggedCount} exercises. Nothing else is touched - names, weights, history, all stay exactly as they are.`, async () => {
       await withButtonLoading(body.querySelector('#confirmWipeBtn'), 'Wiping…', async () => {
+        // Destructive and irreversible - worth the wait even though this
+        // screen is rarely opened right at boot.
+        await awaitMasterFlagHealed();
         const table = exerciseTable();
         // Clear the references before deleting the groups, and only delete
         // if that clear genuinely succeeded - otherwise every exercise keeps
@@ -4098,6 +4107,7 @@ function openEditLocationEquipmentScreen(locationId, locationName, currentTags, 
         return false;
       }
       invalidateLocationsCache();
+      await awaitMasterFlagHealed();
       const table = exerciseTable();
       const errors = [];
       for (const key of pendingIds){
@@ -4208,6 +4218,7 @@ async function openManageLocationsScreen(){
           // Clear this location from every exercise's location_ids first, so
           // nothing points at a deleted row.
           const userData = { user: await getCurrentUser() };
+          await awaitMasterFlagHealed();
           const table = exerciseTable();
           const exResult = await withTimeout(supabaseClient.from(table).select('id, location_ids').eq('user_id', userData.user.id), 15000);
           // If this read fails, (exResult.data || []) is an empty list - which
@@ -5522,6 +5533,7 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
         onConfirm: async (newName) => {
           if (newName === oldName) return;
           const userData = { user: await getCurrentUser() };
+          await awaitMasterFlagHealed();
           const table = exerciseTable();
           const { error } = await supabaseClient.from(table)
             .update({ category: newName }).eq('user_id', userData.user.id).eq('category', oldName);
@@ -6065,6 +6077,7 @@ async function openUnconfirmedLocationsScreen(){
   // else a bulk location action exists in this app; Everywhere replaces
   // outright, since it's strictly broader than any specific list.
   async function bulkResolve(exercises, isEverywhere, locationIds){
+    await awaitMasterFlagHealed();
     const table = exerciseTable();
     const errors = [];
     for (const ex of exercises){
@@ -6085,6 +6098,7 @@ async function openUnconfirmedLocationsScreen(){
   // decided or corrected; this is for the (likely much larger) set that's
   // already sitting there correctly and just needs someone to say so.
   async function bulkAcceptAsShown(exercises, onDone){
+    await awaitMasterFlagHealed();
     const table = exerciseTable();
     const errors = [];
     for (const ex of exercises){
@@ -6263,6 +6277,7 @@ function openEditLocationsForm(exerciseId, exerciseName, onSaved){
 
   overlay.querySelector('#saveLocEditBtn').onclick = async () => {
     await withButtonLoading(overlay.querySelector('#saveLocEditBtn'), 'Saving…', async () => {
+      await awaitMasterFlagHealed();
       const table = exerciseTable();
       // An explicit save here means exactly what's checked, full stop - no
       // union, no merge. Empty selection is stored as null (available
@@ -6355,6 +6370,7 @@ function openEditMeasurementForm(exerciseId, exerciseName){
 
   overlay.querySelector('#saveMeasBtn').onclick = async () => {
     await withButtonLoading(overlay.querySelector('#saveMeasBtn'), 'Saving…', async () => {
+      await awaitMasterFlagHealed();
       const table = exerciseTable();
       const payload = {
         measurement_type: selectedType === 'weight' ? null : selectedType,
@@ -6503,6 +6519,7 @@ function openEditTagsForm(exerciseId, exerciseName){
   }
 
   overlay.querySelector('#saveTagsBtn').onclick = async () => { await withButtonLoading(overlay.querySelector('#saveTagsBtn'), 'Saving…', async () => {
+    await awaitMasterFlagHealed();
     const table = exerciseTable();
     await supabaseClient.from(table).update({ push_pull: pushPull, upper_lower: upperLower, location_ids: locationIds }).eq('id', exerciseId);
     overlay.remove();
@@ -6558,6 +6575,7 @@ function openEditLocationForm(exerciseId, exerciseName){
   }
 
   overlay.querySelector('#saveLocBtn').onclick = async () => { await withButtonLoading(overlay.querySelector('#saveLocBtn'), 'Saving…', async () => {
+    await awaitMasterFlagHealed();
     const table = exerciseTable();
     await supabaseClient.from(table).update({ location_ids: selectedIds }).eq('id', exerciseId);
     overlay.remove();
@@ -8116,6 +8134,7 @@ async function openSplitTagReview(){
       const btn = body.querySelector('#confirmSplitBtn');
       btn.textContent = 'Applying…';
       const toApply = proposals.filter(p => p.included && (p.pushPull || p.upperLower));
+      await awaitMasterFlagHealed();
       const table = exerciseTable();
       let successCount = 0;
       const errors = [];
@@ -8228,6 +8247,7 @@ async function openBulkLocationAssign(){
       body.querySelector('#confirmBulkLocBtn').onclick = async () => {
         const confirmBtn = body.querySelector('#confirmBulkLocBtn');
         confirmBtn.textContent = 'Saving…';
+        await awaitMasterFlagHealed();
         let successCount = 0;
         const errors = [];
         for (const n of names){
@@ -9531,6 +9551,7 @@ async function pickAltGroup(container, onPicked){
         e.stopPropagation();
         showConfirmDialog(`Exercises in "${btn.dataset.name}" will keep their names but lose the alt-group link.`, async () => {
           const userData = { user: await getCurrentUser() };
+          await awaitMasterFlagHealed();
           const memberTable = exerciseTable();
           // Clear the reference on every exercise pointing at this group first, so
           // nothing is left referencing a group that no longer exists.
@@ -9952,6 +9973,7 @@ async function openNewExerciseForm(opts){
           door_anchor_level: (usesDoorAnchor && selectedAnchorLevel) ? `Level ${selectedAnchorLevel}` : null
         });
         if (Object.keys(reuseUpdates).length){
+          await awaitMasterFlagHealed();
           const table = exerciseTable();
           await supabaseClient.from(table).update(reuseUpdates).eq('id', existingMatch.id);
           invalidateTrackSnapshots();
@@ -11182,6 +11204,10 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
       return;
     }
     if (needsLocationConfirm){
+      // This runs BEFORE saveEntry() further down, which already awaits the
+      // heal itself - that protection doesn't reach back to cover this
+      // earlier write, so it needs its own.
+      await awaitMasterFlagHealed();
       const table = exerciseTable();
       await supabaseClient.from(table).update({
         location_ids: pendingLocationIsEverywhere ? null : pendingLocationIds,
