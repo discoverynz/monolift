@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.317';
+const APP_VERSION = 'Beta 5.318';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -5625,7 +5625,7 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
       const trip = getTripMode();
       const { data: inserted, error } = await createExerciseForToday({
         user_id: userData.user.id, name: idea.name,
-        category: idea.equip === 'rings' ? 'Rings' : (idea.measurementType === 'band' ? 'Bands' : 'Other'),
+        category: ideaCategory(idea),
         weekday: state.selectedDay, alt_group_id: null,
         measurement_type: idea.measurementType === 'weight' ? null : idea.measurementType,
         uses_door_anchor: idea.usesDoorAnchor, door_anchor_level: idea.anchorLevel,
@@ -7200,7 +7200,7 @@ async function openPicker(initialTab, jumpToMuscle){
   let ideaFilter = 'All';
   let ideaGroupBy = 'equipment';
   let showKitRecs = false;
-  const EQUIPMENT_GROUP_LABEL = { band: 'Bands', bodyweight: 'Bodyweight', time: 'Timed Holds', rings: 'Rings' };
+  const EQUIPMENT_GROUP_LABEL = { band: 'Bands', bodyweight: 'Bodyweight', time: 'Timed Holds', rings: 'Rings', kettlebell: 'Kettlebell', medball: 'Medicine Ball', stabilityball: 'Exercise Ball', foamroll: 'Foam Roller' };
   function renderIdeasTab(){
     removeSideIndex();
     const body = overlay.querySelector('#pickerBody');
@@ -7251,7 +7251,7 @@ async function openPicker(initialTab, jumpToMuscle){
     `).join('');
 
     body.innerHTML = `
-      <div class="small" style="padding:10px 18px 8px 18px; color:var(--slate); line-height:1.5;">Bands, push-up handles, rings, and bodyweight - built to fit a hotel room or a small space. Tap + to add and log straight away.</div>
+      <div class="small" style="padding:10px 18px 8px 18px; color:var(--slate); line-height:1.5;">Bands, rings, bodyweight, and anything else you've got - a kettlebell, a medicine ball, an exercise ball. Built to fit a hotel room or a small space. Tap + to add and log straight away.</div>
       <div style="margin:0 18px 12px 18px; background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden;">
         <button id="kitRecsToggle" style="width:100%; display:flex; justify-content:space-between; align-items:center; padding:11px 13px; background:none; border:none; color:var(--chalk); text-align:left;">
           <span style="font-family:'Oswald',sans-serif; font-size:12.5px;">💡 Want a more complete home setup?</span>
@@ -7334,7 +7334,7 @@ async function openPicker(initialTab, jumpToMuscle){
     const locId = isAnyDay(state.selectedDay) ? null : effectiveLocationId();
     const { data: inserted, error } = await createExerciseForToday({
       user_id: userData.user.id, name: idea.name,
-      category: idea.equip === 'rings' ? 'Rings' : (idea.measurementType === 'band' ? 'Bands' : 'Other'),
+      category: ideaCategory(idea),
       weekday: state.selectedDay, alt_group_id: null,
       measurement_type: idea.measurementType === 'weight' ? null : idea.measurementType,
       uses_door_anchor: idea.usesDoorAnchor, door_anchor_level: idea.anchorLevel,
@@ -11523,6 +11523,17 @@ function openTimer(){
 // and specific to exactly the equipment this app already knows about.
 // subCategory drives the filter chips; noAnchor exists as its own flag
 // (rather than deriving it from !usesDoorAnchor) purely for filter clarity.
+// Which CATEGORIES bucket an idea lands in once actually added to the plan.
+// Kept in one place rather than duplicated at both add call sites (Track's
+// equipment-toggle add flow and the trip-mode quick-add) so they can't drift
+// apart from each other.
+function ideaCategory(idea){
+  if (idea.equip === 'rings') return 'Rings';
+  if (idea.equip === 'kettlebell' || idea.equip === 'medball') return 'Free Weights - No Bench';
+  if (idea.measurementType === 'band') return 'Bands';
+  return 'Other';
+}
+
 const HOME_GYM_IDEAS = [
   // ---- Pull ----
   { name:'Banded Pulldown', sub:'Pull', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 5',
@@ -11837,6 +11848,90 @@ const HOME_GYM_IDEAS = [
   { name:'Banded Anti-Rotation Hold', sub:'Core', measurementType:'time', usesDoorAnchor:true, anchorLevel:'Level 3',
     hint:'Anchor at chest height to your side, press the band straight out in front of you and just resist it pulling you toward the anchor - the isometric version of a Pallof Press, and an easier place to start.',
     muscle:'abdominals' },
+
+  // ---- Kettlebell ----
+  // The "complete home setup" tip above already recommends a kettlebell as
+  // the 4th thing worth owning once bands and a bar are covered - these are
+  // what actually backs that up. One bell covers pulling, pressing, hinging
+  // and full-body conditioning in a single compact object.
+  { name:'Kettlebell Swing', equip:'kettlebell', sub:'Legs', measurementType:'weight', usesDoorAnchor:false, anchorLevel:null,
+    hint:"Hike the bell back between your legs, then snap your hips forward to drive it to chest height - posterior chain and conditioning together, and the single move that justifies owning a kettlebell on its own.",
+    muscle:'glutes' },
+  { name:'Kettlebell Goblet Squat', equip:'kettlebell', sub:'Legs', measurementType:'weight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Hold the bell at your chest by the horns, squat down keeping your torso upright - a straighter, more knee-friendly torso angle than a barbell back squat.',
+    muscle:'quadriceps' },
+  { name:'Kettlebell Deadlift', equip:'kettlebell', sub:'Legs', measurementType:'weight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Hinge at the hips and lift the bell from the floor, keeping it close to your shins the whole way - the easiest equipment to actually learn the hip-hinge pattern with.',
+    muscle:'hamstrings' },
+  { name:'Kettlebell Row', equip:'kettlebell', sub:'Pull', measurementType:'weight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Hinge forward, one arm at a time, row the bell to your ribs - back, with a real progressive number to track instead of a band level.',
+    muscle:'lats' },
+  { name:'Kettlebell Clean and Press', equip:'kettlebell', sub:'Push', measurementType:'weight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Swing the bell up into a racked position at your shoulder, then press it overhead - full-body power into a strict press, one continuous movement.',
+    muscle:'shoulders' },
+  { name:'Kettlebell Snatch', equip:'kettlebell', sub:'Full Body', measurementType:'weight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'One explosive motion from between your legs straight to locked-out overhead - advanced, and one of the biggest conditioning hits a single kettlebell can give you.',
+    muscle:'shoulders' },
+  { name:'Kettlebell Turkish Get-Up', equip:'kettlebell', sub:'Full Body', measurementType:'weight', usesDoorAnchor:false, anchorLevel:null,
+    hint:"Bell locked out overhead, work your way from lying down to standing without ever letting your arm bend or the bell drift - slow, technical, and arguably the single best full-body stability exercise that exists.",
+    muscle:'shoulders' },
+  { name:'Kettlebell Windmill', equip:'kettlebell', sub:'Core', measurementType:'weight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'One arm locked overhead with the bell, hinge sideways at the hips and reach your other hand toward the floor - obliques and shoulder stability together.',
+    muscle:'abdominals' },
+  { name:'Kettlebell Halo', equip:'kettlebell', sub:'Core', measurementType:'weight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Hold the bell by the horns at chest height and circle it all the way around your head, leading with the elbows - shoulder mobility and core control in one slow, controlled loop.',
+    muscle:'shoulders' },
+  { name:'Kettlebell Farmer\'s Carry', equip:'kettlebell', sub:'Full Body', measurementType:'weight', usesDoorAnchor:false, anchorLevel:null,
+    hint:"Pick it up and walk - grip, traps and core all working just to keep you upright and moving in a straight line. As simple as training gets, and still genuinely hard.",
+    muscle:'forearms' },
+
+  // ---- Medicine Ball ----
+  { name:'Medicine Ball Slam', equip:'medball', sub:'Full Body', measurementType:'weight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Lift it overhead and slam it into the floor as hard as you can, catch the bounce or pick it back up - full-body power, and genuinely satisfying stress relief.',
+    muscle:'abdominals' },
+  { name:'Medicine Ball Russian Twist', equip:'medball', sub:'Core', measurementType:'weight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Seated, lean back slightly, rotate the ball to touch the floor on each side - loaded rotation, a natural step up once the bodyweight version gets easy.',
+    muscle:'abdominals' },
+  { name:'Medicine Ball Wall Chest Pass', equip:'medball', sub:'Push', measurementType:'weight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Explosively pass the ball into a wall from your chest and catch the rebound - trains the chest to produce force fast, not just move slow and heavy.',
+    muscle:'chest' },
+  { name:'Medicine Ball Rotational Throw', equip:'medball', sub:'Core', measurementType:'weight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Stand side-on to a wall, rotate through your hips and throw the ball explosively against it, catch the rebound - rotational power, the athletic movement pattern a plank never trains.',
+    muscle:'abdominals' },
+  { name:'Medicine Ball Overhead Squat to Press', equip:'medball', sub:'Full Body', measurementType:'weight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Hold the ball locked out overhead through a full squat, then press it a little higher at the top - shoulders and legs under tension together the whole rep.',
+    muscle:'quadriceps' },
+  { name:'Medicine Ball Sit-Up Throw', equip:'medball', sub:'Core', measurementType:'weight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Lying down holding the ball on your chest, sit up and throw it against a wall in front of you at the top, catch it on the way back down - a sit-up with real explosive intent behind it.',
+    muscle:'abdominals' },
+
+  // ---- Exercise Ball ----
+  { name:'Stability Ball Hamstring Curl', equip:'stabilityball', sub:'Legs', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Lying on your back with heels on the ball, lift your hips and curl the ball toward you - a genuine hamstring curl with no machine.',
+    muscle:'hamstrings' },
+  { name:'Stability Ball Push-Up', equip:'stabilityball', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Hands on the ball instead of the floor - the instability makes your chest and shoulders work much harder just to keep you steady.',
+    muscle:'chest' },
+  { name:'Stability Ball Pike', equip:'stabilityball', sub:'Core', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Feet on the ball in a plank position, pike your hips up toward the ceiling while rolling the ball toward your hands - core and shoulders, and genuinely hard once you find your balance.',
+    muscle:'abdominals' },
+  { name:'Stability Ball Wall Squat', equip:'stabilityball', sub:'Legs', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Ball wedged between your lower back and a wall, squat down and back up - the ball tracks with you and takes some strain off the knees compared to a free squat.',
+    muscle:'quadriceps' },
+  { name:'Stability Ball Plank', equip:'stabilityball', sub:'Core', measurementType:'time', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Forearms on the ball instead of the floor - a normal plank hold with a genuine balance demand added on top.',
+    muscle:'abdominals' },
+  { name:'Stability Ball Russian Twist', equip:'stabilityball', sub:'Core', measurementType:'time', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Shoulders on the ball, hips up, rotate your torso side to side - core and the stabilizers around the hips, working the whole time just to hold position.',
+    muscle:'abdominals' },
+
+  // ---- Foam Roller ----
+  { name:'Foam Roller Plank', equip:'foamroll', sub:'Core', measurementType:'time', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Forearms on the roller instead of the floor - the roll of it under you adds a real balance and stability demand to an otherwise familiar hold.',
+    muscle:'abdominals' },
+  { name:'Foam Roller Hamstring Bridge', equip:'foamroll', sub:'Legs', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Heels on the roller, lift your hips into a bridge - same idea as the stability ball version, using whichever one you actually own.',
+    muscle:'hamstrings' },
 
   // ---- Full Body ----
   // Compound, no-equipment movements that don't sit neatly under one of
