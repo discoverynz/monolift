@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.324';
+const APP_VERSION = 'Beta 5.325';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -90,7 +90,7 @@ async function ensureBandCategoryMerged(){
     // heal completes.
     await awaitMasterFlagHealed();
     const table = exerciseTable();
-    const result = await supabaseClient.from(table).update({ category: 'Bands' }).eq('user_id', u.id).eq('category', 'Band').select();
+    const result = await withTimeout(supabaseClient.from(table).update({ category: 'Bands' }).eq('user_id', u.id).eq('category', 'Band').select(), 15000);
     const customs = getCustomCategories().filter(c => c !== 'Band');
     localStorage.setItem(CUSTOM_CATEGORIES_KEY, JSON.stringify(customs));
     // Only re-render if something actually changed - otherwise this fires
@@ -1565,7 +1565,8 @@ async function withButtonLoading(btn, loadingText, asyncFn){
 }
 
 async function insertExerciseSafely(payload){
-  const result = await supabaseClient.from('exercises').insert(payload).select();
+  const result = await withTimeout(supabaseClient.from('exercises').insert(payload).select(), 15000);
+  if (result.__timeout) return { data: null, error: { message: 'Request timed out' }, wasExisting: false };
   if (!result.error) return { data: result.data, error: null, wasExisting: false };
   if (result.error.code === '23505'){
     const existing = await withTimeout(
@@ -1661,12 +1662,13 @@ async function fetchAllExercisesCompat(uid){
 // these need to be two separate calls against two different tables.
 async function moveExerciseToDay(item, newWeekday, clearAlt){
   invalidateTrackSnapshots(); // day contents change - stale snapshot must not survive
+  await awaitMasterFlagHealed();
   const results = [];
   if (!getUseExerciseMasterFlag()){
     for (const id of item.ids){
       const payload = { weekday: newWeekday };
       if (clearAlt) payload.alt_group_id = null;
-      const { data, error } = await supabaseClient.from('exercises').update(payload).eq('id', id).select();
+      const { data, error } = await withTimeout(supabaseClient.from('exercises').update(payload).eq('id', id).select(), 15000);
       results.push({ id, ok: !error && data && data.length > 0, error: error ? error.message : (!data || !data.length ? 'update matched zero rows' : null) });
     }
     return results;
@@ -1690,13 +1692,13 @@ async function moveExerciseToDay(item, newWeekday, clearAlt){
     results.push({ id: existing.data.id, ok: true, error: null }); // already exists, nothing to do
   } else {
     const userData = { user: await getCurrentUser() };
-    const { data, error } = await supabaseClient.from('exercise_days').insert({
+    const { data, error } = await withTimeout(supabaseClient.from('exercise_days').insert({
       user_id: userData.user.id, exercise_master_id: item.masterId, weekday: newWeekday
-    }).select();
+    }).select(), 15000);
     results.push({ id: data && data[0] ? data[0].id : null, ok: !error && data && data.length > 0, error: error ? error.message : null });
   }
   if (clearAlt && item.masterId){
-    await supabaseClient.from('exercise_master').update({ alt_group_id: null }).eq('id', item.masterId);
+    await withTimeout(supabaseClient.from('exercise_master').update({ alt_group_id: null }).eq('id', item.masterId), 15000);
   }
   return results;
 }
@@ -1707,11 +1709,12 @@ async function moveExerciseToDay(item, newWeekday, clearAlt){
 // itself may still be legitimately placed on other days.
 async function removeExerciseFromDay(exerciseRow){
   invalidateTrackSnapshots(); // day contents change - stale snapshot must not survive
+  await awaitMasterFlagHealed();
   if (!getUseExerciseMasterFlag()){
-    const { data, error } = await supabaseClient.from('exercises').update({ active: false }).eq('id', exerciseRow.id).select();
+    const { data, error } = await withTimeout(supabaseClient.from('exercises').update({ active: false }).eq('id', exerciseRow.id).select(), 15000);
     return { ok: !error && data && data.length > 0, error: error ? error.message : (!data || !data.length ? 'update matched zero rows' : null) };
   }
-  const { data, error } = await supabaseClient.from('exercise_days').delete().eq('id', exerciseRow.id).select();
+  const { data, error } = await withTimeout(supabaseClient.from('exercise_days').delete().eq('id', exerciseRow.id).select(), 15000);
   return { ok: !error && data && data.length > 0, error: error ? error.message : (!data || !data.length ? 'delete matched zero rows' : null) };
 }
 
@@ -1784,10 +1787,10 @@ async function createExerciseForToday(payload){
     masterId = existing.id;
     const updates = computeExerciseReuseUpdates(existing, payload);
     if (Object.keys(updates).length){
-      await supabaseClient.from('exercise_master').update(updates).eq('id', masterId);
+      await withTimeout(supabaseClient.from('exercise_master').update(updates).eq('id', masterId), 15000);
     }
   } else {
-    const { data: inserted, error } = await supabaseClient.from('exercise_master').insert({
+    const { data: inserted, error } = await withTimeout(supabaseClient.from('exercise_master').insert({
       user_id: payload.user_id, name: payload.name, category: payload.category,
       alt_group_id: payload.alt_group_id || null, push_pull: payload.push_pull || null,
       upper_lower: payload.upper_lower || null,
@@ -1799,15 +1802,16 @@ async function createExerciseForToday(payload){
       location_confirmed: !!payload.location_confirmed,
       measurement_type: payload.measurement_type || null,
       uses_door_anchor: !!payload.uses_door_anchor, door_anchor_level: payload.door_anchor_level || null
-    }).select();
+    }).select(), 15000);
     if (error || !inserted || !inserted[0]) return { data: null, error: error || { message: 'Could not create exercise' }, wasExisting: false };
     masterId = inserted[0].id;
   }
-  const dayResult = await supabaseClient.from('exercise_days').insert({
+  const dayResult = await withTimeout(supabaseClient.from('exercise_days').insert({
     user_id: payload.user_id, exercise_master_id: masterId, weekday: payload.weekday
-  });
+  }), 15000);
   // A unique-violation here just means this exercise is already on this day -
   // not a real error, the exercise still exists and is still usable.
+  if (dayResult.__timeout) return { data: null, error: { message: 'Request timed out' }, wasExisting: false };
   if (dayResult.error && dayResult.error.code !== '23505') return { data: null, error: dayResult.error, wasExisting: false };
   return { data: [{ id: masterId, name: payload.name, category: payload.category }], error: null, wasExisting: !!dayResult.error };
 }
@@ -1855,8 +1859,8 @@ function setDefaultLocationId(id){
   (async () => {
     const userData = { user: await getCurrentUser() };
     if (!userData || !userData.user) return;
-    await supabaseClient.from('locations').update({ is_default: false }).eq('user_id', userData.user.id).eq('is_default', true);
-    if (id) await supabaseClient.from('locations').update({ is_default: true }).eq('id', id);
+    await withTimeout(supabaseClient.from('locations').update({ is_default: false }).eq('user_id', userData.user.id).eq('is_default', true), 15000);
+    if (id) await withTimeout(supabaseClient.from('locations').update({ is_default: true }).eq('id', id), 15000);
     invalidateLocationsCache();
   })().catch(() => {}); // is_default column may not exist yet if the migration hasn't run - fail silently, localStorage still works
 }
@@ -2292,12 +2296,12 @@ async function quickSaveSet(exerciseId, exerciseName, best){
   if (weight !== null && (unit === 'kg' || unit === 'lb')){
     // Sibling-aware PR check - see saveEntry for rationale.
     const siblingTable = useMaster ? 'exercise_master' : 'exercises';
-    const siblingsResult = await supabaseClient.from(siblingTable).select('id').eq('user_id', userData.user.id).ilike('name', exerciseName);
+    const siblingsResult = await withTimeout(supabaseClient.from(siblingTable).select('id').eq('user_id', userData.user.id).ilike('name', exerciseName), 15000);
     const siblingIds = (siblingsResult.data && siblingsResult.data.length) ? siblingsResult.data.map(r => r.id) : [exerciseId];
-    const prevSets = await supabaseClient.from('sets')
+    const prevSets = await withTimeout(supabaseClient.from('sets')
       .select('weight, weight_unit')
       .in(idField, siblingIds)
-      .in('weight_unit', ['kg','lb']);
+      .in('weight_unit', ['kg','lb']), 15000);
     if (prevSets.data && prevSets.data.length){
       priorBest = Math.max(...prevSets.data.map(s => convertWeight(s.weight, s.weight_unit, unit)));
     }
@@ -3336,7 +3340,7 @@ async function openRetagLocationFromNotesScreen(){
     const errors = [];
     for (const s of [...toSmales, ...toFuncFit]){
       const targetId = toSmales.includes(s) ? smalesLoc.id : funcFitLoc.id;
-      const { error } = await supabaseClient.from('sets').update({ location_id: targetId }).eq('id', s.id);
+      const { error } = await withTimeout(supabaseClient.from('sets').update({ location_id: targetId }).eq('id', s.id), 15000);
       if (error) errors.push({ setId: s.id, message: error.message });
       else updated++;
     }
@@ -3930,7 +3934,7 @@ async function openPublishToMonoLiftScreen(){
       const rows = Object.entries(selected)
         .filter(([, v]) => v.muscle && v.equipment)
         .map(([name, v]) => ({ name, primary_muscle: v.muscle, equipment: v.equipment, contributed_by: userData.user.id }));
-      const { error } = await supabaseClient.from('zealift_exercise_db').insert(rows);
+      const { error } = await withTimeout(supabaseClient.from('zealift_exercise_db').insert(rows), 15000);
       if (error){
         alert(`Could not publish: ${error.message}\n\nIf this mentions a missing table, the MonoLift database migration needs to be run first.`);
         return;
@@ -4094,12 +4098,12 @@ function openEditLocationEquipmentScreen(locationId, locationName, currentTags, 
       const notesEl = overlay.querySelector('#locNotes');
       const updatePayload = { equipment_tags: [...selected] };
       if (notesEl) updatePayload.notes = notesEl.value.trim() || null;
-      let { error } = await supabaseClient.from('locations').update(updatePayload).eq('id', locationId);
+      let { error } = await withTimeout(supabaseClient.from('locations').update(updatePayload).eq('id', locationId), 15000);
       // If the notes column doesn't exist yet, don't let that block saving
       // the equipment tags - retry without it rather than failing the whole
       // save for a field the migration may not have added.
       if (error && /notes/i.test(error.message || '')){
-        const retry = await supabaseClient.from('locations').update({ equipment_tags: [...selected] }).eq('id', locationId);
+        const retry = await withTimeout(supabaseClient.from('locations').update({ equipment_tags: [...selected] }).eq('id', locationId), 15000);
         error = retry.error;
       }
       if (error){
@@ -4208,7 +4212,7 @@ async function openManageLocationsScreen(){
       btn.onclick = () => {
         promptText({
           title: 'Rename Location', placeholder: 'Name', initialValue: btn.dataset.name,
-          onConfirm: async (newName) => { await supabaseClient.from('locations').update({ name: newName }).eq('id', btn.dataset.id); invalidateLocationsCache(); render(); }
+          onConfirm: async (newName) => { await withTimeout(supabaseClient.from('locations').update({ name: newName }).eq('id', btn.dataset.id), 15000); invalidateLocationsCache(); render(); }
         });
       };
     });
@@ -4343,7 +4347,7 @@ function openEditDayTypeForm(weekday, currentLabel){
     await withButtonLoading(overlay.querySelector('#saveDTBtn'), 'Saving…', async () => {
       const userData = { user: await getCurrentUser() };
       invalidateTrackSnapshots();
-      await supabaseClient.from('day_types').upsert({ user_id: userData.user.id, weekday, label }, { onConflict: 'user_id,weekday' });
+      await withTimeout(supabaseClient.from('day_types').upsert({ user_id: userData.user.id, weekday, label }, { onConflict: 'user_id,weekday' }), 15000);
       invalidateDayTypesCache();
       overlay.remove();
       if (state.currentTab === 'track') renderTrack();
@@ -4653,10 +4657,10 @@ function showOnboarding(mode){
         }
         for (let i = 0; i < 7; i++){
           if (preserveExisting && existingByWeekday[i]) continue;
-          await supabaseClient.from('day_types').upsert(
+          await withTimeout(supabaseClient.from('day_types').upsert(
             { user_id: userData.user.id, weekday: i, label: wiz.week[i] },
             { onConflict: 'user_id,weekday' }
-          );
+          ), 15000);
         }
         invalidateDayTypesCache();
         if (wiz.superset !== null){
@@ -4668,7 +4672,7 @@ function showOnboarding(mode){
             const created = await createLocation(loc.name);
             if (!created) continue;
             if (loc.equipment_tags.length){
-              await supabaseClient.from('locations').update({ equipment_tags: loc.equipment_tags }).eq('id', created.id);
+              await withTimeout(supabaseClient.from('locations').update({ equipment_tags: loc.equipment_tags }).eq('id', created.id), 15000);
               invalidateLocationsCache();
             }
             if (i === wiz.defaultLocationIdx) setDefaultLocationId(created.id);
@@ -5535,8 +5539,8 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
           const userData = { user: await getCurrentUser() };
           await awaitMasterFlagHealed();
           const table = exerciseTable();
-          const { error } = await supabaseClient.from(table)
-            .update({ category: newName }).eq('user_id', userData.user.id).eq('category', oldName);
+          const { error } = await withTimeout(supabaseClient.from(table)
+            .update({ category: newName }).eq('user_id', userData.user.id).eq('category', oldName), 15000);
           if (error){ alert(error.message); return; }
           addCustomCategory(newName);
           renderTrack();
@@ -5826,15 +5830,15 @@ function openRenameExerciseForm(exerciseId, exerciseName){
         else { reportDuplicateSyncFailures(succeeded, idList.length, failed); }
       } else if (scope === 'everywhere'){
         // Rename all rows sharing the old name (an exercise can exist on multiple days), so history stays consistent.
-        ({ error } = await supabaseClient.from('exercises')
+        ({ error } = await withTimeout(supabaseClient.from('exercises')
           .update({ name: newName })
           .eq('user_id', userData.user.id)
-          .eq('name', exerciseName));
+          .eq('name', exerciseName), 15000));
       } else {
         // Just this one row, identified by id - other days keep the original name.
-        ({ error } = await supabaseClient.from('exercises')
+        ({ error } = await withTimeout(supabaseClient.from('exercises')
           .update({ name: newName })
-          .eq('id', exerciseId));
+          .eq('id', exerciseId), 15000));
       }
       if (error){ alert(error.message); return; }
       overlay.remove();
@@ -5872,7 +5876,7 @@ function openEditAltGroupForm(exerciseId, exerciseName){
       const { succeeded, failed } = await syncFieldAcrossDuplicates('exercise_master', idList, { alt_group_id: picked ? picked.id : null });
       reportDuplicateSyncFailures(succeeded, idList.length, failed);
     } else {
-      await supabaseClient.from(table).update({ alt_group_id: picked ? picked.id : null }).eq('id', exerciseId);
+      await withTimeout(supabaseClient.from(table).update({ alt_group_id: picked ? picked.id : null }).eq('id', exerciseId), 15000);
     }
     overlay.remove();
     if (state.currentTab === 'track') renderTrack();
@@ -6286,7 +6290,7 @@ function openEditLocationsForm(exerciseId, exerciseName, onSaved){
       // it should mark the exercise confirmed too, or the log form's own
       // "Where is this available?" prompt would ask the very same question
       // again the next time it's logged, right after being answered here.
-      const { error } = await supabaseClient.from(table).update({ location_ids: selectedIds.length ? selectedIds : null, location_confirmed: true }).eq('id', exerciseId);
+      const { error } = await withTimeout(supabaseClient.from(table).update({ location_ids: selectedIds.length ? selectedIds : null, location_confirmed: true }).eq('id', exerciseId), 15000);
       if (error){ alert(error.message); return; }
       invalidateTrackSnapshots();
       warmInvalidate();
@@ -6377,7 +6381,7 @@ function openEditMeasurementForm(exerciseId, exerciseName){
         uses_door_anchor: selectedType === 'band' ? usesDoorAnchor : false,
         door_anchor_level: (selectedType === 'band' && usesDoorAnchor && selectedLevel) ? `Level ${selectedLevel}` : null
       };
-      const { error } = await supabaseClient.from(table).update(payload).eq('id', exerciseId);
+      const { error } = await withTimeout(supabaseClient.from(table).update(payload).eq('id', exerciseId), 15000);
       if (error){ alert(error.message); return; }
       invalidateTrackSnapshots();
       warmInvalidate();
@@ -6521,7 +6525,7 @@ function openEditTagsForm(exerciseId, exerciseName){
   overlay.querySelector('#saveTagsBtn').onclick = async () => { await withButtonLoading(overlay.querySelector('#saveTagsBtn'), 'Saving…', async () => {
     await awaitMasterFlagHealed();
     const table = exerciseTable();
-    await supabaseClient.from(table).update({ push_pull: pushPull, upper_lower: upperLower, location_ids: locationIds }).eq('id', exerciseId);
+    await withTimeout(supabaseClient.from(table).update({ push_pull: pushPull, upper_lower: upperLower, location_ids: locationIds }).eq('id', exerciseId), 15000);
     overlay.remove();
     if (state.currentTab === 'track') renderTrack();
   }); };
@@ -6577,7 +6581,7 @@ function openEditLocationForm(exerciseId, exerciseName){
   overlay.querySelector('#saveLocBtn').onclick = async () => { await withButtonLoading(overlay.querySelector('#saveLocBtn'), 'Saving…', async () => {
     await awaitMasterFlagHealed();
     const table = exerciseTable();
-    await supabaseClient.from(table).update({ location_ids: selectedIds }).eq('id', exerciseId);
+    await withTimeout(supabaseClient.from(table).update({ location_ids: selectedIds }).eq('id', exerciseId), 15000);
     overlay.remove();
     if (state.currentTab === 'track') renderTrack();
   }); };
@@ -6822,7 +6826,7 @@ function openEditSetForm(setData, onSaved){
         payload.band_resistance = combined ? combined.value : null;
         payload.band_resistance_unit = combined ? combined.unit : null;
       }
-      const { error } = await supabaseClient.from('sets').update(payload).eq('id', setData.id);
+      const { error } = await withTimeout(supabaseClient.from('sets').update(payload).eq('id', setData.id), 15000);
       if (error){ alert(error.message); return; }
       invalidateTrackSnapshots();
       overlay.remove();
@@ -6852,7 +6856,7 @@ function confirmDeleteLog(setId, onDeleted){
     deleting = true;
     overlay.remove();
     invalidateTrackSnapshots();
-    await supabaseClient.from('sets').delete().eq('id', setId);
+    await withTimeout(supabaseClient.from('sets').delete().eq('id', setId), 15000);
     onDeleted();
   };
 }
@@ -6869,7 +6873,7 @@ function showUndoLastLogToast(setId){
   toast.querySelector('#undoLogBtn').onclick = async () => {
     clearTimeout(timer); toast.remove();
     invalidateTrackSnapshots();
-    await supabaseClient.from('sets').delete().eq('id', setId);
+    await withTimeout(supabaseClient.from('sets').delete().eq('id', setId), 15000);
     if (state.currentTab === 'track') renderTrack();
   };
 }
@@ -7635,7 +7639,7 @@ async function openPicker(initialTab, jumpToMuscle){
                   reportDuplicateSyncFailures(res.succeeded, ids.length, res.failed);
                 }
               } else {
-                await supabaseClient.from('exercises').update({ name: newName }).eq('user_id', userData.user.id).ilike('name', item.name);
+                await withTimeout(supabaseClient.from('exercises').update({ name: newName }).eq('user_id', userData.user.id).ilike('name', item.name), 15000);
               }
               selection.active = false;
               selection.items.clear();
@@ -8019,6 +8023,7 @@ async function openAutoAltReview(){
       const toJoin = joinProposals.filter(j => j.included);
       const toAddAsAlt = suggestions.filter(s => s.picked);
       const userData = { user: await getCurrentUser() };
+      await awaitMasterFlagHealed();
       const useMaster = getUseExerciseMasterFlag();
       const memberTable = useMaster ? 'exercise_master' : 'exercises';
       for (const p of toApply){
@@ -8029,11 +8034,11 @@ async function openAutoAltReview(){
         const groupId = insertResult.__timeout || !insertResult.data ? null : insertResult.data[0].id;
         if (!groupId) continue;
         for (const m of p.members){
-          await supabaseClient.from(memberTable).update({ alt_group_id: groupId }).eq('id', m.id);
+          await withTimeout(supabaseClient.from(memberTable).update({ alt_group_id: groupId }).eq('id', m.id), 15000);
         }
       }
       for (const j of toJoin){
-        await supabaseClient.from(memberTable).update({ alt_group_id: j.groupId }).eq('id', j.exercise.id);
+        await withTimeout(supabaseClient.from(memberTable).update({ alt_group_id: j.groupId }).eq('id', j.exercise.id), 15000);
       }
       for (const s of toAddAsAlt){
         const insertResult = await withTimeout(
@@ -8053,9 +8058,9 @@ async function openAutoAltReview(){
           location_ids: s.forExercise.location_ids || null,
           location_confirmed: true
         });
-        await supabaseClient.from(memberTable).update({ alt_group_id: groupId }).eq('id', s.forExercise.id);
+        await withTimeout(supabaseClient.from(memberTable).update({ alt_group_id: groupId }).eq('id', s.forExercise.id), 15000);
         if (created.data && created.data[0] && getUseExerciseMasterFlag()){
-          await supabaseClient.from('exercise_master').update({ alt_group_id: groupId }).eq('id', created.data[0].id);
+          await withTimeout(supabaseClient.from('exercise_master').update({ alt_group_id: groupId }).eq('id', created.data[0].id), 15000);
         }
       }
       overlay.remove();
@@ -8161,7 +8166,7 @@ async function openSplitTagReview(){
       const errors = [];
       for (const p of toApply){
         for (const id of p.ids){
-          const { error } = await supabaseClient.from(table).update({ push_pull: p.pushPull, upper_lower: p.upperLower }).eq('id', id);
+          const { error } = await withTimeout(supabaseClient.from(table).update({ push_pull: p.pushPull, upper_lower: p.upperLower }).eq('id', id), 15000);
           if (error){ errors.push(`${p.name}: ${error.message}`); }
           else { successCount++; }
         }
@@ -8285,7 +8290,7 @@ async function openBulkLocationAssign(){
             const updated = isChecked
               ? [...new Set([...existing, locId])]
               : existing.filter(id2 => id2 !== locId);
-            const { error } = await supabaseClient.from(table).update({ location_ids: updated }).eq('id', id);
+            const { error } = await withTimeout(supabaseClient.from(table).update({ location_ids: updated }).eq('id', id), 15000);
             if (error){ errors.push(`${n}: ${error.message}`); }
             else { successCount++; }
           }
@@ -8720,7 +8725,7 @@ async function openBackupPlanScreen(){
         promptText({
           title: 'Rename Plan', placeholder: 'Name', initialValue: btn.dataset.name,
           onConfirm: async (newName) => {
-            await supabaseClient.from('plan_backups').update({ name: newName }).eq('id', btn.dataset.id);
+            await withTimeout(supabaseClient.from('plan_backups').update({ name: newName }).eq('id', btn.dataset.id), 15000);
             renderList();
           }
         });
@@ -8730,7 +8735,7 @@ async function openBackupPlanScreen(){
       btn.onclick = (e) => {
         e.stopPropagation();
         showConfirmDialog('This cannot be undone.', async () => {
-          await supabaseClient.from('plan_backups').delete().eq('id', btn.dataset.id);
+          await withTimeout(supabaseClient.from('plan_backups').delete().eq('id', btn.dataset.id), 15000);
           renderList();
         }, { title: 'Delete This Saved Plan?', danger: true, confirmLabel: 'Delete' });
       };
@@ -8899,10 +8904,10 @@ async function openChangeSingleDay(){
         // reorganizer already guards against. Manual/Custom is skipped since
         // there's no single category name to derive a label from.
         if (newCategory !== 'custom'){
-          await supabaseClient.from('day_types').upsert(
+          await withTimeout(supabaseClient.from('day_types').upsert(
             { user_id: userData.user.id, weekday: targetDay, label: SPLIT_CATEGORY_LABELS[newCategory] || cap(newCategory) },
             { onConflict: 'user_id,weekday' }
-          );
+          ), 15000);
           invalidateDayTypesCache();
         }
         overlay.remove();
@@ -9447,10 +9452,10 @@ async function openPlanReorganizer(){
       for (const dp of dayPlans){
         if (dp.isCustom) continue;
         if (!dayAssignments[dp.dayIdx]) continue; // day wasn't reorganized, leave its label alone
-        await supabaseClient.from('day_types').upsert(
+        await withTimeout(supabaseClient.from('day_types').upsert(
           { user_id: userData.user.id, weekday: dp.dayIdx, label: dp.catLabel },
           { onConflict: 'user_id,weekday' }
-        );
+        ), 15000);
       }
       invalidateDayTypesCache();
 
@@ -9489,14 +9494,15 @@ async function revertLastReorganization(){
   const raw = localStorage.getItem('zealift_reorg_snapshot');
   if (!raw){ alert('No reorganization to revert.'); return; }
   const { snapshot } = JSON.parse(raw);
-  const useMaster = getUseExerciseMasterFlag();
-  const table = useMaster ? 'exercise_days' : 'exercises';
   showConfirmDialog(`Restore ${snapshot.length} exercises to their previous days?`, async () => {
+    await awaitMasterFlagHealed();
+    const useMaster = getUseExerciseMasterFlag();
+    const table = useMaster ? 'exercise_days' : 'exercises';
     const userData = { user: await getCurrentUser() };
     let recreated = 0, updated = 0, failed = 0;
     for (const item of snapshot){
-      const result = await supabaseClient.from(table).update({ weekday: item.weekday }).eq('id', item.id).select();
-      if (!result.error && result.data && result.data.length){
+      const result = await withTimeout(supabaseClient.from(table).update({ weekday: item.weekday }).eq('id', item.id).select(), 15000);
+      if (!result.__timeout && !result.error && result.data && result.data.length){
         updated++;
         continue;
       }
@@ -9509,14 +9515,14 @@ async function revertLastReorganization(){
       if (useMaster && item.masterId && userData && userData.user){
         // Guard against creating a duplicate link if the user already
         // manually re-added this exercise to this day before hitting Revert.
-        const existingResult = await supabaseClient.from('exercise_days').select('id').eq('user_id', userData.user.id).eq('exercise_master_id', item.masterId).eq('weekday', item.weekday).limit(1);
-        if (!existingResult.error && existingResult.data && existingResult.data.length){
+        const existingResult = await withTimeout(supabaseClient.from('exercise_days').select('id').eq('user_id', userData.user.id).eq('exercise_master_id', item.masterId).eq('weekday', item.weekday).limit(1), 15000);
+        if (!existingResult.__timeout && !existingResult.error && existingResult.data && existingResult.data.length){
           updated++; // already present - count as restored, nothing to do
           continue;
         }
-        const { error: insertError } = await supabaseClient.from('exercise_days').insert({
+        const { error: insertError } = await withTimeout(supabaseClient.from('exercise_days').insert({
           user_id: userData.user.id, exercise_master_id: item.masterId, weekday: item.weekday
-        });
+        }), 15000);
         if (!insertError) recreated++; else failed++;
       } else {
         failed++;
@@ -9558,7 +9564,7 @@ async function pickAltGroup(container, onPicked){
           title: 'Rename Alt Group', placeholder: 'Group name', initialValue: btn.dataset.name,
           onConfirm: async (newName) => {
             if (newName === btn.dataset.name) return;
-            const { error } = await supabaseClient.from('alt_groups').update({ name: newName }).eq('id', btn.dataset.id);
+            const { error } = await withTimeout(supabaseClient.from('alt_groups').update({ name: newName }).eq('id', btn.dataset.id), 15000);
             if (error){ alert(error.message); return; }
             const g = groups.find(g => g.id === btn.dataset.id);
             if (g) g.name = newName;
@@ -9996,7 +10002,7 @@ async function openNewExerciseForm(opts){
         if (Object.keys(reuseUpdates).length){
           await awaitMasterFlagHealed();
           const table = exerciseTable();
-          await supabaseClient.from(table).update(reuseUpdates).eq('id', existingMatch.id);
+          await withTimeout(supabaseClient.from(table).update(reuseUpdates).eq('id', existingMatch.id), 15000);
           invalidateTrackSnapshots();
         }
         alert(`"${name}" already exists on ${dayNameOf(selectedDay)} - opening it instead of creating a duplicate.`);
@@ -11230,10 +11236,10 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
       // earlier write, so it needs its own.
       await awaitMasterFlagHealed();
       const table = exerciseTable();
-      await supabaseClient.from(table).update({
+      await withTimeout(supabaseClient.from(table).update({
         location_ids: pendingLocationIsEverywhere ? null : pendingLocationIds,
         location_confirmed: true
-      }).eq('id', exerciseId);
+      }).eq('id', exerciseId), 15000);
       needsLocationConfirm = false; // answered - don't ask again even if this save method gets called twice
       warmInvalidate();
     }
@@ -12270,7 +12276,7 @@ function openBandForm(existing, allBands, onDone){
     showConfirmDialog(
       `Delete the ${existing.label} band? Sets you've already logged with it keep their recorded details — nothing in your history changes.`,
       async () => {
-        await supabaseClient.from('bands').delete().eq('id', existing.id);
+        await withTimeout(supabaseClient.from('bands').delete().eq('id', existing.id), 15000);
         warmInvalidate('bands');
         overlay.remove();
         onDone && onDone();
@@ -12284,15 +12290,15 @@ function openBandForm(existing, allBands, onDone){
       const u = await getCurrentUser();
       if (!u) return;
       if (existing){
-        const { error } = await supabaseClient.from('bands')
-          .update({ label, colour, resistance, resistance_unit: unit }).eq('id', existing.id);
+        const { error } = await withTimeout(supabaseClient.from('bands')
+          .update({ label, colour, resistance, resistance_unit: unit }).eq('id', existing.id), 15000);
         if (error){ alert(error.message); return; }
       } else {
         // New bands go to the end; the user reorders from the list.
         const maxOrder = (allBands || []).reduce((m, b) => Math.max(m, b.sort_order || 0), 0);
-        const { error } = await supabaseClient.from('bands').insert({
+        const { error } = await withTimeout(supabaseClient.from('bands').insert({
           user_id: u.id, label, colour, resistance, resistance_unit: unit, sort_order: maxOrder + 1
-        });
+        }), 15000);
         if (error){ alert(error.message); return; }
       }
       warmInvalidate('bands');
@@ -13231,8 +13237,8 @@ function openBodyProfileForm(existing){
       return;
     }
     const userData = { user: await getCurrentUser() };
-    const { error } = await supabaseClient.from('phase_settings')
-      .upsert({ user_id: userData.user.id, height_cm: Math.round(h * 10) / 10, bf_formula: formula }, { onConflict: 'user_id' });
+    const { error } = await withTimeout(supabaseClient.from('phase_settings')
+      .upsert({ user_id: userData.user.id, height_cm: Math.round(h * 10) / 10, bf_formula: formula }, { onConflict: 'user_id' }), 15000);
     if (error){ alert(error.message); return; }
     overlay.remove();
     renderScale();
@@ -14003,7 +14009,7 @@ function confirmDeleteBodyWeight(entryId){
   overlay.querySelector('#confirmBW').onclick = async () => {
     overlay.remove();
     warmInvalidate('bodyWeight');
-    await supabaseClient.from('body_weight').delete().eq('id', entryId);
+    await withTimeout(supabaseClient.from('body_weight').delete().eq('id', entryId), 15000);
     renderScale();
   };
 }
@@ -14129,7 +14135,7 @@ function openLogWeightForm(lastMeasurementUnit, expandMeasurements){
         });
       }
       warmInvalidate('bodyWeight');
-      const { error } = await supabaseClient.from('body_weight').insert(payload);
+      const { error } = await withTimeout(supabaseClient.from('body_weight').insert(payload), 15000);
       if (error){ alert(error.message); return; }
       overlay.remove();
       renderScale();
@@ -14193,7 +14199,7 @@ async function setPhasePaused(phase, paused){
   if (paused){
     const payload = { paused_at: todayStr() };
     warmInvalidate('phase');
-    const { error } = await supabaseClient.from('phase_settings').update(payload).eq('user_id', userData.user.id);
+    const { error } = await withTimeout(supabaseClient.from('phase_settings').update(payload).eq('user_id', userData.user.id), 15000);
     if (error){ alert(error.message); return null; }
     return { ...phase, ...payload };
   }
@@ -14203,7 +14209,7 @@ async function setPhasePaused(phase, paused){
     if (phase[k]) payload[k] = addDaysToDate(phase[k], shift);
   });
   warmInvalidate('phase');
-    const { error } = await supabaseClient.from('phase_settings').update(payload).eq('user_id', userData.user.id);
+    const { error } = await withTimeout(supabaseClient.from('phase_settings').update(payload).eq('user_id', userData.user.id), 15000);
   if (error){ alert(error.message); return null; }
   return { ...phase, ...payload };
 }
@@ -14334,7 +14340,7 @@ async function advanceAutoScheduleIfNeeded(phase){
     // "The Winter Bulk" silently reappearing on a cycle that actually lands
     // in summer would be worse than just showing the generic label until
     // the user renames it for this new occurrence.
-    await supabaseClient.from('phase_settings').update({ ...newDates, bulk_name: null, cut_name: null }).eq('user_id', userData.user.id);
+    await withTimeout(supabaseClient.from('phase_settings').update({ ...newDates, bulk_name: null, cut_name: null }).eq('user_id', userData.user.id), 15000);
   }
   return updated;
 }
@@ -14659,7 +14665,7 @@ async function openEditPhaseForm(existing){
       };
     }
     warmInvalidate('phase');
-    let { error } = await supabaseClient.from('phase_settings').upsert(payload, { onConflict: 'user_id' });
+    let { error } = await withTimeout(supabaseClient.from('phase_settings').upsert(payload, { onConflict: 'user_id' }), 15000);
     // bulk_name/cut_name are new columns - if that migration hasn't been
     // run against this database yet, the upsert fails on those two fields
     // specifically. Retry without them rather than losing the date save
@@ -14668,7 +14674,7 @@ async function openEditPhaseForm(existing){
     // error, since "column does not exist" means nothing to fix here.
     if (error && /bulk_name|cut_name|column/i.test(error.message || '')){
       const { bulk_name, cut_name, ...withoutNames } = payload;
-      const retry = await supabaseClient.from('phase_settings').upsert(withoutNames, { onConflict: 'user_id' });
+      const retry = await withTimeout(supabaseClient.from('phase_settings').upsert(withoutNames, { onConflict: 'user_id' }), 15000);
       error = retry.error;
       if (!error){
         alert("Dates saved, but the phase-naming feature needs a database column that hasn't been added yet - the name wasn't saved this time.");
@@ -16664,16 +16670,16 @@ async function performDaySwap(dayA, dayB){
   // stay missing after the swap (nothing to swap in), which is faithful to
   // "the user never set this" and won't pollute the database.
   if (labelB !== null){
-    await supabaseClient.from('day_types').upsert({ user_id: uid, weekday: dayA, label: labelB }, { onConflict: 'user_id,weekday' });
+    await withTimeout(supabaseClient.from('day_types').upsert({ user_id: uid, weekday: dayA, label: labelB }, { onConflict: 'user_id,weekday' }), 15000);
   } else if (!dtA.__timeout && !dtA.error && dtA.data){
     // Day A had a label, Day B did not - after the swap, Day A should end
     // up empty, matching what Day B was.
-    await supabaseClient.from('day_types').delete().eq('user_id', uid).eq('weekday', dayA);
+    await withTimeout(supabaseClient.from('day_types').delete().eq('user_id', uid).eq('weekday', dayA), 15000);
   }
   if (labelA !== null){
-    await supabaseClient.from('day_types').upsert({ user_id: uid, weekday: dayB, label: labelA }, { onConflict: 'user_id,weekday' });
+    await withTimeout(supabaseClient.from('day_types').upsert({ user_id: uid, weekday: dayB, label: labelA }, { onConflict: 'user_id,weekday' }), 15000);
   } else if (!dtB.__timeout && !dtB.error && dtB.data){
-    await supabaseClient.from('day_types').delete().eq('user_id', uid).eq('weekday', dayB);
+    await withTimeout(supabaseClient.from('day_types').delete().eq('user_id', uid).eq('weekday', dayB), 15000);
   }
   invalidateDayTypesCache();
   // The swap changes which exercises live on which weekday - the exact
