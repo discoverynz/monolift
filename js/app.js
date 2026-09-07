@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.325';
+const APP_VERSION = 'Beta 5.326';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -8026,6 +8026,12 @@ async function openAutoAltReview(){
       await awaitMasterFlagHealed();
       const useMaster = getUseExerciseMasterFlag();
       const memberTable = useMaster ? 'exercise_master' : 'exercises';
+      // Tracked across the whole batch rather than left as fire-and-forget -
+      // this used to have no way of knowing whether any individual member
+      // assignment actually landed, so a dropped connection partway through
+      // would silently leave some exercises un-grouped with no indication
+      // anything had gone wrong.
+      let memberFailures = 0;
       for (const p of toApply){
         const insertResult = await withTimeout(
           supabaseClient.from('alt_groups').insert({ user_id: userData.user.id, name: p.suggestedName, color: p.color }).select(),
@@ -8034,11 +8040,13 @@ async function openAutoAltReview(){
         const groupId = insertResult.__timeout || !insertResult.data ? null : insertResult.data[0].id;
         if (!groupId) continue;
         for (const m of p.members){
-          await withTimeout(supabaseClient.from(memberTable).update({ alt_group_id: groupId }).eq('id', m.id), 15000);
+          const r = await withTimeout(supabaseClient.from(memberTable).update({ alt_group_id: groupId }).eq('id', m.id), 15000);
+          if (r.__timeout || r.error) memberFailures++;
         }
       }
       for (const j of toJoin){
-        await withTimeout(supabaseClient.from(memberTable).update({ alt_group_id: j.groupId }).eq('id', j.exercise.id), 15000);
+        const r = await withTimeout(supabaseClient.from(memberTable).update({ alt_group_id: j.groupId }).eq('id', j.exercise.id), 15000);
+        if (r.__timeout || r.error) memberFailures++;
       }
       for (const s of toAddAsAlt){
         const insertResult = await withTimeout(
@@ -8058,13 +8066,18 @@ async function openAutoAltReview(){
           location_ids: s.forExercise.location_ids || null,
           location_confirmed: true
         });
-        await withTimeout(supabaseClient.from(memberTable).update({ alt_group_id: groupId }).eq('id', s.forExercise.id), 15000);
+        const r1 = await withTimeout(supabaseClient.from(memberTable).update({ alt_group_id: groupId }).eq('id', s.forExercise.id), 15000);
+        if (r1.__timeout || r1.error) memberFailures++;
         if (created.data && created.data[0] && getUseExerciseMasterFlag()){
-          await withTimeout(supabaseClient.from('exercise_master').update({ alt_group_id: groupId }).eq('id', created.data[0].id), 15000);
+          const r2 = await withTimeout(supabaseClient.from('exercise_master').update({ alt_group_id: groupId }).eq('id', created.data[0].id), 15000);
+          if (r2.__timeout || r2.error) memberFailures++;
         }
       }
       overlay.remove();
       renderTrack();
+      if (memberFailures){
+        setTimeout(() => alert(`${memberFailures} exercise${memberFailures===1?' link':' links'} didn't save due to a connection issue - most of the changes went through, but it's worth checking the affected alt groups.`), 300);
+      }
     }); };
   }
   render();
@@ -8735,7 +8748,8 @@ async function openBackupPlanScreen(){
       btn.onclick = (e) => {
         e.stopPropagation();
         showConfirmDialog('This cannot be undone.', async () => {
-          await withTimeout(supabaseClient.from('plan_backups').delete().eq('id', btn.dataset.id), 15000);
+          const r = await withTimeout(supabaseClient.from('plan_backups').delete().eq('id', btn.dataset.id), 15000);
+          if (r.__timeout || r.error) alert(`Could not delete: ${r.error ? r.error.message : 'request timed out'}. Try again.`);
           renderList();
         }, { title: 'Delete This Saved Plan?', danger: true, confirmLabel: 'Delete' });
       };
@@ -12276,7 +12290,8 @@ function openBandForm(existing, allBands, onDone){
     showConfirmDialog(
       `Delete the ${existing.label} band? Sets you've already logged with it keep their recorded details — nothing in your history changes.`,
       async () => {
-        await withTimeout(supabaseClient.from('bands').delete().eq('id', existing.id), 15000);
+        const r = await withTimeout(supabaseClient.from('bands').delete().eq('id', existing.id), 15000);
+        if (r.__timeout || r.error){ alert(`Could not delete: ${r.error ? r.error.message : 'request timed out'}. Try again.`); return; }
         warmInvalidate('bands');
         overlay.remove();
         onDone && onDone();
@@ -14009,7 +14024,8 @@ function confirmDeleteBodyWeight(entryId){
   overlay.querySelector('#confirmBW').onclick = async () => {
     overlay.remove();
     warmInvalidate('bodyWeight');
-    await withTimeout(supabaseClient.from('body_weight').delete().eq('id', entryId), 15000);
+    const r = await withTimeout(supabaseClient.from('body_weight').delete().eq('id', entryId), 15000);
+    if (r.__timeout || r.error) alert(`Could not delete: ${r.error ? r.error.message : 'request timed out'}. It may still be in your history - try again.`);
     renderScale();
   };
 }
@@ -16510,11 +16526,18 @@ function openSwapDaysForm(){
       const btn = overlay.querySelector('#confirmSwapBtn');
       btn.disabled = true; btn.textContent = 'Swapping…';
       try {
-        await performDaySwap(dayA, dayB);
+        const result = await performDaySwap(dayA, dayB);
         overlay.remove();
         state.selectedDay = dayB;
         state.currentTab = 'track';
         renderTrack();
+        // The swap itself succeeded (that's what a thrown error would mean,
+        // handled below) - a label hiccup is real but shouldn't block the
+        // rest of the flow or look like the swap failed outright.
+        if (result && result.labelFailures && result.labelFailures.length){
+          const lf = result.labelFailures;
+          setTimeout(() => alert(`The exercises swapped correctly, but the day label${lf.length===1?'':'s'} for ${lf.join(' and ')} didn't save - you may want to re-check ${lf.length===1?'its':'their'} name${lf.length===1?'':'s'} in the day type editor.`), 300);
+        }
       } catch(e){
         alert(e.message);
         btn.disabled = false; btn.textContent = 'Swap These Days';
@@ -16669,17 +16692,28 @@ async function performDaySwap(dayA, dayB){
   // Only write each side when there's a real label to write. Missing rows
   // stay missing after the swap (nothing to swap in), which is faithful to
   // "the user never set this" and won't pollute the database.
+  // Label failures are surfaced but don't roll back the exercises - by this
+  // point the actual plan contents have already moved successfully (that's
+  // the part with real rollback, see above). A day showing the wrong
+  // heading text is a real bug worth telling the user about, but it's not
+  // in the same class as exercises landing on the wrong day, so this
+  // doesn't undo a swap that otherwise worked.
+  const labelFailures = [];
   if (labelB !== null){
-    await withTimeout(supabaseClient.from('day_types').upsert({ user_id: uid, weekday: dayA, label: labelB }, { onConflict: 'user_id,weekday' }), 15000);
+    const r = await withTimeout(supabaseClient.from('day_types').upsert({ user_id: uid, weekday: dayA, label: labelB }, { onConflict: 'user_id,weekday' }), 15000);
+    if (r.__timeout || r.error) labelFailures.push(DAY_NAMES[dayA]);
   } else if (!dtA.__timeout && !dtA.error && dtA.data){
     // Day A had a label, Day B did not - after the swap, Day A should end
     // up empty, matching what Day B was.
-    await withTimeout(supabaseClient.from('day_types').delete().eq('user_id', uid).eq('weekday', dayA), 15000);
+    const r = await withTimeout(supabaseClient.from('day_types').delete().eq('user_id', uid).eq('weekday', dayA), 15000);
+    if (r.__timeout || r.error) labelFailures.push(DAY_NAMES[dayA]);
   }
   if (labelA !== null){
-    await withTimeout(supabaseClient.from('day_types').upsert({ user_id: uid, weekday: dayB, label: labelA }, { onConflict: 'user_id,weekday' }), 15000);
+    const r = await withTimeout(supabaseClient.from('day_types').upsert({ user_id: uid, weekday: dayB, label: labelA }, { onConflict: 'user_id,weekday' }), 15000);
+    if (r.__timeout || r.error) labelFailures.push(DAY_NAMES[dayB]);
   } else if (!dtB.__timeout && !dtB.error && dtB.data){
-    await withTimeout(supabaseClient.from('day_types').delete().eq('user_id', uid).eq('weekday', dayB), 15000);
+    const r = await withTimeout(supabaseClient.from('day_types').delete().eq('user_id', uid).eq('weekday', dayB), 15000);
+    if (r.__timeout || r.error) labelFailures.push(DAY_NAMES[dayB]);
   }
   invalidateDayTypesCache();
   // The swap changes which exercises live on which weekday - the exact
@@ -16688,6 +16722,14 @@ async function performDaySwap(dayA, dayB){
   // successful swap, which looks indistinguishable from the swap itself
   // being broken even though the database is correct.
   invalidateTrackSnapshots();
+  // Returned, not thrown - the exercises themselves already swapped
+  // successfully by this point (that's the part with real rollback,
+  // earlier in this function). Throwing here would make the caller treat
+  // the whole swap as failed and leave "Swap These Days" re-enabled,
+  // inviting a second attempt that would re-swap the already-moved
+  // exercises right back - a label hiccup shouldn't risk undoing a plan
+  // change that actually worked.
+  return { labelFailures };
 }
 
 // An honest read on what a trip actually cost, shown when it ends. The point
