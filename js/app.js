@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.326';
+const APP_VERSION = 'Beta 5.327';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -1698,7 +1698,8 @@ async function moveExerciseToDay(item, newWeekday, clearAlt){
     results.push({ id: data && data[0] ? data[0].id : null, ok: !error && data && data.length > 0, error: error ? error.message : null });
   }
   if (clearAlt && item.masterId){
-    await withTimeout(supabaseClient.from('exercise_master').update({ alt_group_id: null }).eq('id', item.masterId), 15000);
+    const r = await withTimeout(supabaseClient.from('exercise_master').update({ alt_group_id: null }).eq('id', item.masterId), 15000);
+    if (r.__timeout || r.error) results.push({ id: item.masterId, ok: false, error: r.error ? r.error.message : 'timed out clearing alt-group link' });
   }
   return results;
 }
@@ -4347,7 +4348,8 @@ function openEditDayTypeForm(weekday, currentLabel){
     await withButtonLoading(overlay.querySelector('#saveDTBtn'), 'Saving…', async () => {
       const userData = { user: await getCurrentUser() };
       invalidateTrackSnapshots();
-      await withTimeout(supabaseClient.from('day_types').upsert({ user_id: userData.user.id, weekday, label }, { onConflict: 'user_id,weekday' }), 15000);
+      const r = await withTimeout(supabaseClient.from('day_types').upsert({ user_id: userData.user.id, weekday, label }, { onConflict: 'user_id,weekday' }), 15000);
+      if (r.__timeout || r.error){ alert(`Could not save: ${r.error ? r.error.message : 'request timed out'}`); return; }
       invalidateDayTypesCache();
       overlay.remove();
       if (state.currentTab === 'track') renderTrack();
@@ -4655,12 +4657,14 @@ function showOnboarding(mode){
             (existingResult.data || []).forEach(r => { existingByWeekday[r.weekday] = r.label; });
           }
         }
+        let dayTypeFailures = 0;
         for (let i = 0; i < 7; i++){
           if (preserveExisting && existingByWeekday[i]) continue;
-          await withTimeout(supabaseClient.from('day_types').upsert(
+          const r = await withTimeout(supabaseClient.from('day_types').upsert(
             { user_id: userData.user.id, weekday: i, label: wiz.week[i] },
             { onConflict: 'user_id,weekday' }
           ), 15000);
+          if (r.__timeout || r.error) dayTypeFailures++;
         }
         invalidateDayTypesCache();
         if (wiz.superset !== null){
@@ -4672,14 +4676,17 @@ function showOnboarding(mode){
             const created = await createLocation(loc.name);
             if (!created) continue;
             if (loc.equipment_tags.length){
-              await withTimeout(supabaseClient.from('locations').update({ equipment_tags: loc.equipment_tags }).eq('id', created.id), 15000);
-              invalidateLocationsCache();
+              const r2 = await withTimeout(supabaseClient.from('locations').update({ equipment_tags: loc.equipment_tags }).eq('id', created.id), 15000);
+              if (!r2.__timeout && !r2.error) invalidateLocationsCache();
             }
             if (i === wiz.defaultLocationIdx) setDefaultLocationId(created.id);
           }
         }
       }
       if (state.currentTab === 'track') renderTrack();
+      if (dayTypeFailures){
+        setTimeout(() => alert(`${dayTypeFailures} day label${dayTypeFailures===1?'':'s'} didn't save due to a connection issue - you can set ${dayTypeFailures===1?'it':'them'} from the day type editor.`), 300);
+      }
     }
     if (mode === 'full'){
       await supabaseClient.auth.updateUser({ data: { onboarded: true } });
@@ -5876,7 +5883,8 @@ function openEditAltGroupForm(exerciseId, exerciseName){
       const { succeeded, failed } = await syncFieldAcrossDuplicates('exercise_master', idList, { alt_group_id: picked ? picked.id : null });
       reportDuplicateSyncFailures(succeeded, idList.length, failed);
     } else {
-      await withTimeout(supabaseClient.from(table).update({ alt_group_id: picked ? picked.id : null }).eq('id', exerciseId), 15000);
+      const r = await withTimeout(supabaseClient.from(table).update({ alt_group_id: picked ? picked.id : null }).eq('id', exerciseId), 15000);
+      if (r.__timeout || r.error) alert(`Could not save: ${r.error ? r.error.message : 'request timed out'}`);
     }
     overlay.remove();
     if (state.currentTab === 'track') renderTrack();
@@ -6525,7 +6533,8 @@ function openEditTagsForm(exerciseId, exerciseName){
   overlay.querySelector('#saveTagsBtn').onclick = async () => { await withButtonLoading(overlay.querySelector('#saveTagsBtn'), 'Saving…', async () => {
     await awaitMasterFlagHealed();
     const table = exerciseTable();
-    await withTimeout(supabaseClient.from(table).update({ push_pull: pushPull, upper_lower: upperLower, location_ids: locationIds }).eq('id', exerciseId), 15000);
+    const r = await withTimeout(supabaseClient.from(table).update({ push_pull: pushPull, upper_lower: upperLower, location_ids: locationIds }).eq('id', exerciseId), 15000);
+    if (r.__timeout || r.error){ alert(`Could not save: ${r.error ? r.error.message : 'request timed out'}`); return; }
     overlay.remove();
     if (state.currentTab === 'track') renderTrack();
   }); };
@@ -6581,7 +6590,8 @@ function openEditLocationForm(exerciseId, exerciseName){
   overlay.querySelector('#saveLocBtn').onclick = async () => { await withButtonLoading(overlay.querySelector('#saveLocBtn'), 'Saving…', async () => {
     await awaitMasterFlagHealed();
     const table = exerciseTable();
-    await withTimeout(supabaseClient.from(table).update({ location_ids: selectedIds }).eq('id', exerciseId), 15000);
+    const r = await withTimeout(supabaseClient.from(table).update({ location_ids: selectedIds }).eq('id', exerciseId), 15000);
+    if (r.__timeout || r.error){ alert(`Could not save: ${r.error ? r.error.message : 'request timed out'}`); return; }
     overlay.remove();
     if (state.currentTab === 'track') renderTrack();
   }); };
@@ -6741,7 +6751,8 @@ function confirmRemoveExercise(exerciseId, exerciseName){
       }
       showUndoToast(exerciseName, async () => {
         const userData = { user: await getCurrentUser() };
-        await withTimeout(supabaseClient.from('exercise_days').insert({ user_id: userData.user.id, exercise_master_id: exerciseId, weekday: removalWeekday }), 15000);
+        const r = await withTimeout(supabaseClient.from('exercise_days').insert({ user_id: userData.user.id, exercise_master_id: exerciseId, weekday: removalWeekday }), 15000);
+        if (r.__timeout || r.error) alert(`Couldn't undo: ${r.error ? r.error.message : 'request timed out'}. The exercise is still removed - try adding it back manually.`);
         renderTrack();
       });
       renderTrack();
@@ -6749,7 +6760,8 @@ function confirmRemoveExercise(exerciseId, exerciseName){
     }
     await withTimeout(supabaseClient.from('exercises').update({ active: false }).eq('id', exerciseId), 15000);
     showUndoToast(exerciseName, async () => {
-      await withTimeout(supabaseClient.from('exercises').update({ active: true }).eq('id', exerciseId), 15000);
+      const r = await withTimeout(supabaseClient.from('exercises').update({ active: true }).eq('id', exerciseId), 15000);
+      if (r.__timeout || r.error) alert(`Couldn't undo: ${r.error ? r.error.message : 'request timed out'}. The exercise is still removed - try adding it back manually.`);
       renderTrack();
     });
     renderTrack();
@@ -6856,7 +6868,8 @@ function confirmDeleteLog(setId, onDeleted){
     deleting = true;
     overlay.remove();
     invalidateTrackSnapshots();
-    await withTimeout(supabaseClient.from('sets').delete().eq('id', setId), 15000);
+    const r = await withTimeout(supabaseClient.from('sets').delete().eq('id', setId), 15000);
+    if (r.__timeout || r.error) alert(`Couldn't delete: ${r.error ? r.error.message : 'request timed out'}. It may still be logged - try again.`);
     onDeleted();
   };
 }
@@ -6873,7 +6886,8 @@ function showUndoLastLogToast(setId){
   toast.querySelector('#undoLogBtn').onclick = async () => {
     clearTimeout(timer); toast.remove();
     invalidateTrackSnapshots();
-    await withTimeout(supabaseClient.from('sets').delete().eq('id', setId), 15000);
+    const r = await withTimeout(supabaseClient.from('sets').delete().eq('id', setId), 15000);
+    if (r.__timeout || r.error) alert(`Couldn't undo: ${r.error ? r.error.message : 'request timed out'}. The set is still logged.`);
     if (state.currentTab === 'track') renderTrack();
   };
 }
@@ -7639,7 +7653,8 @@ async function openPicker(initialTab, jumpToMuscle){
                   reportDuplicateSyncFailures(res.succeeded, ids.length, res.failed);
                 }
               } else {
-                await withTimeout(supabaseClient.from('exercises').update({ name: newName }).eq('user_id', userData.user.id).ilike('name', item.name), 15000);
+                const r = await withTimeout(supabaseClient.from('exercises').update({ name: newName }).eq('user_id', userData.user.id).ilike('name', item.name), 15000);
+                if (r.__timeout || r.error) alert(`Could not rename "${item.name}": ${r.error ? r.error.message : 'request timed out'}`);
               }
               selection.active = false;
               selection.items.clear();
@@ -8738,7 +8753,8 @@ async function openBackupPlanScreen(){
         promptText({
           title: 'Rename Plan', placeholder: 'Name', initialValue: btn.dataset.name,
           onConfirm: async (newName) => {
-            await withTimeout(supabaseClient.from('plan_backups').update({ name: newName }).eq('id', btn.dataset.id), 15000);
+            const r = await withTimeout(supabaseClient.from('plan_backups').update({ name: newName }).eq('id', btn.dataset.id), 15000);
+            if (r.__timeout || r.error) alert(`Could not rename: ${r.error ? r.error.message : 'request timed out'}`);
             renderList();
           }
         });
@@ -8918,11 +8934,11 @@ async function openChangeSingleDay(){
         // reorganizer already guards against. Manual/Custom is skipped since
         // there's no single category name to derive a label from.
         if (newCategory !== 'custom'){
-          await withTimeout(supabaseClient.from('day_types').upsert(
+          const r = await withTimeout(supabaseClient.from('day_types').upsert(
             { user_id: userData.user.id, weekday: targetDay, label: SPLIT_CATEGORY_LABELS[newCategory] || cap(newCategory) },
             { onConflict: 'user_id,weekday' }
           ), 15000);
-          invalidateDayTypesCache();
+          if (!r.__timeout && !r.error) invalidateDayTypesCache();
         }
         overlay.remove();
         state.selectedDay = targetDay;
@@ -9463,13 +9479,15 @@ async function openPlanReorganizer(){
       // otherwise their existing label would get silently overwritten with
       // the "Not Assigned" placeholder, wiping any custom label the user
       // had set (via day type edit, previous onboarding, previous reorg).
+      let reorgLabelFailures = 0;
       for (const dp of dayPlans){
         if (dp.isCustom) continue;
         if (!dayAssignments[dp.dayIdx]) continue; // day wasn't reorganized, leave its label alone
-        await withTimeout(supabaseClient.from('day_types').upsert(
+        const r = await withTimeout(supabaseClient.from('day_types').upsert(
           { user_id: userData.user.id, weekday: dp.dayIdx, label: dp.catLabel },
           { onConflict: 'user_id,weekday' }
         ), 15000);
+        if (r.__timeout || r.error) reorgLabelFailures++;
       }
       invalidateDayTypesCache();
 
@@ -9477,7 +9495,9 @@ async function openPlanReorganizer(){
       state.selectedDay = openingDay();
       state.currentTab = 'track';
       renderTrack();
-
+      if (reorgLabelFailures){
+        setTimeout(() => alert(`The exercises reorganized correctly, but ${reorgLabelFailures} day label${reorgLabelFailures===1?'':'s'} didn't save - you can set ${reorgLabelFailures===1?'it':'them'} from the day type editor.`), 300);
+      }
       // Diagnostic summary - shows exactly what happened instead of silently
       // trusting it worked, since that trust has been wrong before.
       setTimeout(() => {
@@ -10016,8 +10036,8 @@ async function openNewExerciseForm(opts){
         if (Object.keys(reuseUpdates).length){
           await awaitMasterFlagHealed();
           const table = exerciseTable();
-          await withTimeout(supabaseClient.from(table).update(reuseUpdates).eq('id', existingMatch.id), 15000);
-          invalidateTrackSnapshots();
+          const r = await withTimeout(supabaseClient.from(table).update(reuseUpdates).eq('id', existingMatch.id), 15000);
+          if (!r.__timeout && !r.error) invalidateTrackSnapshots();
         }
         alert(`"${name}" already exists on ${dayNameOf(selectedDay)} - opening it instead of creating a duplicate.`);
         overlay.remove();
@@ -11250,12 +11270,18 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
       // earlier write, so it needs its own.
       await awaitMasterFlagHealed();
       const table = exerciseTable();
-      await withTimeout(supabaseClient.from(table).update({
+      const r = await withTimeout(supabaseClient.from(table).update({
         location_ids: pendingLocationIsEverywhere ? null : pendingLocationIds,
         location_confirmed: true
       }).eq('id', exerciseId), 15000);
-      needsLocationConfirm = false; // answered - don't ask again even if this save method gets called twice
-      warmInvalidate();
+      // Only mark it answered if the write actually landed - don't block
+      // saving the actual set on this secondary write failing, but if it
+      // silently "succeeded" while failing, the confirm prompt would never
+      // ask again even though nothing was ever recorded.
+      if (!r.__timeout && !r.error){
+        needsLocationConfirm = false; // answered - don't ask again even if this save method gets called twice
+        warmInvalidate();
+      }
     }
     const weightRaw = document.getElementById('weightInput').value;
     const setsVal = document.getElementById('setsInput').value;
@@ -14356,7 +14382,14 @@ async function advanceAutoScheduleIfNeeded(phase){
     // "The Winter Bulk" silently reappearing on a cycle that actually lands
     // in summer would be worse than just showing the generic label until
     // the user renames it for this new occurrence.
-    await withTimeout(supabaseClient.from('phase_settings').update({ ...newDates, bulk_name: null, cut_name: null }).eq('user_id', userData.user.id), 15000);
+    const r = await withTimeout(supabaseClient.from('phase_settings').update({ ...newDates, bulk_name: null, cut_name: null }).eq('user_id', userData.user.id), 15000);
+    // This runs automatically in the background, so there's no good moment
+    // to alert about a failure - but returning the "advanced" object when
+    // the write never actually landed would show dates that don't match
+    // what's in the database, and the next load would just try to advance
+    // again from the same stale starting point. Falling back to the
+    // original phase is the more honest result when the write didn't work.
+    if (r.__timeout || r.error) return phase;
   }
   return updated;
 }
