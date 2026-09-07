@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.327';
+const APP_VERSION = 'Beta 5.328';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -16755,6 +16755,13 @@ async function performDaySwap(dayA, dayB){
   // successful swap, which looks indistinguishable from the swap itself
   // being broken even though the database is correct.
   invalidateTrackSnapshots();
+  // A saved "Revert Last Reorganization" snapshot describes weekday
+  // placements from BEFORE this swap - if one exists, it's now stale and
+  // reverting to it would fight against the swap that just succeeded,
+  // rather than undoing it cleanly. Reorganizing again after this creates
+  // its own fresh snapshot from current (already-swapped) state, so this
+  // only ever needs to clear an old one, never worry about creating one.
+  localStorage.removeItem('zealift_reorg_snapshot');
   // Returned, not thrown - the exercises themselves already swapped
   // successfully by this point (that's the part with real rollback,
   // earlier in this function). Throwing here would make the caller treat
