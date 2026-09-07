@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.328';
+const APP_VERSION = 'Beta 5.329';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -16859,7 +16859,13 @@ function buildComebackHtml(hs, daysSinceLast){
 function detectMilestones(stats, list){
   const out = [];
   const vol = stats ? stats.volumeKg : 0;
-  if (vol >= 1000) out.push({ icon:'📦', text:`One tonne moved today — ${vol.toLocaleString()}kg` });
+  if (vol >= 1000){
+    // Was hardcoded to "One tonne" regardless of how far past 1000kg the
+    // actual total was - at 11,321kg it said "One tonne moved today —
+    // 11,321kg" right next to a number that's obviously 11+ tonnes.
+    const tonnes = Math.floor(vol / 1000);
+    out.push({ icon:'📦', text:`${tonnes} tonne${tonnes===1?'':'s'} moved today — ${vol.toLocaleString()}kg` });
+  }
   if (vol >= 5000) out.push({ icon:'🗿', text:'Five tonnes in a single session' });
   const streak = stats ? stats.streak : 0;
   if (streak > 0 && streak % 10 === 0) out.push({ icon:'🔥', text:`${streak} sessions without a real break` });
