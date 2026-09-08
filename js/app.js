@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.329';
+const APP_VERSION = 'Beta 5.330';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -16906,9 +16906,43 @@ function tonnageComparison(kg){
 // judge staleness (same 3-session bar as detectWeightStagnation), so a
 // newer exercise isn't skipped for lack of data and the card never goes
 // empty just because nothing's judgeable yet.
+// Once the day's Main Event is picked, it stays picked - without this, the
+// once-a-day briefing popup and the always-live inline Track card would
+// naturally drift apart as the day goes on: the popup freezes whatever it
+// picked at the moment it fired, while the inline card recalculates fresh
+// on every render, and enough sets logged in between can shift which
+// exercise scores best. Locking it in means both agree for the rest of the
+// day - right up until the picked exercise actually gets logged, at which
+// point it's genuinely done and moving on to a new pick is correct, not a
+// disagreement.
+function getLockedMainEventId(){
+  try {
+    const raw = localStorage.getItem('zealift_main_event_lock');
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed.date !== todayStr()) return null; // yesterday's lock doesn't carry over
+    return parsed.exerciseId;
+  } catch(e){ return null; }
+}
+function setLockedMainEventId(id){
+  try { localStorage.setItem('zealift_main_event_lock', JSON.stringify({ date: todayStr(), exerciseId: id })); } catch(e){}
+}
+
 function pickMainEvent(list){
   const candidates = (list || []).filter(ex => !ex.loggedToday && !ex.completeVia);
   if (candidates.length < 3) return null; // too short a day to have an undercard
+
+  const lockedId = getLockedMainEventId();
+  if (lockedId){
+    const locked = candidates.find(ex => String(ex.id) === String(lockedId));
+    // Still there and still not logged - stick with it rather than
+    // recomputing, even if something else would technically score higher
+    // now. Otherwise the moment ANY OTHER exercise on the day briefly
+    // outscores it, both the popup and the card would silently swap picks
+    // mid-day, and this whole feature is about consistency, not "most
+    // correct in a given millisecond".
+    if (locked) return locked;
+  }
 
   const weighInKg = (ex) => {
     const s = ex.lastSet || ex.maxSet;
@@ -16928,6 +16962,7 @@ function pickMainEvent(list){
         best = ex; bestStale = ex.staleDays; bestKg = kg;
       }
     });
+    if (best) setLockedMainEventId(best.id);
     return best;
   }
 
@@ -16938,6 +16973,7 @@ function pickMainEvent(list){
     const kg = weighInKg(ex);
     if (kg > bestKg){ bestKg = kg; best = ex; }
   });
+  if (best) setLockedMainEventId(best.id);
   return best;
 }
 
