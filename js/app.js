@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.332';
+const APP_VERSION = 'Beta 5.333';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -5609,15 +5609,18 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
     if (state._trackSearchQuery) applyTrackSearch(state._trackSearchQuery);
     // Tapping into a result (anywhere on the card - opening the log form,
     // the quick-save button, an alt-group badge, all of it) means the
-    // search has done its job of getting you there - added via
-    // addEventListener rather than overwriting each card's own onclick, so
-    // this runs alongside whatever that tap was already going to do rather
-    // than replacing it.
-    if (state._trackSearchOpen){
-      document.querySelectorAll('.exercise').forEach(card => {
-        card.addEventListener('click', closeTrackSearch);
-      });
-    }
+    // search has done its job of getting you there. Always attached (not
+    // gated on state._trackSearchOpen at render time) because opening the
+    // search bar itself doesn't trigger a re-render - it just toggles a CSS
+    // class for a snappy open animation - so a render-time gate here would
+    // only ever see the state from BEFORE the bar was opened. The live
+    // check happens inside the handler instead, at the moment of the
+    // actual tap. Added via addEventListener rather than overwriting each
+    // card's own onclick, so this runs alongside whatever that tap was
+    // already going to do rather than replacing it.
+    document.querySelectorAll('.exercise').forEach(card => {
+      card.addEventListener('click', () => { if (state._trackSearchOpen) closeTrackSearch(); });
+    });
   }
   document.querySelectorAll('.cat-chev').forEach(chev => {
     chev.onclick = (e) => {
