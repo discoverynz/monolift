@@ -68,6 +68,13 @@ input:focus, button:focus{ outline:none; }
 .cat-chev.collapsed{ transform:rotate(-90deg) scale(0.9); }
 .cat-body{ max-height:3000px; overflow:hidden; opacity:1; transition:max-height 0.35s cubic-bezier(.2,.9,.3,1), opacity 0.25s ease; }
 .cat-body.collapsed{ max-height:0; opacity:0; }
+/* Force every section open while a search is active, purely visual - the
+   underlying .collapsed classes are untouched, so everything reverts to
+   its actual collapse state the instant search closes. */
+.search-active .cat-body.collapsed{ max-height:3000px; opacity:1; }
+
+.track-search-bar{ max-height:0; overflow:hidden; opacity:0; transition:max-height 0.28s cubic-bezier(.2,.9,.3,1), opacity 0.2s ease; }
+.track-search-bar.open{ max-height:60px; opacity:1; margin-top:8px; }
 @keyframes ml-nudge-pop{
   0%{ transform:translateY(6px) scale(0.9); opacity:0; }
   70%{ transform:translateY(-2px) scale(1.05); opacity:1; }

@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.330';
+const APP_VERSION = 'Beta 5.331';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -917,7 +917,13 @@ let state = { selectedDay: openingDay(), exercises: [], session: null, currentTa
   // Which category slugs are collapsed - session-only (not persisted to
   // localStorage or the DB) so a forgotten collapsed category doesn't stay
   // hidden across app restarts.
-  _collapsedCats: new Set() };
+  _collapsedCats: new Set(),
+  // Sections auto-collapse once every exercise in them is done for the day
+  // - this tracks which ones the user has explicitly reopened despite that,
+  // so reopening doesn't get immediately undone by the very next render.
+  // Session-only, same reasoning as _collapsedCats above.
+  _reopenedDoneCats: new Set(),
+  _trackSearchOpen: false, _trackSearchQuery: '' };
 
 // MIDNIGHT ROLLOVER. All dates in this app come from the phone's own clock
 // (todayStr uses local getFullYear/getMonth/getDate, never UTC), so the day
@@ -5188,6 +5194,31 @@ function animateOdometer(el, from, to, suffix){
   requestAnimationFrame(step);
 }
 
+// Pure DOM filtering, no re-render - fast enough to run on every keystroke.
+// Matched exercises get shown, non-matches hidden; a category with zero
+// matches hides its whole header+body so an empty section never lingers.
+// Sections that are currently collapsed (manually or auto-done) still get
+// force-opened while a search is active via the .search-active CSS rule,
+// so a match hiding inside a collapsed section is never invisible - that
+// override is purely visual and doesn't touch the underlying collapse
+// state, so everything reverts to how it was the moment search closes.
+function applyTrackSearch(query){
+  const q = (query || '').trim().toLowerCase();
+  const shell = document.querySelector('.scroll-area');
+  if (shell) shell.classList.toggle('search-active', !!q);
+  document.querySelectorAll('.exercise').forEach(card => {
+    const name = (card.dataset.name || '').toLowerCase();
+    card.style.display = (!q || name.includes(q)) ? '' : 'none';
+  });
+  document.querySelectorAll('.category').forEach(header => {
+    const body = document.getElementById(header.id + '-body');
+    if (!body) return;
+    const anyVisible = !q || [...body.querySelectorAll('.exercise')].some(c => c.style.display !== 'none');
+    header.style.display = anyVisible ? '' : 'none';
+    body.style.display = anyVisible ? '' : 'none';
+  });
+}
+
 async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations, myGeneration, isStale, fromSnapshot){
   // dayTypeLabel can be: a string (real label from DB), null (no row - user
   // never set one), or an { __unavailable } marker (transient fetch failure).
@@ -5320,7 +5351,13 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
     // persisted, since a permanently-collapsed category that's easy to
     // forget about is worse than one that resets when you leave and come
     // back.
-    const isCollapsed = state._collapsedCats.has(slug);
+    // Auto-collapses once every exercise in it is done for the day - unless
+    // the user has explicitly reopened it despite that (tracked separately
+    // so reopening isn't immediately undone by the very next render), or
+    // explicitly collapsed it themselves (which always wins outright,
+    // matching how it already behaved before auto-collapse existed).
+    const allDone = items.length > 0 && items.every(ex => ex.loggedToday || ex.completeVia);
+    const isCollapsed = state._collapsedCats.has(slug) || (allDone && !state._reopenedDoneCats.has(slug));
     listHtml += `<div class="category" id="${slug}"><span>${cat}</span>${editIcon}<span class="cat-chev${isCollapsed ? ' collapsed' : ''}" data-target="${slug}-body" style="cursor:pointer; padding:2px 4px;">▾</span></div><div class="cat-body${isCollapsed ? ' collapsed' : ''}" id="${slug}-body">` + items.map(exerciseRow).join('') + `</div>`;
     state.trackFlatOrder.push(...items.map(ex => ({ id: ex.id, name: ex.name })));
   });
@@ -5454,7 +5491,17 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
           ${workingExercises.some(ex => ex.loggedToday || ex.completeVia) ? `<button id="toolbarHideCompletedBtn" style="display:flex; align-items:center; gap:6px; height:38px; padding:0 14px; border-radius:10px; background:${hideCompleted?'rgba(255,107,26,0.12)':'var(--panel)'}; border:1px solid ${hideCompleted?'var(--flame)':'var(--line)'}; color:${hideCompleted?'var(--flame)':'var(--slate)'};">
             <span style="font-family:'Bebas Neue',sans-serif; font-size:12px; letter-spacing:0.5px;">HIDE</span>
           </button>` : ''}
+          ${workingExercises.length > 0 ? `<button id="toolbarSearchBtn" aria-label="Search today's exercises" style="display:flex; align-items:center; justify-content:center; width:38px; height:38px; border-radius:10px; background:var(--panel); border:1px solid var(--line); color:var(--slate);">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+          </button>` : ''}
         </div>
+        ${workingExercises.length > 0 ? `<div id="trackSearchBar" class="track-search-bar${state._trackSearchOpen ? ' open' : ''}" style="padding:0 18px;">
+          <div style="display:flex; align-items:center; gap:8px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:0 12px; height:40px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--slate)" stroke-width="2" stroke-linecap="round" style="flex-shrink:0;"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+            <input id="trackSearchInput" placeholder="Search today's exercises…" value="${(state._trackSearchQuery || '').replace(/"/g,'&quot;')}" style="flex:1; background:none; border:none; color:var(--chalk); font-size:14px; height:100%;">
+            <span id="trackSearchClear" style="color:var(--slate); font-size:16px; padding:4px; cursor:pointer;">✕</span>
+          </div>
+        </div>` : ''}
         ${workingExercises.length > 0 ? groupByToggleHtml(groupBy) : ''}
         ${mainEventHtml}
         ${listHtml}
@@ -5522,17 +5569,59 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   if (autoGroupBtn) autoGroupBtn.onclick = () => openAutoAltReview();
   const hideCompletedBtn = document.getElementById('toolbarHideCompletedBtn');
   if (hideCompletedBtn) hideCompletedBtn.onclick = () => { setHideCompletedPref(!hideCompleted); renderTrack(); };
+  const searchBtn = document.getElementById('toolbarSearchBtn');
+  const searchBar = document.getElementById('trackSearchBar');
+  const searchInput = document.getElementById('trackSearchInput');
+  if (searchBtn && searchBar && searchInput){
+    searchBtn.onclick = () => {
+      state._trackSearchOpen = !state._trackSearchOpen;
+      searchBar.classList.toggle('open', state._trackSearchOpen);
+      if (state._trackSearchOpen){
+        searchInput.focus();
+      } else {
+        state._trackSearchQuery = '';
+        searchInput.value = '';
+        applyTrackSearch('');
+      }
+    };
+    searchInput.oninput = () => {
+      state._trackSearchQuery = searchInput.value;
+      applyTrackSearch(searchInput.value);
+    };
+    const clearBtn = document.getElementById('trackSearchClear');
+    if (clearBtn) clearBtn.onclick = () => {
+      state._trackSearchQuery = '';
+      searchInput.value = '';
+      applyTrackSearch('');
+      searchInput.focus();
+    };
+    // Re-apply whatever was already typed - a set save (or anything else
+    // that triggers a full re-render) shouldn't silently clear an active
+    // search or reset it back to showing everything.
+    if (state._trackSearchQuery) applyTrackSearch(state._trackSearchQuery);
+  }
   document.querySelectorAll('.cat-chev').forEach(chev => {
     chev.onclick = (e) => {
       e.stopPropagation();
       const target = document.getElementById(chev.dataset.target);
       if (!target) return;
+      const slug = chev.dataset.target.replace(/-body$/, '');
       const nowCollapsed = !chev.classList.contains('collapsed');
       chev.classList.toggle('collapsed', nowCollapsed);
       target.classList.toggle('collapsed', nowCollapsed);
-      state._collapsedCats = state._collapsedCats || new Set();
-      if (nowCollapsed) state._collapsedCats.add(chev.dataset.target.replace(/-body$/, ''));
-      else state._collapsedCats.delete(chev.dataset.target.replace(/-body$/, ''));
+      if (nowCollapsed){
+        // Collapsing always wins outright regardless of why it was open -
+        // clear any "I reopened this on purpose" override along with it, so
+        // a later done-state change doesn't resurrect a stale override.
+        state._collapsedCats.add(slug);
+        state._reopenedDoneCats.delete(slug);
+      } else {
+        state._collapsedCats.delete(slug);
+        // Harmless to record even for a section that isn't auto-collapse
+        // eligible at all - it's only ever consulted alongside the
+        // all-done check, so it has no effect there.
+        state._reopenedDoneCats.add(slug);
+      }
     };
   });
   document.querySelectorAll('.cat-rename-btn').forEach(btn => {
