@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.331';
+const APP_VERSION = 'Beta 5.332';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -5572,16 +5572,24 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   const searchBtn = document.getElementById('toolbarSearchBtn');
   const searchBar = document.getElementById('trackSearchBar');
   const searchInput = document.getElementById('trackSearchInput');
+  // Shared by the search icon's own toggle-off, the clear (✕) button, and
+  // tapping a result - closing back to "no search" should always mean the
+  // exact same thing regardless of which of those three triggered it.
+  const closeTrackSearch = () => {
+    state._trackSearchOpen = false;
+    state._trackSearchQuery = '';
+    if (searchBar) searchBar.classList.remove('open');
+    if (searchInput) searchInput.value = '';
+    applyTrackSearch('');
+  };
   if (searchBtn && searchBar && searchInput){
     searchBtn.onclick = () => {
-      state._trackSearchOpen = !state._trackSearchOpen;
-      searchBar.classList.toggle('open', state._trackSearchOpen);
       if (state._trackSearchOpen){
-        searchInput.focus();
+        closeTrackSearch();
       } else {
-        state._trackSearchQuery = '';
-        searchInput.value = '';
-        applyTrackSearch('');
+        state._trackSearchOpen = true;
+        searchBar.classList.add('open');
+        searchInput.focus();
       }
     };
     searchInput.oninput = () => {
@@ -5599,6 +5607,17 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
     // that triggers a full re-render) shouldn't silently clear an active
     // search or reset it back to showing everything.
     if (state._trackSearchQuery) applyTrackSearch(state._trackSearchQuery);
+    // Tapping into a result (anywhere on the card - opening the log form,
+    // the quick-save button, an alt-group badge, all of it) means the
+    // search has done its job of getting you there - added via
+    // addEventListener rather than overwriting each card's own onclick, so
+    // this runs alongside whatever that tap was already going to do rather
+    // than replacing it.
+    if (state._trackSearchOpen){
+      document.querySelectorAll('.exercise').forEach(card => {
+        card.addEventListener('click', closeTrackSearch);
+      });
+    }
   }
   document.querySelectorAll('.cat-chev').forEach(chev => {
     chev.onclick = (e) => {
