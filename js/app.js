@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.336';
+const APP_VERSION = 'Beta 5.337';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -17128,11 +17128,18 @@ function pickMainEvent(list){
   }
 
   // Nobody has enough history yet to judge staleness - fall back to
-  // heaviest working weight rather than showing nothing.
+  // heaviest working weight rather than showing nothing. When every
+  // candidate ties at 0kg (an all-band day, or any day where nobody has
+  // real weight history yet - band exercises never carry a usable weight
+  // here), a bare "kg > bestKg" starting at 0 can never be true for
+  // anyone, so this used to return null despite candidates existing,
+  // directly contradicting its own stated purpose. `|| best === null`
+  // guarantees the first candidate becomes the baseline regardless, so a
+  // genuine tie at 0 still picks someone instead of nobody.
   let best = null, bestKg = 0;
   candidates.forEach(ex => {
     const kg = weighInKg(ex);
-    if (kg > bestKg){ bestKg = kg; best = ex; }
+    if (kg > bestKg || best === null){ bestKg = kg; best = ex; }
   });
   if (best) setLockedMainEventId(best.id);
   return best;
