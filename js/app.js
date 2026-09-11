@@ -7,7 +7,7 @@ const DAY_LABELS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday
 // adding, logging, history) without special-casing, while rendering as its
 // own chip rather than masquerading as an eighth day of the week.
 const ANY_DAY = 7;
-const ANY_DAY_NAME = "ANY";
+const ANY_DAY_NAME = "Home";
 const ANY_DAY_LABEL = "Anytime";
 function isAnyDay(weekday){ return Number(weekday) === ANY_DAY; }
 function dayNameOf(weekday){ return isAnyDay(weekday) ? ANY_DAY_NAME : DAY_NAMES[weekday]; }
@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.333';
+const APP_VERSION = 'Beta 5.334';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -1856,9 +1856,32 @@ function effectiveLocationId(){
   if (hasExplicitCurrentLocation()) return getCurrentLocationId();
   const trip = getTripMode();
   if (trip && trip.locationId) return getCurrentLocationId() || trip.locationId;
+  // The Home/Anytime slot gets its OWN default rather than the regular
+  // weekday one - the gym you're at on a normal Tuesday is very often not
+  // where band/home-gym work actually happens.
+  if (isAnyDay(state.selectedDay)) return getCurrentLocationId() || getHomeDefaultLocationId();
   return getCurrentLocationId() || getDefaultLocationId();
 }
 function getDefaultLocationId(){ return localStorage.getItem('zealift_default_location') || null; }
+// A second, separate default specifically for the Home/Anytime slot - the
+// gym you'd actually be at on a regular weekday is very often NOT where
+// band/home-gym work happens, so one default location was never going to
+// serve both contexts well. Falls back to the regular default when unset,
+// so Home isn't left unconfigured until someone deliberately sets this.
+// localStorage-only for now - the regular default has a database-backed
+// self-heal (is_default on locations) specifically so it survives a
+// cleared localStorage, but that's a real schema column I can't add
+// myself from here without Supabase access. This one doesn't have that
+// safety net yet.
+function getHomeDefaultLocationId(){
+  const raw = localStorage.getItem('zealift_home_default_location');
+  if (raw === null) return getDefaultLocationId(); // never configured - fall back to the regular default
+  if (raw === '__none__') return null; // explicitly set to "no specific location" - stays that way, doesn't fall back
+  return raw;
+}
+function setHomeDefaultLocationId(id){
+  localStorage.setItem('zealift_home_default_location', id || '__none__');
+}
 function setDefaultLocationId(id){
   if (id) localStorage.setItem('zealift_default_location', id); else localStorage.removeItem('zealift_default_location');
   // Persist to the database too, in the background, so this survives a
@@ -2591,6 +2614,10 @@ function openLocationSubPage(){
         <div><div>Default Location</div><div class="small" style="color:var(--slate); margin-top:2px;">Used when logging if Track isn't set to a specific place</div></div>
         <div class="chev" style="margin-top:2px;">›</div>
       </div>
+      <div class="me-item" id="subHomeDefaultLocationBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
+        <div><div>Home / Anytime Default</div><div class="small" style="color:var(--slate); margin-top:2px;">A separate default just for the Home tab - often a different gym</div></div>
+        <div class="chev" style="margin-top:2px;">›</div>
+      </div>
       <div class="me-item" id="subBulkLocationBtn" style="align-items:flex-start; padding-top:12px; padding-bottom:12px;">
         <div><div>Assign Exercises</div><div class="small" style="color:var(--slate); margin-top:2px;">Tell the app which exercises exist where, gym by gym</div></div>
         <div class="chev" style="margin-top:2px;">›</div>
@@ -2603,6 +2630,7 @@ function openLocationSubPage(){
   document.body.appendChild(overlay);
   overlay.querySelector('#closeLocSubPage').onclick = () => overlay.remove();
   overlay.querySelector('#subDefaultLocationBtn').onclick = () => openDefaultLocationPicker();
+  overlay.querySelector('#subHomeDefaultLocationBtn').onclick = () => openDefaultLocationPicker(true);
   overlay.querySelector('#subBulkLocationBtn').onclick = () => openBulkLocationAssign();
   overlay.querySelector('#subUnconfirmedBtn').onclick = () => openUnconfirmedLocationsScreen();
   (async () => {
@@ -4270,19 +4298,21 @@ async function openManageLocationsScreen(){
   render();
 }
 
-async function openDefaultLocationPicker(){
+async function openDefaultLocationPicker(forHome){
   const locations = await loadLocations();
-  const currentId = getDefaultLocationId();
+  const currentId = forHome ? getHomeDefaultLocationId() : getDefaultLocationId();
+  const setFn = forHome ? setHomeDefaultLocationId : setDefaultLocationId;
   const overlay = document.createElement('div');
   overlay.style = 'position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:70; display:flex; align-items:flex-end;';
   overlay.innerHTML = `
     <div style="width:100%; background:var(--panel); border-radius:18px 18px 0 0; padding:20px 18px calc(20px + env(safe-area-inset-bottom, 0px)) 18px;">
-      <div class="field-label" style="padding:0 0 4px 0;">Default Location</div>
-      <div class="small" style="padding:0 0 12px 0; color:var(--slate); line-height:1.5;">Used when logging a set if Track isn't currently set to a specific location.</div>
-      ${state.locationDefaultColumnMissing ? `<div style="background:#2a1618; border:1px solid #5c2b2f; border-radius:10px; padding:11px 13px; margin-bottom:12px;">
+      <div class="field-label" style="padding:0 0 4px 0;">${forHome ? 'Home / Anytime Default Location' : 'Default Location'}</div>
+      <div class="small" style="padding:0 0 12px 0; color:var(--slate); line-height:1.5;">${forHome ? "Used when logging a set on the Home/Anytime slot specifically - often a different gym than your regular weekday default." : "Used when logging if Track isn't currently set to a specific location."}</div>
+      ${(!forHome && state.locationDefaultColumnMissing) ? `<div style="background:#2a1618; border:1px solid #5c2b2f; border-radius:10px; padding:11px 13px; margin-bottom:12px;">
         <div class="small" style="color:#E8492A; line-height:1.5;">⚠ Your default location is only stored on this device right now, so it gets lost whenever the browser clears its storage — which is why it may have stopped applying each day.</div>
         <div class="small" style="color:var(--slate); line-height:1.5; margin-top:6px;">Run <span style="color:var(--chalk); font-family:'JetBrains Mono',monospace;">migration_location_default.sql</span> in Supabase to make it stick permanently.</div>
       </div>` : ''}
+      ${forHome ? `<div class="small" style="padding:0 0 12px 0; color:var(--slate); line-height:1.4;">This one's only remembered on this device for now.</div>` : ''}
       <div class="pick-row" data-loc="" style="${!currentId ? 'color:var(--flame);' : ''}"><div class="ex-name">None</div>${!currentId ? '<span>✓</span>' : ''}</div>
       ${locations.map(l => `<div class="pick-row" data-loc="${l.id}" style="${l.id===currentId ? 'color:var(--flame);' : ''}"><div class="ex-name">${l.name}</div>${l.id===currentId ? '<span>✓</span>' : ''}</div>`).join('')}
       <div class="pick-row" id="newDefaultLocRow"><div class="ex-name" style="color:var(--flame);">+ New Location</div></div>
@@ -4290,7 +4320,7 @@ async function openDefaultLocationPicker(){
   document.body.appendChild(overlay);
   overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
   overlay.querySelectorAll('.pick-row[data-loc]').forEach(row => {
-    row.onclick = () => { setDefaultLocationId(row.dataset.loc || null); overlay.remove(); };
+    row.onclick = () => { setFn(row.dataset.loc || null); overlay.remove(); if (state.currentTab === 'track') renderTrack(); };
   });
   overlay.querySelector('#newDefaultLocRow').onclick = () => {
     promptText({
@@ -4298,7 +4328,7 @@ async function openDefaultLocationPicker(){
       onConfirm: async (name) => {
         const loc = await createLocation(name);
         overlay.remove();
-        if (loc) setDefaultLocationId(loc.id);
+        if (loc){ setFn(loc.id); if (state.currentTab === 'track') renderTrack(); }
       }
     });
   };
@@ -5315,16 +5345,20 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   }
 
   const q = todayQuote();
-  const dayChips = DAY_NAMES.map((d, i) => {
+  // The Home/Anytime slot sits FIRST, to the left of Monday, visually
+  // distinct so it doesn't read as an eighth day of the week - this is
+  // where exercises that belong to no particular day live (band work,
+  // travel sessions, anything improvised), and it's also the slot a
+  // second, separate default location can apply to (see
+  // effectiveLocationId), so it earns a spot of its own rather than being
+  // tucked in after Sunday like an afterthought.
+  const dayChips = `<button class="day day-any ${state.selectedDay === ANY_DAY ? 'active' : ''}" data-day="${ANY_DAY}" aria-label="Home">`
+    + `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px; vertical-align:-2px;"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg>${ANY_DAY_NAME}</button>`
+    + DAY_NAMES.map((d, i) => {
     const isSelected = i === state.selectedDay;
     const isToday = i === todayWeekday();
     return `<button class="day ${isSelected ? 'active' : ''} ${isToday ? 'today-marker' : ''}" data-day="${i}">${d}</button>`;
-  }).join('')
-  // The Anytime slot sits at the end of the row, visually distinct so it
-  // doesn't read as an eighth day of the week. This is where exercises that
-  // belong to no particular day live - band work, travel sessions, anything
-  // improvised.
-  + `<button class="day day-any ${state.selectedDay === ANY_DAY ? 'active' : ''}" data-day="${ANY_DAY}" aria-label="Anytime">${ANY_DAY_NAME}</button>`;
+  }).join('');
 
   let listHtml = '';
   state.trackFlatOrder = [];
@@ -11398,7 +11432,13 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
     const setsVal = document.getElementById('setsInput').value;
     const repsVal = document.getElementById('repsInput').value;
     const notesVal = document.getElementById('notesInput').value.trim();
-    if (!weightRaw && !setsVal && !repsVal){
+    // For a band exercise, the actual selection lives in selectedBands, not
+    // the (hidden, unused) weight input - checking only weightRaw/setsVal/
+    // repsVal meant picking a band and leaving reps/sets at their defaults
+    // looked identical to "nothing entered at all", and the form would
+    // silently close without saving anything: no toast, no error, no set.
+    const hasBandSelection = measurementType === 'band' && selectedBands.length > 0;
+    if (!weightRaw && !setsVal && !repsVal && !hasBandSelection){
       // Nothing to save - the exercise is already sitting on today's list
       // (added the moment it was picked), so just close cleanly instead of
       // treating this like an error.
