@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.334';
+const APP_VERSION = 'Beta 5.335';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -5353,7 +5353,7 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   // effectiveLocationId), so it earns a spot of its own rather than being
   // tucked in after Sunday like an afterthought.
   const dayChips = `<button class="day day-any ${state.selectedDay === ANY_DAY ? 'active' : ''}" data-day="${ANY_DAY}" aria-label="Home">`
-    + `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px; vertical-align:-2px;"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg>${ANY_DAY_NAME}</button>`
+    + `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg></button>`
     + DAY_NAMES.map((d, i) => {
     const isSelected = i === state.selectedDay;
     const isToday = i === todayWeekday();
