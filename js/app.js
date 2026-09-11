@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.335';
+const APP_VERSION = 'Beta 5.336';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -11135,6 +11135,16 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
 
   async function applySameAsLast(){
     if (!lastEntry) return;
+    // saveEntry's band branch reads the LIVE selectedBands closure variable,
+    // not anything passed as a parameter here - for a band exercise this
+    // needs to be restored from what was actually last logged first, or the
+    // button's own label ("Same as last time - Green Band x8") promises a
+    // band selection that never actually gets saved: the set would go in
+    // with an empty band_snapshot and null resistance regardless of what
+    // the button just told the user it was about to do.
+    if (measurementType === 'band' && lastEntry.band_snapshot && lastEntry.band_snapshot.length){
+      selectedBands = lastEntry.band_snapshot.slice();
+    }
     const insertedId = await saveEntry(
       lastEntry.weight, lastEntry.weight_unit, lastEntry.weight_type || 'total',
       lastEntry.reps || null, lastEntry.num_sets || null, null
