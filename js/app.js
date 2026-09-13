@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.342';
+const APP_VERSION = 'Beta 5.343';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -2150,6 +2150,16 @@ async function openCircuitPicker(){
   overlay.style = 'position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:70; display:flex; align-items:flex-end;';
   const render = async () => {
     const { grouped, orderedKeys } = await groupExercisesByChoice(candidates, groupBy);
+    // Alphabetized within each group specifically for Equipment view - two
+    // exercises using the same gear but named differently enough to sort
+    // far apart (or just added at different times) are much easier to
+    // spot as related when the list around them is in a predictable A-Z
+    // order, rather than whatever order they happened to load in.
+    if (groupBy === 'equipment'){
+      orderedKeys.forEach(key => {
+        if (grouped[key]) grouped[key].sort((a, b) => a.name.localeCompare(b.name));
+      });
+    }
     overlay.innerHTML = `
       <div style="width:100%; max-height:80vh; overflow-y:auto; background:var(--panel); border-radius:18px 18px 0 0; padding:20px 0 calc(20px + env(safe-area-inset-bottom, 0px)) 0;">
         <div style="padding:0 18px;">
