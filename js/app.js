@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.337';
+const APP_VERSION = 'Beta 5.338';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -5391,8 +5391,18 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
     // explicitly collapsed it themselves (which always wins outright,
     // matching how it already behaved before auto-collapse existed).
     const allDone = items.length > 0 && items.every(ex => ex.loggedToday || ex.completeVia);
-    const isCollapsed = state._collapsedCats.has(slug) || (allDone && !state._reopenedDoneCats.has(slug));
-    listHtml += `<div class="category" id="${slug}"><span>${cat}</span>${editIcon}<span class="cat-chev${isCollapsed ? ' collapsed' : ''}" data-target="${slug}-body" style="cursor:pointer; padding:2px 4px;">▾</span></div><div class="cat-body${isCollapsed ? ' collapsed' : ''}" id="${slug}-body">` + items.map(exerciseRow).join('') + `</div>`;
+    // If the exercise that was JUST logged (see _justLoggedExId, the same
+    // one-shot flag driving the punch/pulse animation) lives in this
+    // section and finishing it is what completed the whole section, render
+    // it open for one more beat rather than snapping shut instantly - the
+    // wiring code below schedules the actual collapse after a short delay,
+    // so there's something to actually see close instead of it just
+    // appearing already-collapsed on the very next paint.
+    const justCompletedThisSection = allDone && state._justLoggedExId != null
+      && items.some(ex => String(ex.id) === String(state._justLoggedExId));
+    const isCollapsed = !justCompletedThisSection
+      && (state._collapsedCats.has(slug) || (allDone && !state._reopenedDoneCats.has(slug)));
+    listHtml += `<div class="category" id="${slug}"><span>${cat}</span>${editIcon}<span class="cat-chev${isCollapsed ? ' collapsed' : ''}" data-target="${slug}-body" style="cursor:pointer; padding:2px 4px;">▾</span></div><div class="cat-body${isCollapsed ? ' collapsed' : ''}${justCompletedThisSection ? ' cat-pending-collapse' : ''}" id="${slug}-body">` + items.map(exerciseRow).join('') + `</div>`;
     state.trackFlatOrder.push(...items.map(ex => ({ id: ex.id, name: ex.name })));
   });
   if (state.exercises === null){
@@ -5656,6 +5666,23 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
       card.addEventListener('click', () => { if (state._trackSearchOpen) closeTrackSearch(); });
     });
   }
+  // Sections that just became fully complete render open for one beat (see
+  // cat-pending-collapse above) - after a moment to actually register the
+  // completion, close them the same way a manual tap would, so it's a real
+  // animated transition rather than an instant snap or an invisible jump.
+  document.querySelectorAll('.cat-pending-collapse').forEach(body => {
+    const slug = body.id.replace(/-body$/, '');
+    const chev = document.querySelector(`.cat-chev[data-target="${body.id}"]`);
+    setTimeout(() => {
+      // Re-check rather than assume nothing changed in the meantime - if
+      // the user reopened it themselves, or a later render already
+      // resolved this some other way, don't fight either of those.
+      if (!document.body.contains(body)) return;
+      if (state._reopenedDoneCats.has(slug) || state._collapsedCats.has(slug)) return;
+      body.classList.add('collapsed');
+      if (chev) chev.classList.add('collapsed');
+    }, 1000);
+  });
   document.querySelectorAll('.cat-chev').forEach(chev => {
     chev.onclick = (e) => {
       e.stopPropagation();
