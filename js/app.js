@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.338';
+const APP_VERSION = 'Beta 5.339';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -2382,7 +2382,7 @@ async function quickSaveSet(exerciseId, exerciseName, best){
     return 'queued'; // genuinely saved, just not uploaded yet - matches saveEntry's convention
   }
   if (priorBest !== null && weight !== null && weight > priorBest + 0.01){
-    celebratePR(exerciseName, weight, unit, priorBest);
+    celebratePR(exerciseName, weight, unit, priorBest, String(exerciseId) === String(getLockedMainEventId()));
   }
   return data && data[0] ? data[0].id : true;
 }
@@ -10750,13 +10750,13 @@ function showQueuedSetToast(){
 // does. Deliberately a lighter toast rather than the full confetti PR
 // celebration below: moving up a band happens more often than a genuine
 // all-time PR and shouldn't compete with it for how special it feels.
-function celebrateBandLevelUp(exerciseName, bandLabel){
+function celebrateBandLevelUp(exerciseName, bandLabel, isMainEvent){
   const toast = document.createElement('div');
   toast.style = 'position:fixed; bottom:100px; left:50%; transform:translateX(-50%); max-width:90%; background:var(--panel); border:1px solid rgba(201,162,39,0.4); border-radius:12px; padding:13px 16px; display:flex; align-items:center; gap:12px; z-index:30; box-shadow:0 8px 24px rgba(0,0,0,0.4); animation:levelUpPop 0.3s ease;';
   toast.innerHTML = `
     <style>@keyframes levelUpPop{0%{transform:translateX(-50%) scale(0.9); opacity:0;}100%{transform:translateX(-50%) scale(1); opacity:1;}}</style>
     <span style="font-size:20px;">⬆️</span>
-    <div><div style="font-size:13px; color:var(--chalk);">Levelled up to <b style="color:var(--brass);">${bandLabel}</b></div><div style="font-size:11px; color:var(--slate); margin-top:1px;">${exerciseName}</div></div>`;
+    <div><div style="font-size:13px; color:var(--chalk);">Levelled up to <b style="color:var(--brass);">${bandLabel}</b></div><div style="font-size:11px; color:var(--slate); margin-top:1px;">${exerciseName}${isMainEvent ? ' <span style="color:var(--flame);">· Today\'s Main Event</span>' : ''}</div></div>`;
   document.body.appendChild(toast);
   setTimeout(() => toast.remove(), 3500);
 }
@@ -10784,7 +10784,7 @@ function checkBandLevelUp(exerciseName, newBandResistance, newBandUnit, priorSet
   return newBandResistance > priorInNewUnit ? true : null;
 }
 
-function celebratePR(exerciseName, weight, unit, priorBest){
+function celebratePR(exerciseName, weight, unit, priorBest, isMainEvent){
   const gain = Math.round((weight - priorBest) * 10) / 10;
   const overlay = document.createElement('div');
   overlay.style = `position:fixed; inset:0; z-index:60; display:flex; align-items:center; justify-content:center;
@@ -10807,6 +10807,7 @@ function celebratePR(exerciseName, weight, unit, priorBest){
     ${confetti}
     <div style="background:var(--panel); border-radius:20px; padding:28px 26px; text-align:center; max-width:300px;
       animation:prPop 0.4s ease; box-shadow:0 20px 60px rgba(0,0,0,0.6); position:relative;">
+      ${isMainEvent ? `<div style="display:inline-block; background:rgba(255,107,26,0.14); border:1px solid var(--flame); color:var(--flame); font-family:'Oswald',sans-serif; font-size:10.5px; letter-spacing:0.6px; text-transform:uppercase; border-radius:20px; padding:4px 12px; margin-bottom:10px;">🔥 Today's Main Event</div>` : ''}
       <div style="font-size:38px; margin-bottom:6px;">🏆</div>
       <div style="font-family:'Oswald',sans-serif; font-size:20px; letter-spacing:1px; text-transform:uppercase; color:#FF6B1A; margin-bottom:6px;">New PR!</div>
       <div style="font-size:14px; color:var(--chalk); margin-bottom:4px;">${exerciseName}</div>
@@ -11075,15 +11076,16 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
           }, null);
           const repsNow = Number(reps) || 0;
           const isAllTimePR = best && (combinedNow.value > best.res || (combinedNow.value === best.res && repsNow > best.reps));
+          const isMainEventNow = String(exerciseId) === String(getLockedMainEventId());
           if (isAllTimePR){
-            celebratePR(exerciseName, combinedNow.value, combinedNow.unit, best.res);
+            celebratePR(exerciseName, combinedNow.value, combinedNow.unit, best.res, isMainEventNow);
           } else if (checkBandLevelUp(exerciseName, combinedNow.value, combinedNow.unit, prev.data)){
             // Not an all-time PR, but a level-up is still worth acknowledging
             // on its own - it's a different question ("higher than my LAST
             // session specifically", not "higher than ever"), and completes
             // the loop on the progression nudge shown on the Lift row: this
             // is what actually following through on that nudge looks like.
-            celebrateBandLevelUp(exerciseName, selectedBands.map(b => b.label).join(' + '));
+            celebrateBandLevelUp(exerciseName, selectedBands.map(b => b.label).join(' + '), isMainEventNow);
           }
         }
       }
@@ -11155,7 +11157,7 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
     }
     // Celebrate a new PR: strictly greater than the prior best, and there must be a prior best.
     if (priorBest !== null && weight > priorBest + 0.01){
-      celebratePR(exerciseName, weight, unit, priorBest);
+      celebratePR(exerciseName, weight, unit, priorBest, String(exerciseId) === String(getLockedMainEventId()));
     }
     return data && data[0] ? data[0].id : null;
   }
@@ -17117,20 +17119,24 @@ function setLockedMainEventId(id){
 }
 
 function pickMainEvent(list){
-  const candidates = (list || []).filter(ex => !ex.loggedToday && !ex.completeVia);
-  if (candidates.length < 3) return null; // too short a day to have an undercard
-
+  const fullList = list || [];
   const lockedId = getLockedMainEventId();
   if (lockedId){
-    const locked = candidates.find(ex => String(ex.id) === String(lockedId));
-    // Still there and still not logged - stick with it rather than
-    // recomputing, even if something else would technically score higher
-    // now. Otherwise the moment ANY OTHER exercise on the day briefly
-    // outscores it, both the popup and the card would silently swap picks
-    // mid-day, and this whole feature is about consistency, not "most
-    // correct in a given millisecond".
+    const locked = fullList.find(ex => String(ex.id) === String(lockedId));
+    // Once today's Main Event is decided, it stays THE Main Event for the
+    // rest of the day - whether it's still pending or already done. It
+    // does NOT get replaced by a fresh pick the moment it's finished:
+    // "Main Event" is meant to be the one headline lift for the day, not a
+    // slot that keeps refilling itself as things get crossed off. Callers
+    // check ex.loggedToday/ex.completeVia on the result to render a
+    // "complete" state instead of the normal "not done yet" framing.
     if (locked) return locked;
+    // Locked exercise no longer exists at all (removed from today's plan) -
+    // nothing left to hold onto, fall through to pick fresh below.
   }
+
+  const candidates = fullList.filter(ex => !ex.loggedToday && !ex.completeVia);
+  if (candidates.length < 3) return null; // too short a day to have an undercard
 
   const weighInKg = (ex) => {
     const s = ex.lastSet || ex.maxSet;
@@ -17186,6 +17192,21 @@ function staleDaysPhrase(days){
 function buildMainEventHtml(list){
   const ex = pickMainEvent(list);
   if (!ex) return '';
+  const isDone = ex.loggedToday || ex.completeVia;
+  if (isDone){
+    // Today's Main Event is decided once and doesn't get replaced just
+    // because it's finished - this is what "finished" looks like instead
+    // of silently picking someone else and acting like nothing happened.
+    return `
+      <div id="mainEventCard" data-ex-id="${ex.id}" data-ex-name="${(ex.name||'').replace(/"/g,'&quot;')}"
+        style="position:relative; overflow:hidden; margin:14px 18px 0 18px; cursor:pointer;
+        background:linear-gradient(155deg, rgba(143,191,122,0.14), rgba(143,191,122,0.02));
+        border:1px solid rgba(143,191,122,0.4); border-radius:16px; padding:15px;">
+        <div style="font-size:11px; color:var(--good); font-weight:600;">Main event · done</div>
+        <div style="font-family:'Bebas Neue',sans-serif; font-size:27px; line-height:1; margin:5px 0 3px 0;">${ex.name}</div>
+        <div class="small" style="color:var(--slate);">Today's headline lift, crossed off. Everything else is a bonus.</div>
+      </div>`;
+  }
   const s = ex.lastSet || ex.maxSet;
   const label = s ? formatSetValue(s) : '';
   const isStale = ex.staleDays !== null && ex.staleDays !== undefined;
@@ -17345,8 +17366,11 @@ async function showDailyBrief(list, dayTypeLabel, preview){
 
   const s = mainEx.lastSet || mainEx.maxSet;
   const mainLabel = s ? formatSetValue(s) : '';
+  const mainIsDone = mainEx.loggedToday || mainEx.completeVia;
   const isStale = mainEx.staleDays !== null && mainEx.staleDays !== undefined;
-  const mainSub = isStale ? staleDaysPhrase(mainEx.staleDays) : 'The lift that decides today.';
+  const mainSub = mainIsDone
+    ? "Today's headline lift, crossed off. Everything else is a bonus."
+    : (isStale ? staleDaysPhrase(mainEx.staleDays) : 'The lift that decides today.');
 
   const dayLabel = (dayTypeLabel && dayTypeLabel !== '—') ? dayTypeLabel : 'Today';
 
@@ -17368,7 +17392,7 @@ async function showDailyBrief(list, dayTypeLabel, preview){
 
   const pushMuscleTip = pushMuscle ? tipForMuscle(pushMuscle.key) : null;
   const pages = [
-    { eyebrow: 'Main Event', title: mainEx.name, sub: `${mainLabel ? mainLabel + ' last time. ' : ''}${mainSub}`, accent: 'var(--flame)' },
+    { eyebrow: mainIsDone ? 'Main Event · Done' : 'Main Event', title: mainEx.name, sub: mainIsDone ? mainSub : `${mainLabel ? mainLabel + ' last time. ' : ''}${mainSub}`, accent: mainIsDone ? 'var(--good)' : 'var(--flame)' },
     pushMuscle
       ? { eyebrow: 'Push Yourself On', title: pushMuscle.label, sub: pushMuscle.hasStagnant ? `Hasn't moved in a few sessions - today's the day.` : `${dayLabel}'s biggest focus. Make it count.`, accent: 'var(--good)' }
       : { eyebrow: 'Push Yourself On', title: dayLabel, sub: 'Show up and give it everything.', accent: 'var(--good)' },
