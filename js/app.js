@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.339';
+const APP_VERSION = 'Beta 5.340';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -10777,7 +10777,19 @@ function checkBandLevelUp(exerciseName, newBandResistance, newBandUnit, priorSet
   // against a real caller rather than assumed, and it didn't.
   const priorBandSets = (priorSets || []).filter(s => s.band_resistance != null);
   if (!priorBandSets.length) return null;
-  const mostRecentPrior = priorBandSets.sort((a,b) => b.logged_at.localeCompare(a.logged_at))[0];
+  // logged_at is a plain date (no time component), so two sets logged
+  // earlier the SAME day - a drop-set pattern, or just multiple sets in one
+  // session - tie exactly and sort() can't tell them apart at all: the
+  // "most recent" one silently depended on whatever order the database
+  // happened to return tied rows in, undefined by SQL semantics without an
+  // explicit order. created_at is a real timestamp and already used
+  // elsewhere in this file for exactly this "genuine order within the same
+  // day" problem - falls back to logged_at only if a caller's query didn't
+  // happen to select created_at.
+  const mostRecentPrior = priorBandSets.sort((a,b) => {
+    if (a.created_at && b.created_at) return new Date(b.created_at) - new Date(a.created_at);
+    return b.logged_at.localeCompare(a.logged_at);
+  })[0];
   const priorInNewUnit = mostRecentPrior.band_resistance_unit === newBandUnit
     ? mostRecentPrior.band_resistance
     : convertWeight(mostRecentPrior.band_resistance, mostRecentPrior.band_resistance_unit || 'lb', newBandUnit);
@@ -11065,7 +11077,7 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
       const combinedNow = combinedBandResistance(selectedBands);
       if (combinedNow){
         const prev = await withTimeout(
-          supabaseClient.from('sets').select('band_resistance, band_resistance_unit, reps, logged_at')
+          supabaseClient.from('sets').select('band_resistance, band_resistance_unit, reps, logged_at, created_at')
             .eq(idField, exerciseId).not('band_resistance', 'is', null),
           10000);
         if (!prev.__timeout && !prev.error && prev.data && prev.data.length){
