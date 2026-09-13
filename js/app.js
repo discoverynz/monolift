@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.341';
+const APP_VERSION = 'Beta 5.342';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -2065,7 +2065,7 @@ function editCircuitItem(exId){
   if (!item) return;
   const isBand = item.best && (item.best.measurement_type === 'band' || item.best.weight_unit === 'band');
   if (isBand){
-    openCircuitBandEditor(item);
+    openCircuitBandEditor(exId);
     return;
   }
   const currentReps = item.best.reps || '';
@@ -2086,7 +2086,11 @@ function editCircuitItem(exId){
 // deliberately doesn't reach for: a circuit round is meant to be a fast
 // tap, not a detour into a multi-select. Picking a single band covers the
 // overwhelming majority of circuit use and keeps the sheet to one screen.
-async function openCircuitBandEditor(item){
+async function openCircuitBandEditor(exId){
+  const circuit = getActiveCircuit();
+  if (!circuit) return;
+  const item = circuit.items.find(it => String(it.id) === String(exId));
+  if (!item) return;
   const bands = await loadBands();
   if (!bands.length){
     alert('Add a band first from Me → Bands, then it\'ll show up here.');
@@ -2111,8 +2115,13 @@ async function openCircuitBandEditor(item){
       const combined = combinedBandResistance(snap);
       item.best.band_resistance = combined ? combined.value : null;
       item.best.band_resistance_unit = combined ? combined.unit : null;
-      const circuit = getActiveCircuit();
-      if (circuit) setActiveCircuit(circuit.items);
+      // Save the SAME object graph item came from - a second, independent
+      // getActiveCircuit() call here would re-parse localStorage fresh,
+      // returning a completely different (unmutated) copy and silently
+      // discarding this edit. That was the actual bug: the band picker
+      // looked like it worked, but nothing was ever persisted, so every
+      // later tap and every later screen kept reading the old band back.
+      setActiveCircuit(circuit.items);
       overlay.remove();
       refreshCircuitBoxInPlace();
     };
@@ -2127,27 +2136,42 @@ async function openCircuitPicker(){
   const existing = getActiveCircuit();
   const existingIds = new Set((existing ? existing.items : []).map(it => String(it.id)));
   const selected = new Set(existingIds);
-  const candidates = (state.trackFlatOrder || []).filter((v, i, arr) =>
-    arr.findIndex(x => String(x.id) === String(v.id)) === i // de-duped by id - the same exercise can appear more than once in flat order via alt-group placeholders
-  );
+  const idsOnDay = new Set((state.trackFlatOrder || []).map(v => String(v.id)));
+  // Full exercise objects, not just {id, name} - needed for the muscle/
+  // equipment grouping below, and doubles as the source for measurement_type
+  // when defaulting a brand-new item's best further down.
+  const candidates = (state.exercises || []).filter(ex => idsOnDay.has(String(ex.id)));
   if (candidates.length < 2){
     alert("Add at least 2 exercises to today's plan first, then build a circuit from them.");
     return;
   }
+  let groupBy = getGroupByPref();
   const overlay = document.createElement('div');
   overlay.style = 'position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:70; display:flex; align-items:flex-end;';
-  const render = () => {
+  const render = async () => {
+    const { grouped, orderedKeys } = await groupExercisesByChoice(candidates, groupBy);
     overlay.innerHTML = `
-      <div style="width:100%; max-height:80vh; overflow-y:auto; background:var(--panel); border-radius:18px 18px 0 0; padding:20px 18px calc(20px + env(safe-area-inset-bottom, 0px)) 18px;">
-        <div class="field-label" style="padding:0 0 4px 0;">Build your circuit</div>
-        <div class="small" style="padding:0 0 12px 0; color:var(--slate);">Pick 2 or more exercises to superset together</div>
-        ${candidates.map(ex => `
-          <div class="pick-row" data-ex-id="${ex.id}" data-ex-name="${(ex.name||'').replace(/"/g,'&quot;')}">
-            <div style="width:20px; height:20px; border-radius:6px; border:1.5px solid ${selected.has(String(ex.id))?'var(--flame)':'var(--line)'}; background:${selected.has(String(ex.id))?'var(--flame)':'transparent'}; flex-shrink:0; display:flex; align-items:center; justify-content:center; color:#1A0D06; font-size:12px; font-weight:700; margin-right:10px;">${selected.has(String(ex.id))?'✓':''}</div>
-            <div class="ex-name">${ex.name}</div>
-          </div>`).join('')}
-        <button class="save-btn" id="confirmCircuitBtn" style="margin-top:14px;" ${selected.size < 2 ? 'disabled' : ''}>${existing ? 'Update circuit' : 'Start circuit'}</button>
+      <div style="width:100%; max-height:80vh; overflow-y:auto; background:var(--panel); border-radius:18px 18px 0 0; padding:20px 0 calc(20px + env(safe-area-inset-bottom, 0px)) 0;">
+        <div style="padding:0 18px;">
+          <div class="field-label" style="padding:0 0 4px 0;">Build your circuit</div>
+          <div class="small" style="padding:0 0 8px 0; color:var(--slate);">Pick 2 or more exercises to superset together</div>
+        </div>
+        ${groupByToggleHtml(groupBy)}
+        <div style="padding:0 18px;">
+          ${orderedKeys.map(key => (grouped[key] || []).length ? `
+            <div class="section-label" style="padding:12px 0 4px 0; color:var(--flame); font-family:'Oswald',sans-serif; font-size:12px; text-transform:uppercase; letter-spacing:0.4px;">${key}</div>
+            ${(grouped[key] || []).map(ex => `
+              <div class="pick-row" data-ex-id="${ex.id}">
+                <div style="width:20px; height:20px; border-radius:6px; border:1.5px solid ${selected.has(String(ex.id))?'var(--flame)':'var(--line)'}; background:${selected.has(String(ex.id))?'var(--flame)':'transparent'}; flex-shrink:0; display:flex; align-items:center; justify-content:center; color:#1A0D06; font-size:12px; font-weight:700; margin-right:10px;">${selected.has(String(ex.id))?'✓':''}</div>
+                <div class="ex-name">${ex.name}</div>
+              </div>`).join('')}
+          ` : '').join('')}
+          <button class="save-btn" id="confirmCircuitBtn" style="margin-top:14px;" ${selected.size < 2 ? 'disabled' : ''}>${existing ? 'Update circuit' : 'Start circuit'}</button>
+        </div>
       </div>`;
+    overlay.querySelectorAll('.groupby-chip').forEach(chip => {
+      chip.onclick = () => { groupBy = chip.dataset.groupby; setGroupByPref(groupBy); render(); };
+    });
     overlay.querySelectorAll('.pick-row').forEach(row => {
       row.onclick = () => {
         const id = row.dataset.exId;
@@ -2168,22 +2192,25 @@ async function openCircuitPicker(){
         const seed = state.trackBestSetById ? state.trackBestSetById[ex.id] : null;
         let best;
         if (seed){
-          best = { ...seed };
-        } else {
+          // num_sets deliberately forced to null (not carried over from
+          // seed) - a circuit tap always represents exactly ONE set. The
+          // exercise's last NORMAL (non-circuit) set might genuinely have
+          // been "5 sets of 10", and copying that verbatim meant every
+          // single circuit tap was being logged as 5 sets instead of 1,
+          // compounding every time "+1 set" was pressed.
+          best = { ...seed, num_sets: null };
+        } else if (ex.measurement_type === 'band'){
           // No history to seed from - default based on what this exercise
           // is actually configured as, not a blanket bodyweight guess. A
           // brand-new band exercise defaulted to bodyweight would silently
           // save every circuit tap as the wrong measurement type until
           // someone noticed and used the band editor to fix it.
-          const fullEx = (state.exercises || []).find(e => String(e.id) === String(ex.id));
-          if (fullEx && fullEx.measurement_type === 'band'){
-            best = { weight: null, weight_unit: 'band', weight_type: 'total', reps: 10, num_sets: null,
-              measurement_type: 'band', band_snapshot: null, band_resistance: null, band_resistance_unit: null };
-          } else if (fullEx && fullEx.measurement_type){
-            best = { weight: null, weight_unit: fullEx.measurement_type, weight_type: 'total', reps: 10, num_sets: null };
-          } else {
-            best = { weight: null, weight_unit: 'bodyweight', weight_type: 'total', reps: 10, num_sets: null };
-          }
+          best = { weight: null, weight_unit: 'band', weight_type: 'total', reps: 10, num_sets: null,
+            measurement_type: 'band', band_snapshot: null, band_resistance: null, band_resistance_unit: null };
+        } else if (ex.measurement_type){
+          best = { weight: null, weight_unit: ex.measurement_type, weight_type: 'total', reps: 10, num_sets: null };
+        } else {
+          best = { weight: null, weight_unit: 'bodyweight', weight_type: 'total', reps: 10, num_sets: null };
         }
         return { id: ex.id, name: ex.name, best, count: 0 };
       });
@@ -2192,7 +2219,7 @@ async function openCircuitPicker(){
       renderTrack();
     };
   };
-  render();
+  await render();
   document.body.appendChild(overlay);
   overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
 }
