@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.340';
+const APP_VERSION = 'Beta 5.341';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -1926,6 +1926,277 @@ function isAvailableAtLocation(ex, locationId){
 // one. Stored locally rather than in the database on purpose - it's about
 // where this phone is right now, not a property of the account.
 const TRIP_KEY = 'zealift_trip_mode';
+// ---------- HOME CIRCUIT (superset/circuit tracker for the Home tab) ----------
+// A circuit is 2+ exercises done back-to-back with a single tap per round,
+// instead of opening the full log form for every rep count in a superset.
+// Self-expiring like the trip/day-swap locks elsewhere in this file - a
+// circuit built yesterday has no business reappearing today.
+function getActiveCircuit(){
+  try {
+    const raw = localStorage.getItem('zealift_circuit');
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed.date !== todayStr() || !parsed.items || !parsed.items.length) return null;
+    return parsed;
+  } catch(e){ return null; }
+}
+function setActiveCircuit(items){
+  try { localStorage.setItem('zealift_circuit', JSON.stringify({ date: todayStr(), items })); } catch(e){}
+}
+function clearActiveCircuit(){ try { localStorage.removeItem('zealift_circuit'); } catch(e){} }
+
+// The round number is whichever exercise has been logged the FEWEST times
+// this circuit, plus one - not just "how many taps happened total". That's
+// what actually tells you whether a round is complete: tapping the same
+// exercise five times in a row while never touching the others isn't five
+// rounds, it's one exercise five sets ahead.
+function circuitRoundNumber(items){
+  if (!items || !items.length) return 1;
+  return Math.min(...items.map(it => it.count || 0)) + 1;
+}
+
+// Builds either the "start a circuit" prompt or the live circuit bar,
+// depending on whether one's already active today. Sits ABOVE the normal
+// category list on the Home tab specifically - it never replaces or hides
+// that list, just adds a faster way to log a superset without opening the
+// full form for every single rep count.
+function buildCircuitAreaHtml(list){
+  const circuit = getActiveCircuit();
+  if (!circuit){
+    if ((list || []).length < 2) return ''; // nothing to build a circuit from yet
+    return `
+      <div class="circuit-start" id="startCircuitBtn">
+        + Start a circuit
+        <div class="circuit-start-sub">Log a superset with one tap per round - no form, no typing</div>
+      </div>`;
+  }
+  const round = circuitRoundNumber(circuit.items);
+  const tiles = circuit.items.map(it => `
+    <div class="circuit-tile" data-ex-id="${it.id}">
+      <div class="tile-info">
+        <div class="tile-name">${it.name}</div>
+        <div class="tile-meta">
+          <span class="circuit-edit-btn" data-ex-id="${it.id}">${formatSetValue(it.best)} ✎</span>
+          <span class="tile-count">&middot; logged ${it.count}&times;</span>
+        </div>
+      </div>
+      <button class="circuit-tap-btn" data-ex-id="${it.id}">+1 set</button>
+    </div>`).join('');
+  return `
+    <div class="circuit-box">
+      <div class="circuit-head">
+        <div class="circuit-title">Circuit &middot; round <b>${round}</b></div>
+        <div class="circuit-end-btn" id="endCircuitBtn">End</div>
+      </div>
+      ${tiles}
+      <div class="circuit-add-more" id="addToCircuitBtn">+ Add another exercise</div>
+    </div>`;
+}
+
+// Shared by the main Track render AND the targeted circuit-only refresh
+// after a tap - both need the exact same handlers wired, so this exists
+// once rather than drifting into two slightly different copies.
+function wireCircuitHandlers(){
+  const startCircuitBtn = document.getElementById('startCircuitBtn');
+  if (startCircuitBtn) startCircuitBtn.onclick = () => openCircuitPicker();
+  const addToCircuitBtn = document.getElementById('addToCircuitBtn');
+  if (addToCircuitBtn) addToCircuitBtn.onclick = () => openCircuitPicker();
+  const endCircuitBtn = document.getElementById('endCircuitBtn');
+  if (endCircuitBtn) endCircuitBtn.onclick = () => { clearActiveCircuit(); renderTrack(); };
+  document.querySelectorAll('.circuit-tap-btn').forEach(btn => {
+    btn.onclick = () => logCircuitSet(btn.dataset.exId);
+  });
+  document.querySelectorAll('.circuit-edit-btn').forEach(el => {
+    el.onclick = () => editCircuitItem(el.dataset.exId);
+  });
+}
+
+// Replaces just the circuit box in place, rather than a full renderTrack() -
+// a full re-render right after tapping would re-fetch exercise data that
+// doesn't reflect this set yet (the actual write hasn't landed below), so
+// the exercise's own card further down the screen would flash back to
+// "not logged" for a moment. Only the circuit bar itself needs to update
+// the instant you tap; the rest of the screen correctly catches up once
+// the real save actually finishes.
+function refreshCircuitBoxInPlace(){
+  const existing = document.querySelector('.circuit-box, .circuit-start');
+  if (!existing) return;
+  const holder = document.createElement('div');
+  holder.innerHTML = buildCircuitAreaHtml(null);
+  const fresh = holder.firstElementChild;
+  if (fresh) existing.replaceWith(fresh);
+  else existing.remove();
+  wireCircuitHandlers();
+}
+
+async function logCircuitSet(exId){
+  const circuit = getActiveCircuit();
+  if (!circuit) return;
+  const item = circuit.items.find(it => String(it.id) === String(exId));
+  if (!item) return;
+  // Optimistic - the tap should feel instant. Rolled back below if the
+  // real save turns out to have failed outright (not just queued offline,
+  // which still genuinely counts as saved).
+  item.count = (item.count || 0) + 1;
+  setActiveCircuit(circuit.items);
+  refreshCircuitBoxInPlace();
+  const result = await quickSaveSet(item.id, item.name, item.best);
+  if (result === false){
+    const c2 = getActiveCircuit();
+    if (c2){
+      const it2 = c2.items.find(x => String(x.id) === String(exId));
+      if (it2 && it2.count > 0) it2.count--;
+      setActiveCircuit(c2.items);
+      refreshCircuitBoxInPlace();
+    }
+    alert("Couldn't log that set - try again.");
+    return;
+  }
+  // Now safe to fully refresh - the write has actually landed, so the
+  // exercise's own card and the header stats catch up accurately instead
+  // of showing stale pre-save data.
+  if (state.currentTab === 'track') renderTrack();
+}
+
+function editCircuitItem(exId){
+  const circuit = getActiveCircuit();
+  if (!circuit) return;
+  const item = circuit.items.find(it => String(it.id) === String(exId));
+  if (!item) return;
+  const isBand = item.best && (item.best.measurement_type === 'band' || item.best.weight_unit === 'band');
+  if (isBand){
+    openCircuitBandEditor(item);
+    return;
+  }
+  const currentReps = item.best.reps || '';
+  promptText({
+    title: `${item.name} - reps`, placeholder: 'Reps', initialValue: String(currentReps),
+    onConfirm: (val) => {
+      const n = parseInt(val, 10);
+      if (!n || n <= 0) return;
+      item.best.reps = n;
+      setActiveCircuit(circuit.items);
+      refreshCircuitBoxInPlace();
+    }
+  });
+}
+
+// A compact single-band picker for the circuit tile specifically - the
+// full log form's picker supports stacking multiple bands, which this
+// deliberately doesn't reach for: a circuit round is meant to be a fast
+// tap, not a detour into a multi-select. Picking a single band covers the
+// overwhelming majority of circuit use and keeps the sheet to one screen.
+async function openCircuitBandEditor(item){
+  const bands = await loadBands();
+  if (!bands.length){
+    alert('Add a band first from Me → Bands, then it\'ll show up here.');
+    return;
+  }
+  const currentLabel = item.best.band_snapshot && item.best.band_snapshot[0] ? item.best.band_snapshot[0].label : null;
+  const overlay = document.createElement('div');
+  overlay.style = 'position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:70; display:flex; align-items:flex-end;';
+  overlay.innerHTML = `
+    <div style="width:100%; background:var(--panel); border-radius:18px 18px 0 0; padding:20px 18px calc(20px + env(safe-area-inset-bottom, 0px)) 18px;">
+      <div class="field-label" style="padding:0 0 12px 0;">${item.name} - band</div>
+      ${bands.map(b => `<div class="pick-row" data-band-id="${b.id}" style="${b.label===currentLabel?'color:var(--flame);':''}"><div class="ex-name">${b.label}${b.resistance!=null?` (${b.resistance}${b.resistance_unit||'lb'})`:''}</div>${b.label===currentLabel?'<span>✓</span>':''}</div>`).join('')}
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.querySelectorAll('.pick-row').forEach(row => {
+    row.onclick = () => {
+      const band = bands.find(b => String(b.id) === row.dataset.bandId);
+      if (!band) return;
+      const snap = buildBandSnapshot([{ id: band.id, label: band.label, colour: band.colour, resistance: band.resistance, resistance_unit: band.resistance_unit }]);
+      item.best.band_snapshot = snap;
+      const combined = combinedBandResistance(snap);
+      item.best.band_resistance = combined ? combined.value : null;
+      item.best.band_resistance_unit = combined ? combined.unit : null;
+      const circuit = getActiveCircuit();
+      if (circuit) setActiveCircuit(circuit.items);
+      overlay.remove();
+      refreshCircuitBoxInPlace();
+    };
+  });
+}
+
+// Builds (or extends) today's circuit. Reopening this with items already in
+// the circuit pre-checks them, so "+ Add another exercise" and the initial
+// "+ Start a circuit" share one picker instead of two slightly different
+// screens.
+async function openCircuitPicker(){
+  const existing = getActiveCircuit();
+  const existingIds = new Set((existing ? existing.items : []).map(it => String(it.id)));
+  const selected = new Set(existingIds);
+  const candidates = (state.trackFlatOrder || []).filter((v, i, arr) =>
+    arr.findIndex(x => String(x.id) === String(v.id)) === i // de-duped by id - the same exercise can appear more than once in flat order via alt-group placeholders
+  );
+  if (candidates.length < 2){
+    alert("Add at least 2 exercises to today's plan first, then build a circuit from them.");
+    return;
+  }
+  const overlay = document.createElement('div');
+  overlay.style = 'position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:70; display:flex; align-items:flex-end;';
+  const render = () => {
+    overlay.innerHTML = `
+      <div style="width:100%; max-height:80vh; overflow-y:auto; background:var(--panel); border-radius:18px 18px 0 0; padding:20px 18px calc(20px + env(safe-area-inset-bottom, 0px)) 18px;">
+        <div class="field-label" style="padding:0 0 4px 0;">Build your circuit</div>
+        <div class="small" style="padding:0 0 12px 0; color:var(--slate);">Pick 2 or more exercises to superset together</div>
+        ${candidates.map(ex => `
+          <div class="pick-row" data-ex-id="${ex.id}" data-ex-name="${(ex.name||'').replace(/"/g,'&quot;')}">
+            <div style="width:20px; height:20px; border-radius:6px; border:1.5px solid ${selected.has(String(ex.id))?'var(--flame)':'var(--line)'}; background:${selected.has(String(ex.id))?'var(--flame)':'transparent'}; flex-shrink:0; display:flex; align-items:center; justify-content:center; color:#1A0D06; font-size:12px; font-weight:700; margin-right:10px;">${selected.has(String(ex.id))?'✓':''}</div>
+            <div class="ex-name">${ex.name}</div>
+          </div>`).join('')}
+        <button class="save-btn" id="confirmCircuitBtn" style="margin-top:14px;" ${selected.size < 2 ? 'disabled' : ''}>${existing ? 'Update circuit' : 'Start circuit'}</button>
+      </div>`;
+    overlay.querySelectorAll('.pick-row').forEach(row => {
+      row.onclick = () => {
+        const id = row.dataset.exId;
+        selected.has(id) ? selected.delete(id) : selected.add(id);
+        render();
+      };
+    });
+    const confirmBtn = overlay.querySelector('#confirmCircuitBtn');
+    if (confirmBtn) confirmBtn.onclick = () => {
+      if (selected.size < 2) return;
+      const items = candidates.filter(ex => selected.has(String(ex.id))).map(ex => {
+        // Keep an already-in-progress exercise's count and current best
+        // (including any reps/band edits made this session) rather than
+        // resetting it just because the circuit was re-saved to add
+        // another exercise.
+        const prior = existing ? existing.items.find(it => String(it.id) === String(ex.id)) : null;
+        if (prior) return prior;
+        const seed = state.trackBestSetById ? state.trackBestSetById[ex.id] : null;
+        let best;
+        if (seed){
+          best = { ...seed };
+        } else {
+          // No history to seed from - default based on what this exercise
+          // is actually configured as, not a blanket bodyweight guess. A
+          // brand-new band exercise defaulted to bodyweight would silently
+          // save every circuit tap as the wrong measurement type until
+          // someone noticed and used the band editor to fix it.
+          const fullEx = (state.exercises || []).find(e => String(e.id) === String(ex.id));
+          if (fullEx && fullEx.measurement_type === 'band'){
+            best = { weight: null, weight_unit: 'band', weight_type: 'total', reps: 10, num_sets: null,
+              measurement_type: 'band', band_snapshot: null, band_resistance: null, band_resistance_unit: null };
+          } else if (fullEx && fullEx.measurement_type){
+            best = { weight: null, weight_unit: fullEx.measurement_type, weight_type: 'total', reps: 10, num_sets: null };
+          } else {
+            best = { weight: null, weight_unit: 'bodyweight', weight_type: 'total', reps: 10, num_sets: null };
+          }
+        }
+        return { id: ex.id, name: ex.name, best, count: 0 };
+      });
+      setActiveCircuit(items);
+      overlay.remove();
+      renderTrack();
+    };
+  };
+  render();
+  document.body.appendChild(overlay);
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+}
+
 function getTripMode(){
   try {
     const raw = localStorage.getItem(TRIP_KEY);
@@ -5363,6 +5634,9 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
   let listHtml = '';
   state.trackFlatOrder = [];
   state.trackBestSetById = {};
+  if (isAnyDay(state.selectedDay)){
+    listHtml += buildCircuitAreaHtml(visibleExercises);
+  }
   orderedKeys.forEach(cat => {
     const items = grouped[cat] || [];
     if (items.length === 0) return;
@@ -5666,6 +5940,7 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
       card.addEventListener('click', () => { if (state._trackSearchOpen) closeTrackSearch(); });
     });
   }
+  wireCircuitHandlers();
   // Sections that just became fully complete render open for one beat (see
   // cat-pending-collapse above) - after a moment to actually register the
   // completion, close them the same way a manual tap would, so it's a real
