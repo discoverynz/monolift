@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.343';
+const APP_VERSION = 'Beta 5.344';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -1674,8 +1674,9 @@ async function moveExerciseToDay(item, newWeekday, clearAlt){
     for (const id of item.ids){
       const payload = { weekday: newWeekday };
       if (clearAlt) payload.alt_group_id = null;
-      const { data, error } = await withTimeout(supabaseClient.from('exercises').update(payload).eq('id', id).select(), 15000);
-      results.push({ id, ok: !error && data && data.length > 0, error: error ? error.message : (!data || !data.length ? 'update matched zero rows' : null) });
+      const r = await withTimeout(supabaseClient.from('exercises').update(payload).eq('id', id).select(), 15000);
+      const { data, error } = r;
+      results.push({ id, ok: !r.__timeout && !error && data && data.length > 0, error: r.__timeout ? 'timed out' : (error ? error.message : (!data || !data.length ? 'update matched zero rows' : null)) });
     }
     return results;
   }
@@ -1698,10 +1699,11 @@ async function moveExerciseToDay(item, newWeekday, clearAlt){
     results.push({ id: existing.data.id, ok: true, error: null }); // already exists, nothing to do
   } else {
     const userData = { user: await getCurrentUser() };
-    const { data, error } = await withTimeout(supabaseClient.from('exercise_days').insert({
+    const r = await withTimeout(supabaseClient.from('exercise_days').insert({
       user_id: userData.user.id, exercise_master_id: item.masterId, weekday: newWeekday
     }).select(), 15000);
-    results.push({ id: data && data[0] ? data[0].id : null, ok: !error && data && data.length > 0, error: error ? error.message : null });
+    const { data, error } = r;
+    results.push({ id: data && data[0] ? data[0].id : null, ok: !r.__timeout && !error && data && data.length > 0, error: r.__timeout ? 'timed out' : (error ? error.message : null) });
   }
   if (clearAlt && item.masterId){
     const r = await withTimeout(supabaseClient.from('exercise_master').update({ alt_group_id: null }).eq('id', item.masterId), 15000);
@@ -1718,11 +1720,13 @@ async function removeExerciseFromDay(exerciseRow){
   invalidateTrackSnapshots(); // day contents change - stale snapshot must not survive
   await awaitMasterFlagHealed();
   if (!getUseExerciseMasterFlag()){
-    const { data, error } = await withTimeout(supabaseClient.from('exercises').update({ active: false }).eq('id', exerciseRow.id).select(), 15000);
-    return { ok: !error && data && data.length > 0, error: error ? error.message : (!data || !data.length ? 'update matched zero rows' : null) };
+    const r = await withTimeout(supabaseClient.from('exercises').update({ active: false }).eq('id', exerciseRow.id).select(), 15000);
+    const { data, error } = r;
+    return { ok: !r.__timeout && !error && data && data.length > 0, error: r.__timeout ? 'timed out' : (error ? error.message : (!data || !data.length ? 'update matched zero rows' : null)) };
   }
-  const { data, error } = await withTimeout(supabaseClient.from('exercise_days').delete().eq('id', exerciseRow.id).select(), 15000);
-  return { ok: !error && data && data.length > 0, error: error ? error.message : (!data || !data.length ? 'delete matched zero rows' : null) };
+  const r2 = await withTimeout(supabaseClient.from('exercise_days').delete().eq('id', exerciseRow.id).select(), 15000);
+  const { data, error } = r2;
+  return { ok: !r2.__timeout && !error && data && data.length > 0, error: r2.__timeout ? 'timed out' : (error ? error.message : (!data || !data.length ? 'delete matched zero rows' : null)) };
 }
 
 // Shared by every path that can decide to reuse an existing exercise by
@@ -1797,7 +1801,7 @@ async function createExerciseForToday(payload){
       await withTimeout(supabaseClient.from('exercise_master').update(updates).eq('id', masterId), 15000);
     }
   } else {
-    const { data: inserted, error } = await withTimeout(supabaseClient.from('exercise_master').insert({
+    const insertResult = await withTimeout(supabaseClient.from('exercise_master').insert({
       user_id: payload.user_id, name: payload.name, category: payload.category,
       alt_group_id: payload.alt_group_id || null, push_pull: payload.push_pull || null,
       upper_lower: payload.upper_lower || null,
@@ -1810,7 +1814,8 @@ async function createExerciseForToday(payload){
       measurement_type: payload.measurement_type || null,
       uses_door_anchor: !!payload.uses_door_anchor, door_anchor_level: payload.door_anchor_level || null
     }).select(), 15000);
-    if (error || !inserted || !inserted[0]) return { data: null, error: error || { message: 'Could not create exercise' }, wasExisting: false };
+    const inserted = insertResult.data, error = insertResult.error;
+    if (insertResult.__timeout || error || !inserted || !inserted[0]) return { data: null, error: insertResult.__timeout ? { message: 'Request timed out' } : (error || { message: 'Could not create exercise' }), wasExisting: false };
     masterId = inserted[0].id;
   }
   const dayResult = await withTimeout(supabaseClient.from('exercise_days').insert({
@@ -3683,8 +3688,8 @@ async function openRetagLocationFromNotesScreen(){
     const errors = [];
     for (const s of [...toSmales, ...toFuncFit]){
       const targetId = toSmales.includes(s) ? smalesLoc.id : funcFitLoc.id;
-      const { error } = await withTimeout(supabaseClient.from('sets').update({ location_id: targetId }).eq('id', s.id), 15000);
-      if (error) errors.push({ setId: s.id, message: error.message });
+      const r = await withTimeout(supabaseClient.from('sets').update({ location_id: targetId }).eq('id', s.id), 15000);
+      if (r.__timeout || r.error) errors.push({ setId: s.id, message: r.error ? r.error.message : 'timed out' });
       else updated++;
     }
     if (errors.length){
@@ -4277,9 +4282,9 @@ async function openPublishToMonoLiftScreen(){
       const rows = Object.entries(selected)
         .filter(([, v]) => v.muscle && v.equipment)
         .map(([name, v]) => ({ name, primary_muscle: v.muscle, equipment: v.equipment, contributed_by: userData.user.id }));
-      const { error } = await withTimeout(supabaseClient.from('zealift_exercise_db').insert(rows), 15000);
-      if (error){
-        alert(`Could not publish: ${error.message}\n\nIf this mentions a missing table, the MonoLift database migration needs to be run first.`);
+      const r = await withTimeout(supabaseClient.from('zealift_exercise_db').insert(rows), 15000);
+      if (r.__timeout || r.error){
+        alert(`Could not publish: ${r.error ? r.error.message : 'request timed out'}\n\nIf this mentions a missing table, the MonoLift database migration needs to be run first.`);
         return;
       }
       _zealiftDbCache = null; // force a fresh load next time the database tab opens
@@ -4441,16 +4446,18 @@ function openEditLocationEquipmentScreen(locationId, locationName, currentTags, 
       const notesEl = overlay.querySelector('#locNotes');
       const updatePayload = { equipment_tags: [...selected] };
       if (notesEl) updatePayload.notes = notesEl.value.trim() || null;
-      let { error } = await withTimeout(supabaseClient.from('locations').update(updatePayload).eq('id', locationId), 15000);
+      let r = await withTimeout(supabaseClient.from('locations').update(updatePayload).eq('id', locationId), 15000);
+      let error = r.error;
       // If the notes column doesn't exist yet, don't let that block saving
       // the equipment tags - retry without it rather than failing the whole
       // save for a field the migration may not have added.
       if (error && /notes/i.test(error.message || '')){
         const retry = await withTimeout(supabaseClient.from('locations').update({ equipment_tags: [...selected] }).eq('id', locationId), 15000);
+        r = retry;
         error = retry.error;
       }
-      if (error){
-        alert(`Could not save: ${error.message}\n\nIf this mentions a missing column, the equipment_tags migration needs to be run first.`);
+      if (r.__timeout || error){
+        alert(`Could not save: ${error ? error.message : 'request timed out'}\n\nIf this mentions a missing column, the equipment_tags migration needs to be run first.`);
         return false;
       }
       invalidateLocationsCache();
@@ -6030,9 +6037,9 @@ async function renderTrackFromData(dayTypeLabel, headerStats, exdb, allLocations
           const userData = { user: await getCurrentUser() };
           await awaitMasterFlagHealed();
           const table = exerciseTable();
-          const { error } = await withTimeout(supabaseClient.from(table)
+          const r = await withTimeout(supabaseClient.from(table)
             .update({ category: newName }).eq('user_id', userData.user.id).eq('category', oldName), 15000);
-          if (error){ alert(error.message); return; }
+          if (r.__timeout || r.error){ alert(r.error ? r.error.message : 'Request timed out'); return; }
           addCustomCategory(newName);
           renderTrack();
         }
@@ -6321,15 +6328,17 @@ function openRenameExerciseForm(exerciseId, exerciseName){
         else { reportDuplicateSyncFailures(succeeded, idList.length, failed); }
       } else if (scope === 'everywhere'){
         // Rename all rows sharing the old name (an exercise can exist on multiple days), so history stays consistent.
-        ({ error } = await withTimeout(supabaseClient.from('exercises')
+        const r = await withTimeout(supabaseClient.from('exercises')
           .update({ name: newName })
           .eq('user_id', userData.user.id)
-          .eq('name', exerciseName), 15000));
+          .eq('name', exerciseName), 15000);
+        error = r.__timeout ? { message: 'Request timed out' } : r.error;
       } else {
         // Just this one row, identified by id - other days keep the original name.
-        ({ error } = await withTimeout(supabaseClient.from('exercises')
+        const r = await withTimeout(supabaseClient.from('exercises')
           .update({ name: newName })
-          .eq('id', exerciseId), 15000));
+          .eq('id', exerciseId), 15000);
+        error = r.__timeout ? { message: 'Request timed out' } : r.error;
       }
       if (error){ alert(error.message); return; }
       overlay.remove();
@@ -6782,8 +6791,8 @@ function openEditLocationsForm(exerciseId, exerciseName, onSaved){
       // it should mark the exercise confirmed too, or the log form's own
       // "Where is this available?" prompt would ask the very same question
       // again the next time it's logged, right after being answered here.
-      const { error } = await withTimeout(supabaseClient.from(table).update({ location_ids: selectedIds.length ? selectedIds : null, location_confirmed: true }).eq('id', exerciseId), 15000);
-      if (error){ alert(error.message); return; }
+      const r = await withTimeout(supabaseClient.from(table).update({ location_ids: selectedIds.length ? selectedIds : null, location_confirmed: true }).eq('id', exerciseId), 15000);
+      if (r.__timeout || r.error){ alert(r.error ? r.error.message : 'Request timed out'); return; }
       invalidateTrackSnapshots();
       warmInvalidate();
       overlay.remove();
@@ -6873,8 +6882,8 @@ function openEditMeasurementForm(exerciseId, exerciseName){
         uses_door_anchor: selectedType === 'band' ? usesDoorAnchor : false,
         door_anchor_level: (selectedType === 'band' && usesDoorAnchor && selectedLevel) ? `Level ${selectedLevel}` : null
       };
-      const { error } = await withTimeout(supabaseClient.from(table).update(payload).eq('id', exerciseId), 15000);
-      if (error){ alert(error.message); return; }
+      const r = await withTimeout(supabaseClient.from(table).update(payload).eq('id', exerciseId), 15000);
+      if (r.__timeout || r.error){ alert(r.error ? r.error.message : 'Request timed out'); return; }
       invalidateTrackSnapshots();
       warmInvalidate();
       overlay.remove();
@@ -7227,9 +7236,10 @@ function confirmRemoveExercise(exerciseId, exerciseName){
       // the undo callback, since state.selectedDay may have changed by
       // then (user switched days, or the day-rollover snap fired).
       const removalWeekday = state.selectedDay;
-      const { data, error } = await withTimeout(supabaseClient.from('exercise_days').delete().eq('exercise_master_id', exerciseId).eq('weekday', removalWeekday).select(), 15000);
-      if (error || !data || !data.length){
-        alert(`Could not remove "${exerciseName}": ${error ? error.message : 'no matching row found for today - it may already be gone, or something is out of sync. Try refreshing the app.'}`);
+      const r = await withTimeout(supabaseClient.from('exercise_days').delete().eq('exercise_master_id', exerciseId).eq('weekday', removalWeekday).select(), 15000);
+      const { data, error } = r;
+      if (r.__timeout || error || !data || !data.length){
+        alert(`Could not remove "${exerciseName}": ${r.__timeout ? 'request timed out' : (error ? error.message : 'no matching row found for today - it may already be gone, or something is out of sync. Try refreshing the app.')}`);
         renderTrack();
         return;
       }
@@ -7322,8 +7332,8 @@ function openEditSetForm(setData, onSaved){
         payload.band_resistance = combined ? combined.value : null;
         payload.band_resistance_unit = combined ? combined.unit : null;
       }
-      const { error } = await withTimeout(supabaseClient.from('sets').update(payload).eq('id', setData.id), 15000);
-      if (error){ alert(error.message); return; }
+      const r = await withTimeout(supabaseClient.from('sets').update(payload).eq('id', setData.id), 15000);
+      if (r.__timeout || r.error){ alert(`Could not save: ${r.error ? r.error.message : 'request timed out'}`); return; }
       invalidateTrackSnapshots();
       overlay.remove();
       if (onSaved) onSaved();
@@ -8678,8 +8688,8 @@ async function openSplitTagReview(){
       const errors = [];
       for (const p of toApply){
         for (const id of p.ids){
-          const { error } = await withTimeout(supabaseClient.from(table).update({ push_pull: p.pushPull, upper_lower: p.upperLower }).eq('id', id), 15000);
-          if (error){ errors.push(`${p.name}: ${error.message}`); }
+          const r = await withTimeout(supabaseClient.from(table).update({ push_pull: p.pushPull, upper_lower: p.upperLower }).eq('id', id), 15000);
+          if (r.__timeout || r.error){ errors.push(`${p.name}: ${r.error ? r.error.message : 'timed out'}`); }
           else { successCount++; }
         }
       }
@@ -8802,8 +8812,8 @@ async function openBulkLocationAssign(){
             const updated = isChecked
               ? [...new Set([...existing, locId])]
               : existing.filter(id2 => id2 !== locId);
-            const { error } = await withTimeout(supabaseClient.from(table).update({ location_ids: updated }).eq('id', id), 15000);
-            if (error){ errors.push(`${n}: ${error.message}`); }
+            const r = await withTimeout(supabaseClient.from(table).update({ location_ids: updated }).eq('id', id), 15000);
+            if (r.__timeout || r.error){ errors.push(`${n}: ${r.error ? r.error.message : 'timed out'}`); }
             else { successCount++; }
           }
         }
@@ -10038,10 +10048,10 @@ async function revertLastReorganization(){
           updated++; // already present - count as restored, nothing to do
           continue;
         }
-        const { error: insertError } = await withTimeout(supabaseClient.from('exercise_days').insert({
+        const insertResult = await withTimeout(supabaseClient.from('exercise_days').insert({
           user_id: userData.user.id, exercise_master_id: item.masterId, weekday: item.weekday
         }), 15000);
-        if (!insertError) recreated++; else failed++;
+        if (!insertResult.__timeout && !insertResult.error) recreated++; else failed++;
       } else {
         failed++;
       }
@@ -10082,8 +10092,8 @@ async function pickAltGroup(container, onPicked){
           title: 'Rename Alt Group', placeholder: 'Group name', initialValue: btn.dataset.name,
           onConfirm: async (newName) => {
             if (newName === btn.dataset.name) return;
-            const { error } = await withTimeout(supabaseClient.from('alt_groups').update({ name: newName }).eq('id', btn.dataset.id), 15000);
-            if (error){ alert(error.message); return; }
+            const r = await withTimeout(supabaseClient.from('alt_groups').update({ name: newName }).eq('id', btn.dataset.id), 15000);
+            if (r.__timeout || r.error){ alert(r.error ? r.error.message : 'Request timed out'); return; }
             const g = groups.find(g => g.id === btn.dataset.id);
             if (g) g.name = newName;
             renderAlt(container.querySelector('#altSearch').value);
@@ -12845,16 +12855,16 @@ function openBandForm(existing, allBands, onDone){
       const u = await getCurrentUser();
       if (!u) return;
       if (existing){
-        const { error } = await withTimeout(supabaseClient.from('bands')
+        const r = await withTimeout(supabaseClient.from('bands')
           .update({ label, colour, resistance, resistance_unit: unit }).eq('id', existing.id), 15000);
-        if (error){ alert(error.message); return; }
+        if (r.__timeout || r.error){ alert(`Could not save: ${r.error ? r.error.message : 'request timed out'}`); return; }
       } else {
         // New bands go to the end; the user reorders from the list.
         const maxOrder = (allBands || []).reduce((m, b) => Math.max(m, b.sort_order || 0), 0);
-        const { error } = await withTimeout(supabaseClient.from('bands').insert({
+        const r = await withTimeout(supabaseClient.from('bands').insert({
           user_id: u.id, label, colour, resistance, resistance_unit: unit, sort_order: maxOrder + 1
         }), 15000);
-        if (error){ alert(error.message); return; }
+        if (r.__timeout || r.error){ alert(`Could not save: ${r.error ? r.error.message : 'request timed out'}`); return; }
       }
       warmInvalidate('bands');
       overlay.remove();
@@ -13792,9 +13802,9 @@ function openBodyProfileForm(existing){
       return;
     }
     const userData = { user: await getCurrentUser() };
-    const { error } = await withTimeout(supabaseClient.from('phase_settings')
+    const r = await withTimeout(supabaseClient.from('phase_settings')
       .upsert({ user_id: userData.user.id, height_cm: Math.round(h * 10) / 10, bf_formula: formula }, { onConflict: 'user_id' }), 15000);
-    if (error){ alert(error.message); return; }
+    if (r.__timeout || r.error){ alert(r.error ? r.error.message : 'Request timed out'); return; }
     overlay.remove();
     renderScale();
   }); };
@@ -14691,8 +14701,8 @@ function openLogWeightForm(lastMeasurementUnit, expandMeasurements){
         });
       }
       warmInvalidate('bodyWeight');
-      const { error } = await withTimeout(supabaseClient.from('body_weight').insert(payload), 15000);
-      if (error){ alert(error.message); return; }
+      const r = await withTimeout(supabaseClient.from('body_weight').insert(payload), 15000);
+      if (r.__timeout || r.error){ alert(r.error ? r.error.message : 'Request timed out'); return; }
       overlay.remove();
       renderScale();
     });
@@ -14755,8 +14765,8 @@ async function setPhasePaused(phase, paused){
   if (paused){
     const payload = { paused_at: todayStr() };
     warmInvalidate('phase');
-    const { error } = await withTimeout(supabaseClient.from('phase_settings').update(payload).eq('user_id', userData.user.id), 15000);
-    if (error){ alert(error.message); return null; }
+    const r = await withTimeout(supabaseClient.from('phase_settings').update(payload).eq('user_id', userData.user.id), 15000);
+    if (r.__timeout || r.error){ alert(r.error ? r.error.message : 'Request timed out'); return null; }
     return { ...phase, ...payload };
   }
   const shift = daysPaused(phase);
@@ -14765,8 +14775,8 @@ async function setPhasePaused(phase, paused){
     if (phase[k]) payload[k] = addDaysToDate(phase[k], shift);
   });
   warmInvalidate('phase');
-    const { error } = await withTimeout(supabaseClient.from('phase_settings').update(payload).eq('user_id', userData.user.id), 15000);
-  if (error){ alert(error.message); return null; }
+    const r2 = await withTimeout(supabaseClient.from('phase_settings').update(payload).eq('user_id', userData.user.id), 15000);
+  if (r2.__timeout || r2.error){ alert(r2.error ? r2.error.message : 'Request timed out'); return null; }
   return { ...phase, ...payload };
 }
 
@@ -15228,7 +15238,8 @@ async function openEditPhaseForm(existing){
       };
     }
     warmInvalidate('phase');
-    let { error } = await withTimeout(supabaseClient.from('phase_settings').upsert(payload, { onConflict: 'user_id' }), 15000);
+    let r = await withTimeout(supabaseClient.from('phase_settings').upsert(payload, { onConflict: 'user_id' }), 15000);
+    let error = r.error;
     // bulk_name/cut_name are new columns - if that migration hasn't been
     // run against this database yet, the upsert fails on those two fields
     // specifically. Retry without them rather than losing the date save
@@ -15238,12 +15249,13 @@ async function openEditPhaseForm(existing){
     if (error && /bulk_name|cut_name|column/i.test(error.message || '')){
       const { bulk_name, cut_name, ...withoutNames } = payload;
       const retry = await withTimeout(supabaseClient.from('phase_settings').upsert(withoutNames, { onConflict: 'user_id' }), 15000);
+      r = retry;
       error = retry.error;
-      if (!error){
+      if (!retry.__timeout && !error){
         alert("Dates saved, but the phase-naming feature needs a database column that hasn't been added yet - the name wasn't saved this time.");
       }
     }
-    if (error){ alert(error.message); return; }
+    if (r.__timeout || error){ alert(error ? error.message : 'Request timed out'); return; }
     overlay.remove();
     renderScale();
   }); };
