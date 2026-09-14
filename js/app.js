@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.344';
+const APP_VERSION = 'Beta 5.345';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -2068,18 +2068,31 @@ function editCircuitItem(exId){
   if (!circuit) return;
   const item = circuit.items.find(it => String(it.id) === String(exId));
   if (!item) return;
-  const isBand = item.best && (item.best.measurement_type === 'band' || item.best.weight_unit === 'band');
+  const unit = item.best.weight_unit;
+  const isBand = item.best && (item.best.measurement_type === 'band' || unit === 'band');
   if (isBand){
     openCircuitBandEditor(exId);
     return;
   }
-  const currentReps = item.best.reps || '';
+  // Bodyweight edits reps. Everything else (kg/lb/pin/level/sec/min/steps/
+  // assist) edits the actual weight field instead - that's what
+  // formatSetValue and the real save both read for these types. A Plank's
+  // value lives in "weight" (interpreted as seconds), not in "reps" at
+  // all - editing "reps" on a timed or weighted exercise here used to
+  // silently do nothing to what actually got logged.
+  const editsWeight = unit && unit !== 'bodyweight';
+  const label = unit === 'sec' ? 'seconds' : unit === 'min' ? 'minutes'
+    : unit === 'pin' ? 'pin number' : unit === 'level' ? 'level'
+    : unit === 'steps' ? 'steps'
+    : (unit === 'lb-assist' || unit === 'kg-assist') ? 'assist weight'
+    : editsWeight ? `weight (${unit})` : 'reps';
+  const currentValue = editsWeight ? (item.best.weight || '') : (item.best.reps || '');
   promptText({
-    title: `${item.name} - reps`, placeholder: 'Reps', initialValue: String(currentReps),
+    title: `${item.name} - ${label}`, placeholder: label.charAt(0).toUpperCase() + label.slice(1), initialValue: String(currentValue),
     onConfirm: (val) => {
-      const n = parseInt(val, 10);
+      const n = editsWeight ? parseFloat(val) : parseInt(val, 10);
       if (!n || n <= 0) return;
-      item.best.reps = n;
+      if (editsWeight) item.best.weight = n; else item.best.reps = n;
       setActiveCircuit(circuit.items);
       refreshCircuitBoxInPlace();
     }
@@ -2145,7 +2158,13 @@ async function openCircuitPicker(){
   // Full exercise objects, not just {id, name} - needed for the muscle/
   // equipment grouping below, and doubles as the source for measurement_type
   // when defaulting a brand-new item's best further down.
-  const candidates = (state.exercises || []).filter(ex => idsOnDay.has(String(ex.id)));
+  // Excludes completeVia placeholders (an alt-group duplicate slot meant to
+  // be satisfied by logging its BUDDY exercise, not itself) - these show a
+  // "Complete via X" badge instead of a save button everywhere else in the
+  // app for exactly that reason, and letting one into a circuit would mean
+  // directly logging sets against a slot that isn't meant to be logged
+  // against at all.
+  const candidates = (state.exercises || []).filter(ex => idsOnDay.has(String(ex.id)) && !ex.completeVia);
   if (candidates.length < 2){
     alert("Add at least 2 exercises to today's plan first, then build a circuit from them.");
     return;
@@ -2223,7 +2242,18 @@ async function openCircuitPicker(){
           best = { weight: null, weight_unit: 'band', weight_type: 'total', reps: 10, num_sets: null,
             measurement_type: 'band', band_snapshot: null, band_resistance: null, band_resistance_unit: null };
         } else if (ex.measurement_type){
-          best = { weight: null, weight_unit: ex.measurement_type, weight_type: 'total', reps: 10, num_sets: null };
+          // Sensible starting values by type, not a blanket null - "null
+          // sec" or "null lb" is a genuinely broken-looking display for a
+          // brand-new exercise's very first tile, and the edit button (✎)
+          // is right there for anyone who wants a different number
+          // immediately anyway.
+          const defaultWeight = ex.measurement_type === 'sec' ? 30
+            : ex.measurement_type === 'min' ? 1
+            : ex.measurement_type === 'pin' ? 5
+            : ex.measurement_type === 'level' ? 1
+            : ex.measurement_type === 'steps' ? 20
+            : null; // kg/lb/assist types stay null - there's no safe generic weight to guess
+          best = { weight: defaultWeight, weight_unit: ex.measurement_type, weight_type: 'total', reps: 10, num_sets: null };
         } else {
           best = { weight: null, weight_unit: 'bodyweight', weight_type: 'total', reps: 10, num_sets: null };
         }
