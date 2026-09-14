@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.346';
+const APP_VERSION = 'Beta 5.347';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -2195,17 +2195,25 @@ async function logCircuitSet(exId){
 async function undoLastCircuitTap(){
   const tap = state._lastCircuitTap;
   if (!tap) return;
+  // Cleared immediately, before the await - not after the delete succeeds.
+  // A rapid double-tap on the undo link itself would otherwise let both
+  // calls read the same tap, both "succeed" at deleting the same
+  // already-deleted row (Supabase doesn't error on a delete matching zero
+  // rows, it just returns empty), and both decrement the circuit's count -
+  // one undo silently counting as two.
+  state._lastCircuitTap = null;
   invalidateTrackSnapshots();
   const r = await withTimeout(supabaseClient.from('sets').delete().eq('id', tap.setId), 15000);
   if (r.__timeout || r.error){
-    // Deliberately NOT cleared here - if the undo itself failed, the set is
-    // still logged and the option to retry undoing it should still be
-    // there, not silently gone along with the failed attempt.
+    // Restored here, not left uncleared the whole time - this only re-arms
+    // AFTER the original attempt has genuinely finished (and failed), so
+    // it can't be raced by a second tap the way leaving it set the entire
+    // time would have been. A deliberate retry afterward is still possible.
+    state._lastCircuitTap = tap;
     alert(`Couldn't undo: ${r.error ? r.error.message : 'request timed out'}. The set is still logged.`);
     if (state.currentTab === 'track') renderTrack();
     return;
   }
-  state._lastCircuitTap = null;
   const circuit = getActiveCircuit();
   if (circuit){
     const item = circuit.items.find(it => String(it.id) === String(tap.exId));
@@ -2302,7 +2310,16 @@ async function openCircuitBandEditor(exId){
 // the circuit pre-checks them, so "+ Add another exercise" and the initial
 // "+ Start a circuit" share one picker instead of two slightly different
 // screens.
+let _circuitPickerOpen = false;
 async function openCircuitPicker(){
+  // A rapid double-tap on "+ Start a Circuit" (or "+ Add another exercise")
+  // would otherwise reach this function twice before the first call's own
+  // await (loadExerciseDB, inside the muscle-grouping step) resolves and
+  // actually appends anything to the DOM - both calls would eventually
+  // append their own overlay, stacking two picker sheets on top of each
+  // other with two independent, disconnected selections.
+  if (_circuitPickerOpen) return;
+  _circuitPickerOpen = true;
   const existing = getActiveCircuit();
   const existingIds = new Set((existing ? existing.items : []).map(it => String(it.id)));
   const selected = new Set(existingIds);
@@ -2319,6 +2336,7 @@ async function openCircuitPicker(){
   const candidates = (state.exercises || []).filter(ex => idsOnDay.has(String(ex.id)) && !ex.completeVia);
   if (candidates.length < 2){
     alert("Add at least 2 exercises to today's plan first, then build a circuit from them.");
+    _circuitPickerOpen = false;
     return;
   }
   let groupBy = getGroupByPref();
@@ -2388,12 +2406,13 @@ async function openCircuitPicker(){
       setActiveCircuit(items, targetRounds);
       saveCircuitTemplate(items);
       overlay.remove();
+      _circuitPickerOpen = false;
       renderTrack();
     };
   };
   await render();
   document.body.appendChild(overlay);
-  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.onclick = (e) => { if (e.target === overlay){ overlay.remove(); _circuitPickerOpen = false; } };
 }
 
 function getTripMode(){
