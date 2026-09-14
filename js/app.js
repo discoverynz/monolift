@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.345';
+const APP_VERSION = 'Beta 5.346';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -923,7 +923,13 @@ let state = { selectedDay: openingDay(), exercises: [], session: null, currentTa
   // so reopening doesn't get immediately undone by the very next render.
   // Session-only, same reasoning as _collapsedCats above.
   _reopenedDoneCats: new Set(),
-  _trackSearchOpen: false, _trackSearchQuery: '' };
+  _trackSearchOpen: false, _trackSearchQuery: '',
+  // The most recent circuit tap that can still be cleanly undone (a real
+  // set id was returned, not 'queued' - can't target a delete at a set
+  // that hasn't actually reached the server yet). Cleared whenever the
+  // circuit itself ends, so a stale undo can't outlive the circuit it
+  // belonged to.
+  _lastCircuitTap: null };
 
 // MIDNIGHT ROLLOVER. All dates in this app come from the phone's own clock
 // (todayStr uses local getFullYear/getMonth/getDate, never UTC), so the day
@@ -1945,8 +1951,15 @@ function getActiveCircuit(){
     return parsed;
   } catch(e){ return null; }
 }
-function setActiveCircuit(items){
-  try { localStorage.setItem('zealift_circuit', JSON.stringify({ date: todayStr(), items })); } catch(e){}
+// targetRounds is optional - when omitted, whatever was already set is
+// carried forward unchanged, so every existing call site that only touches
+// items (a tap, a reps/band edit) doesn't need to know or care about it.
+function setActiveCircuit(items, targetRounds){
+  try {
+    const existing = getActiveCircuit();
+    const finalTarget = targetRounds !== undefined ? targetRounds : (existing ? existing.targetRounds : null);
+    localStorage.setItem('zealift_circuit', JSON.stringify({ date: todayStr(), items, targetRounds: finalTarget }));
+  } catch(e){}
 }
 function clearActiveCircuit(){ try { localStorage.removeItem('zealift_circuit'); } catch(e){} }
 
@@ -1959,42 +1972,88 @@ function circuitRoundNumber(items){
   if (!items || !items.length) return 1;
   return Math.min(...items.map(it => it.count || 0)) + 1;
 }
+// True once EVERY exercise has been logged at least targetRounds times -
+// hitting the target doesn't lock anything, it just marks the moment
+// worth celebrating. Nothing stops further taps past it if someone wants
+// an extra round.
+function isCircuitComplete(items, targetRounds){
+  if (!targetRounds || !items || !items.length) return false;
+  return Math.min(...items.map(it => it.count || 0)) >= targetRounds;
+}
+
+// Remembers the shape of whatever circuit was last STARTED (which
+// exercises, not progress) so "repeat last circuit" can rebuild it in one
+// tap later, regardless of which day that was - simpler and more broadly
+// useful than being tied to literally yesterday.
+function getCircuitTemplate(){
+  try {
+    const raw = localStorage.getItem('zealift_circuit_template');
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return (parsed.items && parsed.items.length) ? parsed : null;
+  } catch(e){ return null; }
+}
+function saveCircuitTemplate(items){
+  try {
+    localStorage.setItem('zealift_circuit_template', JSON.stringify({
+      items: items.map(it => ({ id: it.id, name: it.name }))
+    }));
+  } catch(e){}
+}
 
 // Builds either the "start a circuit" prompt or the live circuit bar,
 // depending on whether one's already active today. Sits ABOVE the normal
 // category list on the Home tab specifically - it never replaces or hides
 // that list, just adds a faster way to log a superset without opening the
 // full form for every single rep count.
-function buildCircuitAreaHtml(list){
+function buildCircuitAreaHtml(list, opts){
+  opts = opts || {};
   const circuit = getActiveCircuit();
   if (!circuit){
     if ((list || []).length < 2) return ''; // nothing to build a circuit from yet
+    const template = getCircuitTemplate();
+    const idsOnDay = new Set((state.trackFlatOrder || []).map(v => String(v.id)));
+    const validTemplateItems = template ? template.items.filter(it => idsOnDay.has(String(it.id))) : [];
+    const repeatBtn = validTemplateItems.length >= 2 ? `
+      <div class="circuit-repeat-btn" id="repeatCircuitBtn">
+        <div><div class="rep-label">↻ Repeat last circuit</div><div class="rep-names">${validTemplateItems.map(it => it.name).join(' + ')}</div></div>
+        <div class="rep-arrow">→</div>
+      </div>` : '';
     return `
       <div class="circuit-start" id="startCircuitBtn">
         + Start a circuit
         <div class="circuit-start-sub">Log a superset with one tap per round - no form, no typing</div>
-      </div>`;
+      </div>
+      ${repeatBtn}`;
   }
   const round = circuitRoundNumber(circuit.items);
-  const tiles = circuit.items.map(it => `
-    <div class="circuit-tile" data-ex-id="${it.id}">
+  const complete = isCircuitComplete(circuit.items, circuit.targetRounds);
+  const roundLabel = circuit.targetRounds ? `${Math.min(round, circuit.targetRounds)} of ${circuit.targetRounds}` : `${round}`;
+  const tiles = circuit.items.map(it => {
+    const justTapped = opts.justTappedExId && String(it.id) === String(opts.justTappedExId);
+    return `
+    <div class="circuit-tile${justTapped ? ' just-tapped' : ''}" data-ex-id="${it.id}">
       <div class="tile-info">
         <div class="tile-name">${it.name}</div>
         <div class="tile-meta">
           <span class="circuit-edit-btn" data-ex-id="${it.id}">${formatSetValue(it.best)} ✎</span>
-          <span class="tile-count">&middot; logged ${it.count}&times;</span>
+          <span class="tile-count${justTapped ? ' count-bump' : ''}">&middot; logged ${it.count}&times;</span>
         </div>
       </div>
       <button class="circuit-tap-btn" data-ex-id="${it.id}">+1 set</button>
-    </div>`).join('');
+      ${justTapped ? `<div class="circuit-float-plus">+1</div>` : ''}
+    </div>`;
+  }).join('');
   return `
-    <div class="circuit-box">
+    <div class="circuit-box${complete ? ' complete' : ''}">
       <div class="circuit-head">
-        <div class="circuit-title">Circuit &middot; round <b>${round}</b></div>
+        <div class="circuit-title">Circuit &middot; round <b${opts.roundJustBumped ? ' class="round-bump"' : ''}>${roundLabel}</b></div>
         <div class="circuit-end-btn" id="endCircuitBtn">End</div>
       </div>
+      ${complete ? `<div class="circuit-complete-badge">🎉 Target hit - keep going or wrap it up</div>` : ''}
       ${tiles}
       <div class="circuit-add-more" id="addToCircuitBtn">+ Add another exercise</div>
+      ${state._lastCircuitTap ? `<div class="circuit-undo-row"><span class="circuit-undo-btn" id="undoCircuitTapBtn">↩ Undo last (${state._lastCircuitTap.exName})</span></div>` : ''}
     </div>`;
 }
 
@@ -2007,7 +2066,11 @@ function wireCircuitHandlers(){
   const addToCircuitBtn = document.getElementById('addToCircuitBtn');
   if (addToCircuitBtn) addToCircuitBtn.onclick = () => openCircuitPicker();
   const endCircuitBtn = document.getElementById('endCircuitBtn');
-  if (endCircuitBtn) endCircuitBtn.onclick = () => { clearActiveCircuit(); renderTrack(); };
+  if (endCircuitBtn) endCircuitBtn.onclick = () => { clearActiveCircuit(); state._lastCircuitTap = null; renderTrack(); };
+  const repeatCircuitBtn = document.getElementById('repeatCircuitBtn');
+  if (repeatCircuitBtn) repeatCircuitBtn.onclick = () => startRepeatCircuit();
+  const undoBtn = document.getElementById('undoCircuitTapBtn');
+  if (undoBtn) undoBtn.onclick = () => undoLastCircuitTap();
   document.querySelectorAll('.circuit-tap-btn').forEach(btn => {
     btn.onclick = () => logCircuitSet(btn.dataset.exId);
   });
@@ -2022,16 +2085,70 @@ function wireCircuitHandlers(){
 // the exercise's own card further down the screen would flash back to
 // "not logged" for a moment. Only the circuit bar itself needs to update
 // the instant you tap; the rest of the screen correctly catches up once
-// the real save actually finishes.
-function refreshCircuitBoxInPlace(){
-  const existing = document.querySelector('.circuit-box, .circuit-start');
+// the real save actually finishes. Only ever called while a circuit is
+// already active (a tap, an edit) - the "no circuit yet" state (which can
+// render more than one element, the start prompt plus an optional repeat
+// button) never needs this, so the selector only has to handle .circuit-box.
+function refreshCircuitBoxInPlace(justTappedExId, roundJustBumped){
+  const existing = document.querySelector('.circuit-box');
   if (!existing) return;
   const holder = document.createElement('div');
-  holder.innerHTML = buildCircuitAreaHtml(null);
+  holder.innerHTML = buildCircuitAreaHtml(null, { justTappedExId, roundJustBumped });
   const fresh = holder.firstElementChild;
   if (fresh) existing.replaceWith(fresh);
   else existing.remove();
   wireCircuitHandlers();
+}
+
+// Shared by the picker's confirm handler and "repeat last circuit" - both
+// need to turn a bare exercise reference into a real circuit item with a
+// sensible starting best, and duplicating this logic between the two was
+// exactly how a fix in one place stayed missing from the other earlier
+// this session.
+function seedCircuitItem(ex, existingItem){
+  if (existingItem) return existingItem;
+  const seed = state.trackBestSetById ? state.trackBestSetById[ex.id] : null;
+  let best;
+  if (seed){
+    // num_sets forced to null (not carried over from seed) - a circuit tap
+    // always represents exactly ONE set, never whatever num_sets the
+    // exercise's last NORMAL (non-circuit) set happened to have.
+    best = { ...seed, num_sets: null };
+  } else if (ex.measurement_type === 'band'){
+    best = { weight: null, weight_unit: 'band', weight_type: 'total', reps: 10, num_sets: null,
+      measurement_type: 'band', band_snapshot: null, band_resistance: null, band_resistance_unit: null };
+  } else if (ex.measurement_type){
+    const defaultWeight = ex.measurement_type === 'sec' ? 30
+      : ex.measurement_type === 'min' ? 1
+      : ex.measurement_type === 'pin' ? 5
+      : ex.measurement_type === 'level' ? 1
+      : ex.measurement_type === 'steps' ? 20
+      : null;
+    best = { weight: defaultWeight, weight_unit: ex.measurement_type, weight_type: 'total', reps: 10, num_sets: null };
+  } else {
+    best = { weight: null, weight_unit: 'bodyweight', weight_type: 'total', reps: 10, num_sets: null };
+  }
+  return { id: ex.id, name: ex.name, best, count: 0 };
+}
+
+// "Repeat last circuit" - rebuilds the most recently STARTED circuit
+// (exercise selection only, not old progress) from whatever's actually on
+// today's plan, skipping anything that's no longer there rather than
+// failing outright over one missing exercise.
+function startRepeatCircuit(){
+  const template = getCircuitTemplate();
+  if (!template) return;
+  const idsOnDay = new Set((state.trackFlatOrder || []).map(v => String(v.id)));
+  const validIds = template.items.filter(it => idsOnDay.has(String(it.id))).map(it => String(it.id));
+  if (validIds.length < 2){
+    alert("Not enough of that circuit's exercises are on today's plan to repeat it.");
+    return;
+  }
+  const items = (state.exercises || [])
+    .filter(ex => validIds.includes(String(ex.id)))
+    .map(ex => seedCircuitItem(ex));
+  setActiveCircuit(items, null);
+  renderTrack();
 }
 
 async function logCircuitSet(exId){
@@ -2039,12 +2156,14 @@ async function logCircuitSet(exId){
   if (!circuit) return;
   const item = circuit.items.find(it => String(it.id) === String(exId));
   if (!item) return;
+  const roundBefore = circuitRoundNumber(circuit.items);
   // Optimistic - the tap should feel instant. Rolled back below if the
   // real save turns out to have failed outright (not just queued offline,
   // which still genuinely counts as saved).
   item.count = (item.count || 0) + 1;
+  const roundBumped = circuitRoundNumber(circuit.items) > roundBefore;
   setActiveCircuit(circuit.items);
-  refreshCircuitBoxInPlace();
+  refreshCircuitBoxInPlace(exId, roundBumped);
   const result = await quickSaveSet(item.id, item.name, item.best);
   if (result === false){
     const c2 = getActiveCircuit();
@@ -2057,9 +2176,42 @@ async function logCircuitSet(exId){
     alert("Couldn't log that set - try again.");
     return;
   }
+  // Only offer undo when a real set id came back - 'queued' (saved locally,
+  // not yet uploaded) and the boolean fallback both mean there's no
+  // specific row a delete could target yet.
+  state._lastCircuitTap = (typeof result === 'string' && result !== 'queued')
+    ? { exId, exName: item.name, setId: result }
+    : null;
   // Now safe to fully refresh - the write has actually landed, so the
   // exercise's own card and the header stats catch up accurately instead
   // of showing stale pre-save data.
+  if (state.currentTab === 'track') renderTrack();
+}
+
+// Undoes the specific set logCircuitSet just wrote - not just a generic
+// "undo last set" (that already exists elsewhere for the main log form),
+// this also rolls back the circuit's OWN count for that exercise, which a
+// plain set-delete would have no way to know needs to happen too.
+async function undoLastCircuitTap(){
+  const tap = state._lastCircuitTap;
+  if (!tap) return;
+  invalidateTrackSnapshots();
+  const r = await withTimeout(supabaseClient.from('sets').delete().eq('id', tap.setId), 15000);
+  if (r.__timeout || r.error){
+    // Deliberately NOT cleared here - if the undo itself failed, the set is
+    // still logged and the option to retry undoing it should still be
+    // there, not silently gone along with the failed attempt.
+    alert(`Couldn't undo: ${r.error ? r.error.message : 'request timed out'}. The set is still logged.`);
+    if (state.currentTab === 'track') renderTrack();
+    return;
+  }
+  state._lastCircuitTap = null;
+  const circuit = getActiveCircuit();
+  if (circuit){
+    const item = circuit.items.find(it => String(it.id) === String(tap.exId));
+    if (item && item.count > 0) item.count--;
+    setActiveCircuit(circuit.items);
+  }
   if (state.currentTab === 'track') renderTrack();
 }
 
@@ -2170,6 +2322,7 @@ async function openCircuitPicker(){
     return;
   }
   let groupBy = getGroupByPref();
+  let targetRounds = existing ? (existing.targetRounds || null) : null;
   const overlay = document.createElement('div');
   overlay.style = 'position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:70; display:flex; align-items:flex-end;';
   const render = async () => {
@@ -2200,11 +2353,19 @@ async function openCircuitPicker(){
                 <div class="ex-name">${ex.name}</div>
               </div>`).join('')}
           ` : '').join('')}
+          <div class="field-label" style="padding:14px 0 4px 0;">Target rounds <span class="opt">optional</span></div>
+          <div class="small" style="padding:0 0 8px 0; color:var(--slate);">Shows "round 2 of 4" and marks it done once you hit it - doesn't stop you going further.</div>
+          <div style="display:flex; gap:8px;">
+            ${[null,3,4,5,6].map(n => `<div class="chip target-rounds-chip ${targetRounds===n?'active':''}" data-rounds="${n===null?'':n}" style="flex:1; text-align:center;">${n===null?'None':n}</div>`).join('')}
+          </div>
           <button class="save-btn" id="confirmCircuitBtn" style="margin-top:14px;" ${selected.size < 2 ? 'disabled' : ''}>${existing ? 'Update circuit' : 'Start circuit'}</button>
         </div>
       </div>`;
     overlay.querySelectorAll('.groupby-chip').forEach(chip => {
       chip.onclick = () => { groupBy = chip.dataset.groupby; setGroupByPref(groupBy); render(); };
+    });
+    overlay.querySelectorAll('.target-rounds-chip').forEach(chip => {
+      chip.onclick = () => { targetRounds = chip.dataset.rounds ? parseInt(chip.dataset.rounds, 10) : null; render(); };
     });
     overlay.querySelectorAll('.pick-row').forEach(row => {
       row.onclick = () => {
@@ -2222,44 +2383,10 @@ async function openCircuitPicker(){
         // resetting it just because the circuit was re-saved to add
         // another exercise.
         const prior = existing ? existing.items.find(it => String(it.id) === String(ex.id)) : null;
-        if (prior) return prior;
-        const seed = state.trackBestSetById ? state.trackBestSetById[ex.id] : null;
-        let best;
-        if (seed){
-          // num_sets deliberately forced to null (not carried over from
-          // seed) - a circuit tap always represents exactly ONE set. The
-          // exercise's last NORMAL (non-circuit) set might genuinely have
-          // been "5 sets of 10", and copying that verbatim meant every
-          // single circuit tap was being logged as 5 sets instead of 1,
-          // compounding every time "+1 set" was pressed.
-          best = { ...seed, num_sets: null };
-        } else if (ex.measurement_type === 'band'){
-          // No history to seed from - default based on what this exercise
-          // is actually configured as, not a blanket bodyweight guess. A
-          // brand-new band exercise defaulted to bodyweight would silently
-          // save every circuit tap as the wrong measurement type until
-          // someone noticed and used the band editor to fix it.
-          best = { weight: null, weight_unit: 'band', weight_type: 'total', reps: 10, num_sets: null,
-            measurement_type: 'band', band_snapshot: null, band_resistance: null, band_resistance_unit: null };
-        } else if (ex.measurement_type){
-          // Sensible starting values by type, not a blanket null - "null
-          // sec" or "null lb" is a genuinely broken-looking display for a
-          // brand-new exercise's very first tile, and the edit button (✎)
-          // is right there for anyone who wants a different number
-          // immediately anyway.
-          const defaultWeight = ex.measurement_type === 'sec' ? 30
-            : ex.measurement_type === 'min' ? 1
-            : ex.measurement_type === 'pin' ? 5
-            : ex.measurement_type === 'level' ? 1
-            : ex.measurement_type === 'steps' ? 20
-            : null; // kg/lb/assist types stay null - there's no safe generic weight to guess
-          best = { weight: defaultWeight, weight_unit: ex.measurement_type, weight_type: 'total', reps: 10, num_sets: null };
-        } else {
-          best = { weight: null, weight_unit: 'bodyweight', weight_type: 'total', reps: 10, num_sets: null };
-        }
-        return { id: ex.id, name: ex.name, best, count: 0 };
+        return seedCircuitItem(ex, prior);
       });
-      setActiveCircuit(items);
+      setActiveCircuit(items, targetRounds);
+      saveCircuitTemplate(items);
       overlay.remove();
       renderTrack();
     };
