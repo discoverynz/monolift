@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.350';
+const APP_VERSION = 'Beta 5.351';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -12535,6 +12535,21 @@ const HOME_GYM_IDEAS = [
   { name:'Banded Lateral Raise', sub:'Push', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
     hint:'Stand on the band, raise out to the sides - side delts, the muscle that gives shoulders width.',
     muscle:'shoulders' },
+  { name:'Push-Up', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:"Hands roughly shoulder-width, body in a straight line from head to heels, lower until your chest nearly touches the floor - the standard version everything else here is a variation of.",
+    muscle:'chest' },
+  { name:'Wide Grip Push-Up', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Hands set out wider than shoulder-width - shortens the range of motion but shifts more emphasis onto the outer chest.',
+    muscle:'chest' },
+  { name:'Knee Push-Up', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Knees down instead of toes, same straight line from head to knees - a genuine regression for building toward a full push-up, not a lesser version to be embarrassed about.',
+    muscle:'chest' },
+  { name:'Staggered Push-Up', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'One hand set slightly forward, the other slightly back - shifts load unevenly between sides, closer to how a lot of real pushing actually happens.',
+    muscle:'chest' },
+  { name:'Spiderman Push-Up', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:"As you lower, bring one knee out toward the same-side elbow, alternating sides each rep - adds the obliques and hip flexors to a normal push-up's chest and triceps work.",
+    muscle:'chest' },
   { name:'Diamond Push-Up', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:'Hands together under your chest, thumbs and index fingers touching - shifts emphasis heavily onto the triceps.',
     muscle:'triceps' },
