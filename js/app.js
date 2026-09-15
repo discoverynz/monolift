@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.348';
+const APP_VERSION = 'Beta 5.349';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -2341,6 +2341,38 @@ async function openCircuitPicker(){
   }
   let groupBy = getGroupByPref();
   let targetRounds = existing ? (existing.targetRounds || null) : null;
+  // Top 5 most-logged of today's candidates, by set count over the same
+  // history window used everywhere else in the app - a quick-pick shortcut
+  // for whatever's actually habitual, rather than making someone hunt
+  // through equipment/muscle groups for the same 2-3 exercises they always
+  // put in a circuit anyway. Only ever counts sets among exercises that
+  // are actually selectable here (today's plan), not a global "most
+  // logged ever" that could surface something not even on today's list.
+  let topLogged = [];
+  const userData = { user: await getCurrentUser() };
+  if (userData.user){
+    const idField = setExerciseIdField();
+    const countResult = await withTimeout(
+      supabaseClient.from('sets').select(idField)
+        .eq('user_id', userData.user.id)
+        .in(idField, candidates.map(ex => ex.id))
+        .gte('logged_at', setHistoryCutoff()),
+      15000
+    );
+    if (!countResult.__timeout && !countResult.error && countResult.data){
+      const counts = {};
+      countResult.data.forEach(row => {
+        const id = row[idField];
+        if (id) counts[id] = (counts[id] || 0) + 1;
+      });
+      topLogged = candidates
+        .map(ex => ({ ex, count: counts[ex.id] || 0 }))
+        .filter(x => x.count > 0)
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 5)
+        .map(x => x.ex);
+    }
+  }
   const overlay = document.createElement('div');
   overlay.style = 'position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:70; display:flex; align-items:flex-end;';
   const render = async () => {
@@ -2355,21 +2387,27 @@ async function openCircuitPicker(){
         if (grouped[key]) grouped[key].sort((a, b) => a.name.localeCompare(b.name));
       });
     }
+    const pickRowHtml = (ex) => `
+      <div class="pick-row" data-ex-id="${ex.id}">
+        <div style="width:20px; height:20px; border-radius:6px; border:1.5px solid ${selected.has(String(ex.id))?'var(--flame)':'var(--line)'}; background:${selected.has(String(ex.id))?'var(--flame)':'transparent'}; flex-shrink:0; display:flex; align-items:center; justify-content:center; color:#1A0D06; font-size:12px; font-weight:700; margin-right:10px;">${selected.has(String(ex.id))?'✓':''}</div>
+        <div class="ex-name">${ex.name}</div>
+      </div>`;
     overlay.innerHTML = `
       <div style="width:100%; max-height:80vh; overflow-y:auto; background:var(--panel); border-radius:18px 18px 0 0; padding:20px 0 calc(20px + env(safe-area-inset-bottom, 0px)) 0;">
         <div style="padding:0 18px;">
           <div class="field-label" style="padding:0 0 4px 0;">Build your circuit</div>
           <div class="small" style="padding:0 0 8px 0; color:var(--slate);">Pick one or more exercises - two or more supersets them together, one still gets the quick tap-to-log tile and round tracking</div>
         </div>
+        ${topLogged.length ? `
+        <div style="padding:0 18px;">
+          <div class="section-label" style="padding:6px 0 4px 0; color:var(--brass); font-family:'Oswald',sans-serif; font-size:12px; text-transform:uppercase; letter-spacing:0.4px;">⭐ Most logged</div>
+          ${topLogged.map(pickRowHtml).join('')}
+        </div>` : ''}
         ${groupByToggleHtml(groupBy)}
         <div style="padding:0 18px;">
           ${orderedKeys.map(key => (grouped[key] || []).length ? `
             <div class="section-label" style="padding:12px 0 4px 0; color:var(--flame); font-family:'Oswald',sans-serif; font-size:12px; text-transform:uppercase; letter-spacing:0.4px;">${key}</div>
-            ${(grouped[key] || []).map(ex => `
-              <div class="pick-row" data-ex-id="${ex.id}">
-                <div style="width:20px; height:20px; border-radius:6px; border:1.5px solid ${selected.has(String(ex.id))?'var(--flame)':'var(--line)'}; background:${selected.has(String(ex.id))?'var(--flame)':'transparent'}; flex-shrink:0; display:flex; align-items:center; justify-content:center; color:#1A0D06; font-size:12px; font-weight:700; margin-right:10px;">${selected.has(String(ex.id))?'✓':''}</div>
-                <div class="ex-name">${ex.name}</div>
-              </div>`).join('')}
+            ${(grouped[key] || []).map(pickRowHtml).join('')}
           ` : '').join('')}
           <div class="field-label" style="padding:14px 0 4px 0;">Target rounds <span class="opt">optional</span></div>
           <div class="small" style="padding:0 0 8px 0; color:var(--slate);">Shows "round 2 of 4" and marks it done once you hit it - doesn't stop you going further.</div>
