@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.353';
+const APP_VERSION = 'Beta 5.354';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -7981,7 +7981,7 @@ async function openPicker(initialTab, jumpToMuscle){
   let ideaSearchOpen = false;
   let ideaSearchQuery = '';
   let ideaCollapsedCats = new Set();
-  const EQUIPMENT_GROUP_LABEL = { band: 'Bands', bodyweight: 'Bodyweight', time: 'Timed Holds', rings: 'Rings', kettlebell: 'Kettlebell', medball: 'Medicine Ball', stabilityball: 'Exercise Ball', foamroll: 'Foam Roller' };
+  const EQUIPMENT_GROUP_LABEL = { band: 'Bands', bodyweight: 'Bodyweight', time: 'Timed Holds', rings: 'Rings', kettlebell: 'Kettlebell', medball: 'Medicine Ball', stabilityball: 'Exercise Ball', foamroll: 'Foam Roller', pushup: 'Push-Ups', pullup: 'Pull-Ups' };
   function renderIdeasTab(){
     removeSideIndex();
     const body = overlay.querySelector('#pickerBody');
@@ -12500,18 +12500,36 @@ const HOME_GYM_IDEAS = [
   { name:'Banded Deadlift', sub:'Pull', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
     hint:'Stand on the band, hinge at the hips and stand tall - closest band substitute for a barbell deadlift.',
     muscle:'hamstrings' },
-  { name:'Pull-Up', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+  { name:'Pull-Up', equip:'pullup', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:'Needs a pull-up bar (doorframe bars work). If you don\'t have one, Banded Pulldown is the substitute below.',
     muscle:'lats' },
-  { name:'Chin-Up', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+  { name:'Chin-Up', equip:'pullup', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:'Needs a pull-up bar. Underhand grip, more bicep involvement than a standard pull-up.',
     muscle:'lats' },
-  { name:'Negative Pull-Up', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+  { name:'Negative Pull-Up', equip:'pullup', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:'Needs a pull-up bar. Jump or step to the top position, lower as slowly as you can - the standard way to build toward a first full pull-up.',
     muscle:'lats' },
-  { name:'Band-Assisted Pull-Up', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+  { name:'Band-Assisted Pull-Up', equip:'pullup', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:'Needs a pull-up bar. Loop a band over the bar, knee or foot in the other end - the band takes some of your weight through the hardest part of the rep.',
     muscle:'lats' },
+  { name:'Wide Grip Pull-Up', equip:'pullup', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Hands set wider than shoulder-width - shortens the range but shifts more emphasis onto the outer lats and upper back.',
+    muscle:'lats' },
+  { name:'Close Grip Pull-Up', equip:'pullup', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:"Hands close together, palms facing either way - a longer range of motion than wide grip, and pulls the biceps into the movement more.",
+    muscle:'lats' },
+  { name:'Commando Pull-Up', equip:'pullup', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'One hand in front of the other gripping the same point on the bar, alternate which side leads each rep - trains each side of the back somewhat independently and adds a genuine core/stability demand.',
+    muscle:'lats' },
+  { name:'Scapular Pull-Up', equip:'pullup', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:"Hang from the bar with straight arms and pull your shoulder blades down and together without bending the elbows at all - the foundational strength a full pull-up is built on, and a genuinely good place to start if a real rep still feels out of reach.",
+    muscle:'lats' },
+  { name:'L-Sit Pull-Up', equip:'pullup', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Legs held out straight in front at hip height for the whole set - the pull-up itself barely changes, but holding the L the entire time turns it into a serious core exercise too.',
+    muscle:'lats' },
+  { name:'Towel Grip Pull-Up', equip:'pullup', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+    hint:'Drape a towel over the bar and grip the two hanging ends instead of the bar itself - the same pull, but grip and forearms give out long before your back does.',
+    muscle:'forearms' },
   { name:'Towel Row Under Table', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:'Lie under a sturdy table, feet braced, pull your chest to the edge - a genuine no-equipment row when you have neither a band nor a bar.',
     muscle:'lats' },
@@ -12556,7 +12574,7 @@ const HOME_GYM_IDEAS = [
     muscle:'lats' },
 
   // ---- Push ----
-  { name:'Handle Push-Ups', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+  { name:'Handle Push-Ups', equip:'pushup', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:'Push-up handles let your wrists stay neutral through a deeper range than flat-palm push-ups.',
     muscle:'chest' },
   { name:'Banded Chest Press', sub:'Push', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 3',
@@ -12574,34 +12592,34 @@ const HOME_GYM_IDEAS = [
   { name:'Banded Lateral Raise', sub:'Push', measurementType:'band', usesDoorAnchor:false, anchorLevel:null,
     hint:'Stand on the band, raise out to the sides - side delts, the muscle that gives shoulders width.',
     muscle:'shoulders' },
-  { name:'Push-Up', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+  { name:'Push-Up', equip:'pushup', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:"Hands roughly shoulder-width, body in a straight line from head to heels, lower until your chest nearly touches the floor - the standard version everything else here is a variation of.",
     muscle:'chest' },
-  { name:'Wide Grip Push-Up', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+  { name:'Wide Grip Push-Up', equip:'pushup', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:'Hands set out wider than shoulder-width - shortens the range of motion but shifts more emphasis onto the outer chest.',
     muscle:'chest' },
-  { name:'Knee Push-Up', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+  { name:'Knee Push-Up', equip:'pushup', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:'Knees down instead of toes, same straight line from head to knees - a genuine regression for building toward a full push-up, not a lesser version to be embarrassed about.',
     muscle:'chest' },
-  { name:'Staggered Push-Up', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+  { name:'Staggered Push-Up', equip:'pushup', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:'One hand set slightly forward, the other slightly back - shifts load unevenly between sides, closer to how a lot of real pushing actually happens.',
     muscle:'chest' },
-  { name:'Spiderman Push-Up', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+  { name:'Spiderman Push-Up', equip:'pushup', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:"As you lower, bring one knee out toward the same-side elbow, alternating sides each rep - adds the obliques and hip flexors to a normal push-up's chest and triceps work.",
     muscle:'chest' },
-  { name:'Diamond Push-Up', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+  { name:'Diamond Push-Up', equip:'pushup', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:'Hands together under your chest, thumbs and index fingers touching - shifts emphasis heavily onto the triceps.',
     muscle:'triceps' },
-  { name:'Pike Push-Up', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+  { name:'Pike Push-Up', equip:'pushup', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:'Hips high in an inverted-V, lower your head toward the floor - the closest bodyweight-only substitute for an overhead press.',
     muscle:'shoulders' },
-  { name:'Handle Push-Up (Decline)', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+  { name:'Handle Push-Up (Decline)', equip:'pushup', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:'Feet elevated on a chair or bed, hands on the handles - targets the upper chest more than a flat push-up.',
     muscle:'chest' },
-  { name:'Handle Push-Up (Incline)', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+  { name:'Handle Push-Up (Incline)', equip:'pushup', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:'Hands elevated on a chair or counter, feet on the floor - an easier variant that targets the lower chest more.',
     muscle:'chest' },
-  { name:'Archer Push-Up', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+  { name:'Archer Push-Up', equip:'pushup', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:'Wide hand position, shift your weight to one side each rep - a harder, single-arm-leaning progression once standard push-ups get easy.',
     muscle:'chest' },
   { name:'Banded Overhead Tricep Extension', sub:'Push', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 1',
@@ -12610,7 +12628,7 @@ const HOME_GYM_IDEAS = [
   { name:'Banded Chest Fly', sub:'Push', measurementType:'band', usesDoorAnchor:true, anchorLevel:'Level 3',
     hint:'Anchor behind you at chest height, arms wide, bring your hands together in an arc - chest, more stretch than a press.',
     muscle:'chest' },
-  { name:'Wall Push-Up', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
+  { name:'Wall Push-Up', equip:'pushup', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:'Hands on a wall instead of the floor - the easiest regression, genuinely useful for building toward a full push-up rather than beneath anyone.',
     muscle:'chest' },
   { name:'Chair Dips', sub:'Push', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
