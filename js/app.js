@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.351';
+const APP_VERSION = 'Beta 5.352';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -7967,6 +7967,7 @@ async function openPicker(initialTab, jumpToMuscle){
   let showKitRecs = false;
   let ideaSearchOpen = false;
   let ideaSearchQuery = '';
+  let ideaCollapsedCats = new Set();
   const EQUIPMENT_GROUP_LABEL = { band: 'Bands', bodyweight: 'Bodyweight', time: 'Timed Holds', rings: 'Rings', kettlebell: 'Kettlebell', medball: 'Medicine Ball', stabilityball: 'Exercise Ball', foamroll: 'Foam Roller' };
   function renderIdeasTab(){
     removeSideIndex();
@@ -7999,8 +8000,15 @@ async function openPicker(initialTab, jumpToMuscle){
     filtered.forEach(idea => { const key = groupKeyOf(idea); (groups[key] = groups[key] || []).push(idea); });
     const orderedKeys = allKeysInOrder.filter(k => groups[k]);
 
-    const sectionsHtml = orderedKeys.map(key => `
-      <div class="category" style="font-size:14px; padding:14px 18px 6px 18px;">${key}</div>
+    const sectionsHtml = orderedKeys.map(key => {
+      const slug = 'ideacat-' + key.replace(/[^a-z0-9]/gi,'');
+      const isCollapsed = ideaCollapsedCats.has(slug);
+      return `
+      <div class="category" id="${slug}" style="font-size:14px; padding:14px 18px 6px 18px; display:flex; align-items:center; gap:8px;">
+        <span>${key}</span>
+        <span class="cat-chev${isCollapsed ? ' collapsed' : ''}" data-target="${slug}-body" style="cursor:pointer; padding:2px 4px;">▾</span>
+      </div>
+      <div class="cat-body${isCollapsed ? ' collapsed' : ''}" id="${slug}-body">
       ${groups[key].map(idea => `
         <div class="ex-card" data-idea-idx="${HOME_GYM_IDEAS.indexOf(idea)}" style="margin:0 18px 9px 18px; background:var(--panel); border-radius:12px; padding:12px 14px;">
           <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
@@ -8016,7 +8024,8 @@ async function openPicker(initialTab, jumpToMuscle){
             <button class="idea-add-btn" data-idx="${HOME_GYM_IDEAS.indexOf(idea)}" style="width:30px; height:30px; border-radius:9px; background:rgba(255,107,26,0.15); color:var(--flame); border:1px solid rgba(255,107,26,0.35); font-size:16px; flex-shrink:0;">+</button>
           </div>
         </div>`).join('')}
-    `).join('');
+      </div>`;
+    }).join('');
 
     body.innerHTML = `
       <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 18px 4px 18px; gap:10px;">
@@ -8114,6 +8123,23 @@ async function openPicker(initialTab, jumpToMuscle){
         renderIdeasTab();
       };
     });
+    body.querySelectorAll('.cat-chev').forEach(chev => {
+      chev.onclick = (e) => {
+        e.stopPropagation();
+        const target = document.getElementById(chev.dataset.target);
+        if (!target) return;
+        const slug = chev.dataset.target.replace(/-body$/, '');
+        const nowCollapsed = !chev.classList.contains('collapsed');
+        chev.classList.toggle('collapsed', nowCollapsed);
+        target.classList.toggle('collapsed', nowCollapsed);
+        if (nowCollapsed) ideaCollapsedCats.add(slug); else ideaCollapsedCats.delete(slug);
+      };
+    });
+    // Jump-to-section sidebar, same mechanism already used on Track/Mine/
+    // Database - re-attached fresh on every render since the category
+    // elements themselves get recreated each time, but harmless to call
+    // repeatedly since it removes any existing one first.
+    attachSideIndex(orderedKeys, 'ideacat-', { top: 220, bottom: 110 });
     body.querySelectorAll('.idea-add-btn').forEach(btn => {
       btn.onclick = () => addIdeaExercise(HOME_GYM_IDEAS[parseInt(btn.dataset.idx, 10)]);
     });
