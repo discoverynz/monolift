@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.349';
+const APP_VERSION = 'Beta 5.350';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -7965,6 +7965,8 @@ async function openPicker(initialTab, jumpToMuscle){
   let ideaFilter = 'All';
   let ideaGroupBy = 'equipment';
   let showKitRecs = false;
+  let ideaSearchOpen = false;
+  let ideaSearchQuery = '';
   const EQUIPMENT_GROUP_LABEL = { band: 'Bands', bodyweight: 'Bodyweight', time: 'Timed Holds', rings: 'Rings', kettlebell: 'Kettlebell', medball: 'Medicine Ball', stabilityball: 'Exercise Ball', foamroll: 'Foam Roller' };
   function renderIdeasTab(){
     removeSideIndex();
@@ -7990,7 +7992,8 @@ async function openPicker(initialTab, jumpToMuscle){
     HOME_GYM_IDEAS.forEach(idea => { const k = groupKeyOf(idea); if (!allKeysInOrder.includes(k)) allKeysInOrder.push(k); });
     const filterOptions = ['All', ...allKeysInOrder];
 
-    const filtered = ideaFilter === 'All' ? HOME_GYM_IDEAS : HOME_GYM_IDEAS.filter(idea => groupKeyOf(idea) === ideaFilter);
+    const filtered = (ideaFilter === 'All' ? HOME_GYM_IDEAS : HOME_GYM_IDEAS.filter(idea => groupKeyOf(idea) === ideaFilter))
+      .filter(idea => !ideaSearchQuery || idea.name.toLowerCase().includes(ideaSearchQuery.trim().toLowerCase()));
 
     const groups = {};
     filtered.forEach(idea => { const key = groupKeyOf(idea); (groups[key] = groups[key] || []).push(idea); });
@@ -8016,7 +8019,19 @@ async function openPicker(initialTab, jumpToMuscle){
     `).join('');
 
     body.innerHTML = `
-      <div class="small" style="padding:10px 18px 8px 18px; color:var(--slate); line-height:1.5;">Bands, rings, bodyweight, and anything else you've got - a kettlebell, a medicine ball, an exercise ball. Built to fit a hotel room or a small space. Tap + to add and log straight away.</div>
+      <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 18px 4px 18px; gap:10px;">
+        <div class="small" style="color:var(--slate); line-height:1.5;">Bands, rings, bodyweight, and anything else you've got - a kettlebell, a medicine ball, an exercise ball. Built to fit a hotel room or a small space. Tap + to add and log straight away.</div>
+        <button id="ideaSearchBtn" aria-label="Search ideas" style="display:flex; align-items:center; justify-content:center; width:34px; height:34px; border-radius:10px; background:var(--panel); border:1px solid var(--line); color:var(--slate); flex-shrink:0;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+        </button>
+      </div>
+      <div id="ideaSearchBar" class="track-search-bar${ideaSearchOpen ? ' open' : ''}" style="padding:0 18px;">
+        <div style="display:flex; align-items:center; gap:8px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:0 12px; height:40px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--slate)" stroke-width="2" stroke-linecap="round" style="flex-shrink:0;"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+          <input id="ideaSearchInput" placeholder="Search ideas…" value="${ideaSearchQuery.replace(/"/g,'&quot;')}" style="flex:1; background:none; border:none; color:var(--chalk); font-size:14px; height:100%;">
+          <span id="ideaSearchClear" style="color:var(--slate); font-size:16px; padding:4px; cursor:pointer;">✕</span>
+        </div>
+      </div>
       <div style="margin:0 18px 12px 18px; background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden;">
         <button id="kitRecsToggle" style="width:100%; display:flex; justify-content:space-between; align-items:center; padding:11px 13px; background:none; border:none; color:var(--chalk); text-align:left;">
           <span style="font-family:'Oswald',sans-serif; font-size:12.5px;">💡 Want a more complete home setup?</span>
@@ -8040,6 +8055,52 @@ async function openPicker(initialTab, jumpToMuscle){
     `;
     const kitToggle = body.querySelector('#kitRecsToggle');
     if (kitToggle) kitToggle.onclick = () => { showKitRecs = !showKitRecs; renderIdeasTab(); };
+    const ideaSearchBtn = body.querySelector('#ideaSearchBtn');
+    const ideaSearchBar = body.querySelector('#ideaSearchBar');
+    const ideaSearchInput = body.querySelector('#ideaSearchInput');
+    if (ideaSearchBtn){
+      ideaSearchBtn.onclick = () => {
+        if (ideaSearchOpen){
+          ideaSearchOpen = false;
+          ideaSearchQuery = '';
+        } else {
+          ideaSearchOpen = true;
+        }
+        renderIdeasTab();
+        if (ideaSearchOpen){
+          const freshInput = body.querySelector('#ideaSearchInput');
+          if (freshInput) freshInput.focus();
+        }
+      };
+    }
+    if (ideaSearchInput){
+      ideaSearchInput.oninput = () => {
+        ideaSearchQuery = ideaSearchInput.value;
+        // Re-rendering (this whole tab is a single body.innerHTML swap, not
+        // a targeted update like Track's search) destroys and recreates
+        // the input element on every keystroke - without restoring focus
+        // and cursor position afterward, typing a second character would
+        // silently lose focus entirely, a real usability break that would
+        // only show up the moment someone actually tried to type more than
+        // one letter.
+        const cursorPos = ideaSearchInput.selectionStart;
+        renderIdeasTab();
+        const freshInput = body.querySelector('#ideaSearchInput');
+        if (freshInput){
+          freshInput.focus();
+          freshInput.setSelectionRange(cursorPos, cursorPos);
+        }
+      };
+    }
+    const ideaSearchClear = body.querySelector('#ideaSearchClear');
+    if (ideaSearchClear){
+      ideaSearchClear.onclick = () => {
+        ideaSearchQuery = '';
+        renderIdeasTab();
+        const freshInput = body.querySelector('#ideaSearchInput');
+        if (freshInput) freshInput.focus();
+      };
+    }
     body.querySelectorAll('[data-idea-filter]').forEach(chip => {
       chip.onclick = () => { ideaFilter = chip.dataset.ideaFilter; renderIdeasTab(); };
     });
