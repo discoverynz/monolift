@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.352';
+const APP_VERSION = 'Beta 5.353';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -2376,6 +2376,13 @@ async function openCircuitPicker(){
   const overlay = document.createElement('div');
   overlay.style = 'position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:70; display:flex; align-items:flex-end;';
   const render = async () => {
+    // Captured before the innerHTML swap below destroys the current scroll
+    // container and replaces it with a fresh one that starts at the top -
+    // every checkbox tap calls this same render(), so without restoring
+    // this, picking anything below the very top of a long list would snap
+    // the whole sheet back to the top on every single tap.
+    const scrollEl = document.getElementById('circuitPickerScroll');
+    const scrollPos = scrollEl ? scrollEl.scrollTop : 0;
     const { grouped, orderedKeys } = await groupExercisesByChoice(candidates, groupBy);
     // Alphabetized within each group specifically for Equipment view - two
     // exercises using the same gear but named differently enough to sort
@@ -2393,7 +2400,7 @@ async function openCircuitPicker(){
         <div class="ex-name">${ex.name}</div>
       </div>`;
     overlay.innerHTML = `
-      <div style="width:100%; max-height:80vh; overflow-y:auto; background:var(--panel); border-radius:18px 18px 0 0; padding:20px 0 calc(20px + env(safe-area-inset-bottom, 0px)) 0;">
+      <div id="circuitPickerScroll" style="width:100%; max-height:80vh; overflow-y:auto; background:var(--panel); border-radius:18px 18px 0 0; padding:20px 0 calc(20px + env(safe-area-inset-bottom, 0px)) 0;">
         <div style="padding:0 18px;">
           <div class="field-label" style="padding:0 0 4px 0;">Build your circuit</div>
           <div class="small" style="padding:0 0 8px 0; color:var(--slate);">Pick one or more exercises - two or more supersets them together, one still gets the quick tap-to-log tile and round tracking</div>
@@ -2417,6 +2424,12 @@ async function openCircuitPicker(){
           <button class="save-btn" id="confirmCircuitBtn" style="margin-top:14px;" ${selected.size < 1 ? 'disabled' : ''}>${existing ? 'Update circuit' : 'Start circuit'}</button>
         </div>
       </div>`;
+    // Restored right after the swap, before anything else - a fresh
+    // scrollable element defaults to scrollTop 0, so without this every
+    // single checkbox tap would visibly snap the sheet back to the top,
+    // even if you were scrolled halfway down a long equipment list.
+    const freshScrollEl = document.getElementById('circuitPickerScroll');
+    if (freshScrollEl) freshScrollEl.scrollTop = scrollPos;
     overlay.querySelectorAll('.groupby-chip').forEach(chip => {
       chip.onclick = () => { groupBy = chip.dataset.groupby; setGroupByPref(groupBy); render(); };
     });
