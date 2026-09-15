@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.347';
+const APP_VERSION = 'Beta 5.348';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -2010,11 +2010,11 @@ function buildCircuitAreaHtml(list, opts){
   opts = opts || {};
   const circuit = getActiveCircuit();
   if (!circuit){
-    if ((list || []).length < 2) return ''; // nothing to build a circuit from yet
+    if ((list || []).length < 1) return ''; // nothing at all to build a circuit from
     const template = getCircuitTemplate();
     const idsOnDay = new Set((state.trackFlatOrder || []).map(v => String(v.id)));
     const validTemplateItems = template ? template.items.filter(it => idsOnDay.has(String(it.id))) : [];
-    const repeatBtn = validTemplateItems.length >= 2 ? `
+    const repeatBtn = validTemplateItems.length >= 1 ? `
       <div class="circuit-repeat-btn" id="repeatCircuitBtn">
         <div><div class="rep-label">↻ Repeat last circuit</div><div class="rep-names">${validTemplateItems.map(it => it.name).join(' + ')}</div></div>
         <div class="rep-arrow">→</div>
@@ -2140,8 +2140,8 @@ function startRepeatCircuit(){
   if (!template) return;
   const idsOnDay = new Set((state.trackFlatOrder || []).map(v => String(v.id)));
   const validIds = template.items.filter(it => idsOnDay.has(String(it.id))).map(it => String(it.id));
-  if (validIds.length < 2){
-    alert("Not enough of that circuit's exercises are on today's plan to repeat it.");
+  if (validIds.length < 1){
+    alert("None of that circuit's exercises are on today's plan to repeat it.");
     return;
   }
   const items = (state.exercises || [])
@@ -2334,8 +2334,8 @@ async function openCircuitPicker(){
   // directly logging sets against a slot that isn't meant to be logged
   // against at all.
   const candidates = (state.exercises || []).filter(ex => idsOnDay.has(String(ex.id)) && !ex.completeVia);
-  if (candidates.length < 2){
-    alert("Add at least 2 exercises to today's plan first, then build a circuit from them.");
+  if (candidates.length < 1){
+    alert("Add an exercise to today's plan first, then build a circuit from it.");
     _circuitPickerOpen = false;
     return;
   }
@@ -2359,7 +2359,7 @@ async function openCircuitPicker(){
       <div style="width:100%; max-height:80vh; overflow-y:auto; background:var(--panel); border-radius:18px 18px 0 0; padding:20px 0 calc(20px + env(safe-area-inset-bottom, 0px)) 0;">
         <div style="padding:0 18px;">
           <div class="field-label" style="padding:0 0 4px 0;">Build your circuit</div>
-          <div class="small" style="padding:0 0 8px 0; color:var(--slate);">Pick 2 or more exercises to superset together</div>
+          <div class="small" style="padding:0 0 8px 0; color:var(--slate);">Pick one or more exercises - two or more supersets them together, one still gets the quick tap-to-log tile and round tracking</div>
         </div>
         ${groupByToggleHtml(groupBy)}
         <div style="padding:0 18px;">
@@ -2376,7 +2376,7 @@ async function openCircuitPicker(){
           <div style="display:flex; gap:8px;">
             ${[null,3,4,5,6].map(n => `<div class="chip target-rounds-chip ${targetRounds===n?'active':''}" data-rounds="${n===null?'':n}" style="flex:1; text-align:center;">${n===null?'None':n}</div>`).join('')}
           </div>
-          <button class="save-btn" id="confirmCircuitBtn" style="margin-top:14px;" ${selected.size < 2 ? 'disabled' : ''}>${existing ? 'Update circuit' : 'Start circuit'}</button>
+          <button class="save-btn" id="confirmCircuitBtn" style="margin-top:14px;" ${selected.size < 1 ? 'disabled' : ''}>${existing ? 'Update circuit' : 'Start circuit'}</button>
         </div>
       </div>`;
     overlay.querySelectorAll('.groupby-chip').forEach(chip => {
@@ -2394,7 +2394,7 @@ async function openCircuitPicker(){
     });
     const confirmBtn = overlay.querySelector('#confirmCircuitBtn');
     if (confirmBtn) confirmBtn.onclick = () => {
-      if (selected.size < 2) return;
+      if (selected.size < 1) return;
       const items = candidates.filter(ex => selected.has(String(ex.id))).map(ex => {
         // Keep an already-in-progress exercise's count and current best
         // (including any reps/band edits made this session) rather than
