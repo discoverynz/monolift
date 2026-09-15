@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.354';
+const APP_VERSION = 'Beta 5.355';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -12501,7 +12501,7 @@ const HOME_GYM_IDEAS = [
     hint:'Stand on the band, hinge at the hips and stand tall - closest band substitute for a barbell deadlift.',
     muscle:'hamstrings' },
   { name:'Pull-Up', equip:'pullup', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
-    hint:'Needs a pull-up bar (doorframe bars work). If you don\'t have one, Banded Pulldown is the substitute below.',
+    hint:'Overhand grip, roughly shoulder-width, palms facing away from you - needs a pull-up bar (doorframe bars work). If you don\'t have one, Banded Pulldown is the substitute below.',
     muscle:'lats' },
   { name:'Chin-Up', equip:'pullup', sub:'Pull', measurementType:'bodyweight', usesDoorAnchor:false, anchorLevel:null,
     hint:'Needs a pull-up bar. Underhand grip, more bicep involvement than a standard pull-up.',
