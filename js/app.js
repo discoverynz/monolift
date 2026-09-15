@@ -29,7 +29,7 @@ function revertSetCompleteTick(){
   const el = document.getElementById('setCompleteTick');
   if (el) el.outerHTML = '✓';
 }
-const APP_VERSION = 'Beta 5.355';
+const APP_VERSION = 'Beta 5.356';
 // This exact order is what actually drives the Lift screen's category
 // headers (see groupExercisesByChoice) - alphabetical with "Other" pinned
 // last, same reasoning as EQUIPMENT_CATEGORIES: "Other" landing mid-list
@@ -1188,8 +1188,8 @@ async function loadExercises(generation){
     });
 
     let setsResult = await withTimeout(
-      supabaseClient.from('sets').select('exercise_id, weight, weight_unit, weight_type, reps, num_sets, logged_at, location_id, measurement_type, band_snapshot, band_resistance, band_resistance_unit')
-        .in('exercise_id', [...prQueryIds]).gte('logged_at', setHistoryCutoff()).order('logged_at', { ascending: false }).limit(4000),
+      supabaseClient.from('sets').select('exercise_id, weight, weight_unit, weight_type, reps, num_sets, logged_at, created_at, location_id, measurement_type, band_snapshot, band_resistance, band_resistance_unit')
+        .in('exercise_id', [...prQueryIds]).gte('logged_at', setHistoryCutoff()).order('logged_at', { ascending: false }).order('created_at', { ascending: false }).limit(4000),
       15000
     );
     // Same resilience fix as the exercises query above - a newer optional
@@ -1200,8 +1200,8 @@ async function loadExercises(generation){
       console.error('Sets query failed, retrying without location_id:', setsResult.error);
       locationDataAvailable = false;
       setsResult = await withTimeout(
-        supabaseClient.from('sets').select('exercise_id, weight, weight_unit, weight_type, reps, num_sets, logged_at')
-          .in('exercise_id', [...prQueryIds]).gte('logged_at', setHistoryCutoff()).order('logged_at', { ascending: false }).limit(4000),
+        supabaseClient.from('sets').select('exercise_id, weight, weight_unit, weight_type, reps, num_sets, logged_at, created_at')
+          .in('exercise_id', [...prQueryIds]).gte('logged_at', setHistoryCutoff()).order('logged_at', { ascending: false }).order('created_at', { ascending: false }).limit(4000),
         15000
       );
     }
@@ -1440,8 +1440,8 @@ async function loadExercisesFromMaster(generation){
   let loggedOnTargetByExId = new Set();
   if (masterIds.length){
     let setsResult = await withTimeout(
-      supabaseClient.from('sets').select('exercise_master_id, weight, weight_unit, weight_type, reps, num_sets, logged_at, location_id, measurement_type, band_snapshot, band_resistance, band_resistance_unit')
-        .in('exercise_master_id', masterIds).gte('logged_at', setHistoryCutoff()).order('logged_at', { ascending: false }).limit(4000),
+      supabaseClient.from('sets').select('exercise_master_id, weight, weight_unit, weight_type, reps, num_sets, logged_at, created_at, location_id, measurement_type, band_snapshot, band_resistance, band_resistance_unit')
+        .in('exercise_master_id', masterIds).gte('logged_at', setHistoryCutoff()).order('logged_at', { ascending: false }).order('created_at', { ascending: false }).limit(4000),
       15000
     );
     let locationDataAvailable = true;
@@ -1449,8 +1449,8 @@ async function loadExercisesFromMaster(generation){
       console.error('Sets query failed, retrying without location_id:', setsResult.error);
       locationDataAvailable = false;
       setsResult = await withTimeout(
-        supabaseClient.from('sets').select('exercise_master_id, weight, weight_unit, weight_type, reps, num_sets, logged_at')
-          .in('exercise_master_id', masterIds).gte('logged_at', setHistoryCutoff()).order('logged_at', { ascending: false }).limit(4000),
+        supabaseClient.from('sets').select('exercise_master_id, weight, weight_unit, weight_type, reps, num_sets, logged_at, created_at')
+          .in('exercise_master_id', masterIds).gte('logged_at', setHistoryCutoff()).order('logged_at', { ascending: false }).order('created_at', { ascending: false }).limit(4000),
         15000
       );
     }
@@ -2832,8 +2832,8 @@ async function showAltGroupHistory(groupId, groupName){
   const nameById = Object.fromEntries(members.map(m => [m.id, m.name]));
   const idField = setExerciseIdField();
   const setsResult = await withTimeout(
-    supabaseClient.from('sets').select('id, exercise_id, exercise_master_id, weight, weight_unit, weight_type, reps, num_sets, notes, logged_at, measurement_type, band_snapshot, band_resistance, band_resistance_unit')
-      .in(idField, memberIds).order('logged_at', { ascending: false }).limit(60),
+    supabaseClient.from('sets').select('id, exercise_id, exercise_master_id, weight, weight_unit, weight_type, reps, num_sets, notes, logged_at, created_at, measurement_type, band_snapshot, band_resistance, band_resistance_unit')
+      .in(idField, memberIds).order('logged_at', { ascending: false }).order('created_at', { ascending: false }).limit(60),
     15000
   );
   const sets = setsResult.__timeout || setsResult.error ? [] : (setsResult.data || []);
@@ -9398,8 +9398,8 @@ async function buildPlanExportText(){
   if (uniqueSetIds.length){
     const setsResult = await withTimeout(
       supabaseClient.from('sets')
-        .select(`${idField}, weight, weight_unit, weight_type, reps, num_sets, logged_at, measurement_type, band_snapshot, band_resistance, band_resistance_unit`)
-        .in(idField, uniqueSetIds).gte('logged_at', setHistoryCutoff()).order('logged_at', { ascending: false }).limit(4000),
+        .select(`${idField}, weight, weight_unit, weight_type, reps, num_sets, logged_at, created_at, measurement_type, band_snapshot, band_resistance, band_resistance_unit`)
+        .in(idField, uniqueSetIds).gte('logged_at', setHistoryCutoff()).order('logged_at', { ascending: false }).order('created_at', { ascending: false }).limit(4000),
       15000
     );
     const sets = setsResult.__timeout || setsResult.error ? [] : (setsResult.data || []);
@@ -11873,8 +11873,8 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
     idsToQuery = allIds.length ? allIds : [exerciseId];
 
     let result = await withTimeout(
-      supabaseClient.from('sets').select('id, weight, weight_unit, weight_type, reps, num_sets, notes, logged_at, location_id, measurement_type, band_snapshot, band_resistance, band_resistance_unit')
-        .in(idField, idsToQuery).order('logged_at', { ascending: false }).limit(30),
+      supabaseClient.from('sets').select('id, weight, weight_unit, weight_type, reps, num_sets, notes, logged_at, created_at, location_id, measurement_type, band_snapshot, band_resistance, band_resistance_unit')
+        .in(idField, idsToQuery).order('logged_at', { ascending: false }).order('created_at', { ascending: false }).limit(30),
       15000
     );
     let locationColumnAvailable = true;
@@ -11882,8 +11882,8 @@ function openLogForm(exerciseId, exerciseName, isNewToDay){
       console.error('History query failed, retrying without location_id:', result.error);
       locationColumnAvailable = false;
       result = await withTimeout(
-        supabaseClient.from('sets').select('id, weight, weight_unit, weight_type, reps, num_sets, notes, logged_at')
-          .in(idField, idsToQuery).order('logged_at', { ascending: false }).limit(30),
+        supabaseClient.from('sets').select('id, weight, weight_unit, weight_type, reps, num_sets, notes, logged_at, created_at')
+          .in(idField, idsToQuery).order('logged_at', { ascending: false }).order('created_at', { ascending: false }).limit(30),
         15000
       );
     }
